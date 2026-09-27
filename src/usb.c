@@ -230,11 +230,13 @@ uhci_latch_frame_status(uhci_t *dev)
 
     dev->eof_ioc = dev->eof_spd = dev->eof_err = 0;
 
-    if (dev->sts != old) {
+    if (dev->sts != old)
         usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS %04x -> %04x (end of frame%s%s)", old, dev->sts,
                   dev->int_ioc ? ", IOC" : "", dev->int_spd ? ", SPD" : "");
-        uhci_update_irq(dev);
-    }
+
+    /* A source can latch behind a USBINT that is already set, so the line is
+       re-evaluated even when USBSTS did not change. */
+    uhci_update_irq(dev);
 }
 
 static void uhci_run_frame(uhci_t *dev);

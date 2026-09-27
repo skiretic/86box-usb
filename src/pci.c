@@ -84,6 +84,10 @@ static uint8_t     pci_bus_number_to_index_mapping[256];
 static uint8_t     pci_irqs[PCI_IRQS_NUM];
 static uint8_t     pci_irq_level[PCI_IRQS_NUM];
 static uint64_t    pci_irq_hold[PCI_IRQS_NUM];
+/* Level sources held through each PIRQ, which a routing change moves to the
+   new IRQ as the router's steering does. */
+#define PCI_PIRQ_SRCS 16
+static uint8_t    *pci_pirq_src[PCI_IRQS_NUM][PCI_PIRQ_SRCS];
 static pci_mirq_t  pci_mirqs[PCI_MIRQS_NUM];
 static int         pci_index;
 static int         pci_func;
@@ -114,10 +118,47 @@ pci_log(const char *fmt, ...)
 #    define pci_log(fmt, ...)
 #endif
 
+static void
+pci_pirq_track(int pirq, uint8_t *irq_state, int set)
+{
+    uint8_t **src = pci_pirq_src[pirq];
+    int       i;
+
+    for (i = 0; (i < PCI_PIRQ_SRCS) && (src[i] != irq_state); i++)
+        ;
+    if (!set) {
+        if (i < PCI_PIRQ_SRCS)
+            src[i] = NULL;
+    } else if (i == PCI_PIRQ_SRCS) {
+        for (i = 0; (i < PCI_PIRQ_SRCS) && (src[i] != NULL); i++)
+            ;
+        if (i < PCI_PIRQ_SRCS)
+            src[i] = irq_state;
+    }
+}
+
 void
 pci_set_irq_routing(int pci_int, int irq)
 {
+    uint8_t old = pci_irqs[pci_int - 1];
+    uint8_t new;
+
     pci_irqs[pci_int - 1] = irq;
+    new                   = pci_irqs[pci_int - 1];
+    if (new == old)
+        return;
+
+    /* The PIRQ's held level moves from the old IRQ input to the new one. */
+    for (int i = 0; i < PCI_PIRQ_SRCS; i++) {
+        uint8_t *irq_state = pci_pirq_src[pci_int - 1][i];
+
+        if (irq_state == NULL)
+            continue;
+        if (old <= PCI_IRQ_MAX)
+            picintclevel(1 << old, irq_state);
+        if (new <= PCI_IRQ_MAX)
+            picintlevel(1 << new, irq_state);
+    }
 }
 
 void
@@ -194,6 +235,8 @@ pci_irq(uint8_t slot, uint8_t pci_int, int level, int set, uint8_t *irq_state)
                         level    = !!pci_irq_level[irq_routing];
                         if (level && is_vfio)
                             level--;
+                        if (irq_state != NULL)
+                            pci_pirq_track(irq_routing, irq_state, set && level);
                         break;
 
                     /* Sometimes, PCI devices are mapped to direct IRQ's. */
@@ -214,6 +257,8 @@ pci_irq(uint8_t slot, uint8_t pci_int, int level, int set, uint8_t *irq_state)
                 /* Ignore what was provided to us as a parameter and override it with whatever
                    the chipset is set to. */
                 level       = !!pci_irq_level[slot];
+                if (irq_state != NULL)
+                    pci_pirq_track(slot, irq_state, set && level);
             } else {
                 irq_line    = 0xff;
                 level       = 0;
@@ -388,6 +433,9 @@ pci_reset_hard(void)
             picintc(1 << i);
         }
     }
+
+    /* The PIC forgets its sources, so the router forgets its held ones. */
+    memset(pci_pirq_src, 0x00, sizeof(pci_pirq_src));
 
     pci_pic_reset();
 }

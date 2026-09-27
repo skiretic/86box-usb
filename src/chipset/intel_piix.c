@@ -72,6 +72,7 @@ typedef struct _piix_ {
     uint16_t       irq_state;
     uint8_t        usb_irq_level;
     uint8_t        usb_irq_state;
+    uint8_t        usb_smi_level;
     double         fast_off_period;
     sff8038i_t    *bm[2];
     smbus_piix4_t *smbus;
@@ -522,6 +523,7 @@ static void
 piix_usb_update_irq(piix_t *dev)
 {
     uint8_t *fregs = dev->regs[2];
+    uint8_t  smi;
 
     if (dev->usb_irq_level)
         fregs[0xc1] |= 0x10;
@@ -532,6 +534,34 @@ piix_usb_update_irq(piix_t *dev)
         pci_set_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
     else
         pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+
+    /* USBSMIEN (LEGSUP bit 4) makes the IRQ a legacy USB SMI event, gated by
+       SMIEN bit 8 into SMIREQ bit 8 on the PIIX3 (2.2.19, 2.2.22) and by
+       GLBEN LEGACY_USB_EN on the PIIX4, whose LEGACY_USB_STS follows it. */
+    smi = dev->usb_irq_level && (fregs[0xc0] & 0x10);
+    if (dev->type == 3) {
+        if (smi && !dev->usb_smi_level) {
+            usb_trace(USB_LOG_IRQ, -1, "PIIX3 legacy USB SMI event, SMIEN %02x%02x SMICNTL %02x",
+                      dev->regs[0][0xa3], dev->regs[0][0xa2], dev->regs[0][0xa0]);
+            if (dev->regs[0][0xa3] & 0x01) {
+                dev->regs[0][0xab] |= 0x01;
+                if (dev->regs[0][0xa0] & 0x01)
+                    smi_raise();
+            }
+        }
+    } else if (dev->acpi != NULL) {
+        if (smi)
+            dev->acpi->regs.glbsts |= 0x0002;
+        else
+            dev->acpi->regs.glbsts &= ~0x0002;
+        if (smi && !dev->usb_smi_level) {
+            usb_trace(USB_LOG_IRQ, -1, "PIIX4 legacy USB SMI event, GLBEN %04x GLBCTL %08x",
+                      dev->acpi->regs.glben, dev->acpi->regs.glbctl);
+            if (dev->acpi->regs.glben & 0x0001)
+                acpi_raise_smi(dev->acpi, 1);
+        }
+    }
+    dev->usb_smi_level = smi;
 }
 
 static void
@@ -762,7 +792,7 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 
                     fregs[addr] = val & 0x1f;
                     apm_set_do_smi(dev->apm, !!(val & 0x01) && !!(fregs[0xa2] & 0x80));
-                    if ((val & 0x01) && !(old & 0x01) && fregs[0xaa])
+                    if ((val & 0x01) && !(old & 0x01) && (fregs[0xaa] || ((dev->type == 3) && (fregs[0xab] & 0x01))))
                         smi_raise();
                     switch ((val & 0x18) >> 3) {
                         case 0x00:
@@ -1127,8 +1157,10 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                     fregs[0x6a] = val & 0x01;
                 break;
             case 0xc0:
-                if (dev->type <= 4)
+                if (dev->type <= 4) {
                     fregs[0xc0] = (fregs[0xc0] & 0x40) | (val & 0xbf);
+                    piix_usb_update_irq(dev);
+                }
                 usb_trace(USB_LOG_REG, -1, "PIIX LEGSUP now %02x%02x", fregs[0xc1], fregs[0xc0]);
                 break;
             case 0xc1:

@@ -188,7 +188,8 @@ usb_audio_fu_request(usb_audio_t *dev, const uint8_t *setup, uint8_t *data)
                 data[0] = dev->mute;
                 return 1;
             }
-            if ((setup[1] == AUD_SET_CUR) && (wlength >= 1)) {
+            /* One available Mute Control: one byte in either form (Table 5-16). */
+            if ((setup[1] == AUD_SET_CUR) && (wlength == 1)) {
                 dev->mute = !!data[0];
                 return 0;
             }
@@ -209,7 +210,8 @@ usb_audio_fu_request(usb_audio_t *dev, const uint8_t *setup, uint8_t *data)
                     usb_audio_put16(data, AUD_VOL_RES);
                     return 2;
                 case AUD_SET_CUR:
-                    if (wlength < 2)
+                    /* One available Volume Control: two bytes in either form (Table 5-18). */
+                    if (wlength != 2)
                         return USB_DATA_STALL;
                     /* 8000h is silence and stays CUR; anything else is rounded to
                        the closest available setting (5.2.2.4.3.2). */

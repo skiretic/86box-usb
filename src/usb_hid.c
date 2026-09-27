@@ -25,6 +25,7 @@
 #include <86box/timer.h>
 #include <86box/mouse.h>
 #include <86box/keyboard.h>
+#include <86box/thread.h>
 #include <86box/usb_dev.h>
 #include <86box/plat_unused.h>
 
@@ -544,8 +545,11 @@ typedef struct hid_kbd_t {
     int        q_len;
     int        polled;
     uint64_t   polled_us;
+    int        configured;
     uint8_t    owner[0x200]; /* host key pressed through this keyboard */
     int        attached;
+    /* Host keys arrive on the GUI thread, polls on the emulation thread. */
+    mutex_t   *lock;
 } hid_kbd_t;
 
 /* Modifier byte, reserved byte, six array slots; more keys than slots is
@@ -607,17 +611,16 @@ hid_kbd_press(hid_kbd_t *dev, uint8_t usage, int down)
 static int
 hid_kbd_in_use(const hid_kbd_t *dev)
 {
-    return dev->attached && (dev->usb.config != 0) && dev->polled &&
+    return dev->attached && dev->configured && dev->polled &&
            ((hid_now_us() - dev->polled_us) < HID_KBD_IN_USE_US);
 }
 
 /* Host keys come here before the PS/2 keyboard. A key goes to the USB
    keyboard while a host is using it; its release follows the press. */
 static int
-hid_kbd_key(uint16_t scan, int down, void *priv)
+hid_kbd_key_locked(hid_kbd_t *dev, uint16_t scan, int down)
 {
-    hid_kbd_t *dev   = (hid_kbd_t *) priv;
-    uint8_t    usage = hid_kbd_usage[scan & 0x1ff];
+    uint8_t usage = hid_kbd_usage[scan & 0x1ff];
 
     scan &= 0x1ff;
 
@@ -639,9 +642,21 @@ hid_kbd_key(uint16_t scan, int down, void *priv)
 }
 
 static int
-hid_kbd_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
+hid_kbd_key(uint16_t scan, int down, void *priv)
 {
-    hid_kbd_t *dev     = (hid_kbd_t *) usb->priv;
+    hid_kbd_t *dev = (hid_kbd_t *) priv;
+    int        ret;
+
+    thread_wait_mutex(dev->lock);
+    ret = hid_kbd_key_locked(dev, scan, down);
+    thread_release_mutex(dev->lock);
+
+    return ret;
+}
+
+static int
+hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
+{
     uint16_t   wvalue  = setup[2] | (setup[3] << 8);
     uint16_t   windex  = setup[4] | (setup[5] << 8);
     uint16_t   wlength = setup[6] | (setup[7] << 8);
@@ -715,13 +730,24 @@ hid_kbd_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     return USB_DATA_STALL;
 }
 
+static int
+hid_kbd_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
+{
+    hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
+    int        ret;
+
+    thread_wait_mutex(dev->lock);
+    ret = hid_kbd_control_locked(dev, setup, data);
+    thread_release_mutex(dev->lock);
+
+    return ret;
+}
+
 /* Interrupt IN: the next queued report, else the current one again once the
    idle period runs out, else NAK (HID 7.2.4). */
 static int
-hid_kbd_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxlen))
+hid_kbd_data_in_locked(hid_kbd_t *dev, uint8_t *buf)
 {
-    hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
-
     dev->polled    = 1;
     dev->polled_us = hid_now_us();
 
@@ -737,10 +763,35 @@ hid_kbd_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxlen)
     return 8;
 }
 
+static int
+hid_kbd_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxlen))
+{
+    hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
+    int        ret;
+
+    thread_wait_mutex(dev->lock);
+    ret = hid_kbd_data_in_locked(dev, buf);
+    thread_release_mutex(dev->lock);
+
+    return ret;
+}
+
+static void
+hid_kbd_configured(usb_dev_t *usb, int config)
+{
+    hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
+
+    thread_wait_mutex(dev->lock);
+    dev->configured = (config != 0);
+    thread_release_mutex(dev->lock);
+}
+
 static void
 hid_kbd_reset(usb_dev_t *usb)
 {
     hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
+
+    thread_wait_mutex(dev->lock);
 
     /* Report protocol after a reset (HID 7.2.6); keyboards idle 500 ms (7.2.4). */
     dev->protocol     = 1;
@@ -749,12 +800,15 @@ hid_kbd_reset(usb_dev_t *usb)
     dev->idle.last_us = hid_now_us();
     dev->leds         = 0x00;
     dev->polled       = 0;
+    dev->configured   = 0;
 
     /* Keys still held show in the first report after enumeration. */
     dev->q_head = 0;
     dev->q_len  = 0;
     memset(dev->sent, 0x00, sizeof(dev->sent));
     hid_kbd_changed(dev);
+
+    thread_release_mutex(dev->lock);
 }
 
 static const usb_dev_ops_t hid_kbd_ops = {
@@ -762,7 +816,7 @@ static const usb_dev_ops_t hid_kbd_ops = {
     .data_in    = hid_kbd_data_in,
     .data_out   = NULL,
     .reset      = hid_kbd_reset,
-    .configured = NULL
+    .configured = hid_kbd_configured
 };
 
 static void *
@@ -779,6 +833,7 @@ hid_kbd_init(UNUSED(const device_t *info))
     dev->usb.n_strings = 2;
     dev->usb.ops       = &hid_kbd_ops;
     dev->usb.priv      = dev;
+    dev->lock          = thread_create_mutex();
     usb_dev_init(&dev->usb);
     hid_kbd_reset(&dev->usb);
 
@@ -797,6 +852,7 @@ hid_kbd_close(void *priv)
     keyboard_set_usb_handler(NULL, NULL);
     if (dev->attached)
         usb_detach(&dev->usb);
+    thread_close_mutex(dev->lock);
     free(dev);
 }
 

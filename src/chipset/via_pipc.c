@@ -43,6 +43,7 @@
 #include <86box/hdc_ide_sff8038i.h>
 #include <86box/keyboard.h>
 #include <86box/usb.h>
+#include <86box/usb_log.h>
 #include <86box/machine.h>
 #include <86box/smbus.h>
 #include <86box/chipset.h>
@@ -138,6 +139,7 @@ typedef struct _pipc_ {
     uint8_t        usb_irq_level[2];
     uint8_t        usb_irq_state[2];
     uint8_t        usb_irq_line[2]; /* IRQ driven now, 0xff = none */
+    uint8_t        usb_smi_level[2];
 
     acpi_t        *acpi;
     pipc_io_trap_t io_traps[TRAP_MAX];
@@ -226,11 +228,35 @@ pipc_usb_update_irq(pipc_t *dev, int n)
     dev->usb_irq_line[n] = irq;
 }
 
+/* Legacy Support C1-C0 is the UHCI 1.1 s5.2.1 register: USBIRQS (bit 12)
+   shows the USB IRQ, and with USBSMIEN (bit 4) its rising edge is a legacy
+   USB event, PM Global Status LEG_USB_STS (bit 4), SMI# on LEG_USB_EN. */
+static void
+pipc_usb_update_legacy(pipc_t *dev, int n)
+{
+    uint8_t event = dev->usb_irq_level[n] && (dev->usb_regs[n][0xc0] & 0x10);
+
+    if (dev->usb_irq_level[n])
+        dev->usb_regs[n][0xc1] |= 0x10;
+    else
+        dev->usb_regs[n][0xc1] &= ~0x10;
+
+    if (event && !dev->usb_smi_level[n] && (dev->acpi != NULL)) {
+        usb_trace(USB_LOG_IRQ, -1, "VIA UHCI %i legacy USB event, GLBEN %04x GLBCTL %04x",
+                  n + 1, dev->acpi->regs.glben, dev->acpi->regs.glbctl);
+        dev->acpi->regs.glbsts |= 0x0010;
+        if (dev->acpi->regs.glben & 0x0010)
+            acpi_raise_smi(dev->acpi, 1);
+    }
+    dev->usb_smi_level[n] = event;
+}
+
 static void
 pipc_usb_irq(pipc_t *dev, int n, int level)
 {
     dev->usb_irq_level[n] = !!level;
     pipc_usb_update_irq(dev, n);
+    pipc_usb_update_legacy(dev, n);
 }
 
 static void
@@ -405,7 +431,9 @@ pipc_reset_hard(void *priv)
             dev->usb_regs[i][0x82] = 0x02;
         }
         dev->usb_regs[i][0xc1] = 0x20;
+        dev->usb_smi_level[i]  = 0;
         pipc_usb_update_irq(dev, i);
+        pipc_usb_update_legacy(dev, i);
     }
 
     /* Power management registers. */
@@ -1466,6 +1494,17 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             case 0x3c:
                 dev->usb_regs[func - 2][0x3c] = val & 0x0f;
                 pipc_usb_update_irq(dev, func - 2);
+                break;
+
+            case 0xc0:
+                /* Bit 6 (PSS) is read-only. */
+                dev->usb_regs[func - 2][0xc0] = (dev->usb_regs[func - 2][0xc0] & 0x40) | (val & 0xbf);
+                pipc_usb_update_legacy(dev, func - 2);
+                break;
+            case 0xc1:
+                /* Bits 7 and 3-0 are write-1-to-clear, bit 4 read-only, bit 6 reserved. */
+                dev->usb_regs[func - 2][0xc1] = (dev->usb_regs[func - 2][0xc1] & 0x9f & ~(val & 0x8f)) | (val & 0x20);
+                pipc_usb_update_legacy(dev, func - 2);
                 break;
 
             default:

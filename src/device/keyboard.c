@@ -41,6 +41,7 @@ typedef struct keyboard_t {
 } keyboard_t;
 
 int          keyboard_type    = 0;
+int          keyboard_usb     = 0; /* a USB keyboard next to the machine's own */
 
 static int   override_capture = 0;
 

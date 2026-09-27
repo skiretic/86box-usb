@@ -157,6 +157,7 @@ extern "C" {
 #endif
 
 extern int     keyboard_type;
+extern int     keyboard_usb;
 
 extern uint8_t keyboard_mode;
 extern int     keyboard_scan;

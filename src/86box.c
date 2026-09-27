@@ -1846,6 +1846,10 @@ pc_reset_hard_init(void)
      */
     mouse_reset();
 
+    /* The USB keyboard, once the machine's USB controller exists. */
+    if (keyboard_usb)
+        device_add(&keyboard_usb_device);
+
     /* Reset the Hard Disk Controller module. */
     hdc_reset();
 

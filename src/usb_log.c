@@ -42,6 +42,7 @@ static const char *const layer_names[USB_LOG_LAYERS] = { "reg", "sched", "irq", 
 static usb_log_file_t log_files[USB_LOG_LAYERS];
 static uint64_t       log_cap;
 static int            log_refs;
+static int            log_boots; /* opens so far in this run: later ones append */
 
 static int
 usb_log_parse_mask(const char *s)
@@ -215,8 +216,13 @@ usb_log_open(void)
     env          = getenv("USB_LOG_CAP_MB");
     log_cap      = ((env != NULL) ? strtoull(env, NULL, 10) : 64ULL) << 20;
 
+    /* A hard reset opens the files again: the first open of a run truncates,
+       later ones append so a leg keeps every boot. The cap counts the run. */
     for (int i = 0; i < USB_LOG_LAYERS; i++) {
+        uint64_t bytes = log_files[i].bytes;
+
         memset(&log_files[i], 0x00, sizeof(usb_log_file_t));
+        log_files[i].bytes = bytes;
         if (!(usb_log_mask & (1 << i)))
             continue;
 
@@ -226,16 +232,24 @@ usb_log_open(void)
             snprintf(name, sizeof(name), "usb-%s.log", layer_names[i]);
         path_append_filename(path, usr_path, name);
 
-        log_files[i].fp = plat_fopen(path, "wb");
+        log_files[i].fp = plat_fopen(path, (log_boots > 0) ? "ab" : "wb");
         if (log_files[i].fp == NULL) {
             pclog("USB log: cannot open %s, %s layer off\n", path, layer_names[i]);
             usb_log_mask &= ~(1 << i);
             continue;
         }
         pclog("USB log: %s layer -> %s\n", layer_names[i], path);
+
+        if ((log_boots > 0) && (i != USB_LOG_PCAP)) {
+            char line[80];
+            int  len = snprintf(line, sizeof(line), "---- hard reset %d: a new boot starts, times restart ----\n", log_boots);
+            usb_log_write(i, line, len);
+        }
     }
 
-    if (usb_log_mask & (1 << USB_LOG_PCAP)) {
+    /* One pcap global header per file; an appended boot adds records only. */
+    if ((usb_log_mask & (1 << USB_LOG_PCAP)) && (fseek(log_files[USB_LOG_PCAP].fp, 0, SEEK_END) == 0) &&
+        (ftell(log_files[USB_LOG_PCAP].fp) == 0)) {
         /* pcap global header in host byte order: v2.4, snaplen 65535,
            LINKTYPE_USB_LINUX_MMAPPED (220). */
         struct {
@@ -248,6 +262,7 @@ usb_log_open(void)
         usb_log_write(USB_LOG_PCAP, &hdr, sizeof(hdr));
     }
 
+    log_boots++;
     pclog("USB log: mask %02X, cap %" PRIu64 " bytes per layer\n", usb_log_mask, log_cap);
 }
 

@@ -537,7 +537,7 @@ piix_usb_update_irq(piix_t *dev)
 
     /* USBSMIEN (LEGSUP bit 4) makes the IRQ a legacy USB SMI event, gated by
        SMIEN bit 8 into SMIREQ bit 8 on the PIIX3 (2.2.19, 2.2.22) and by
-       GLBEN LEGACY_USB_EN on the PIIX4, whose LEGACY_USB_STS follows it. */
+       GLBEN LEGACY_USB_EN on the PIIX4, whose LEGACY_USB_STS it sets. */
     smi = dev->usb_irq_level && (fregs[0xc0] & 0x10);
     if (dev->type == 3) {
         if (smi && !dev->usb_smi_level) {
@@ -550,9 +550,11 @@ piix_usb_update_irq(piix_t *dev)
             }
         }
     } else if (dev->acpi != NULL) {
+        /* LEGACY_USB_STS clears only with its child status, USBIRQS: masking
+           USBSMIEN does not clear it (PIIX4 7.2.10 bit 1). */
         if (smi)
             dev->acpi->regs.glbsts |= 0x0002;
-        else
+        else if (!dev->usb_irq_level)
             dev->acpi->regs.glbsts &= ~0x0002;
         if (smi && !dev->usb_smi_level) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX4 legacy USB SMI event, GLBEN %04x GLBCTL %08x",

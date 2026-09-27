@@ -199,6 +199,41 @@ struct uhci_t {
 #define OHCI_INT_MIE  0x80000000
 #define OHCI_INT_ALL  0x4000007f
 
+/* HcRhStatus (p140-141): read meaning / write command. */
+#define OHCI_RH_LPS  0x00000001 /* ClearGlobalPower */
+#define OHCI_RH_OCI  0x00000002
+#define OHCI_RH_DRWE 0x00008000 /* SetRemoteWakeupEnable */
+#define OHCI_RH_LPSC 0x00010000 /* SetGlobalPower */
+#define OHCI_RH_OCIC 0x00020000
+#define OHCI_RH_CRWE 0x80000000
+
+/* HcRhPortStatus (p142-145): read meaning / write command. */
+#define OHCI_PS_CCS    0x00000001 /* ClearPortEnable */
+#define OHCI_PS_PES    0x00000002 /* SetPortEnable */
+#define OHCI_PS_PSS    0x00000004 /* SetPortSuspend */
+#define OHCI_PS_POCI   0x00000008 /* ClearSuspendStatus */
+#define OHCI_PS_PRS    0x00000010 /* SetPortReset */
+#define OHCI_PS_PPS    0x00000100 /* SetPortPower */
+#define OHCI_PS_LSDA   0x00000200 /* ClearPortPower */
+#define OHCI_PS_CSC    0x00010000
+#define OHCI_PS_PESC   0x00020000
+#define OHCI_PS_PSSC   0x00040000
+#define OHCI_PS_OCIC   0x00080000
+#define OHCI_PS_PRSC   0x00100000
+#define OHCI_PS_CHANGE 0x001f0000
+
+#define OHCI_DA_PSM 0x00000100
+#define OHCI_DA_NPS 0x00000200
+
+#define OHCI_PORT_RESET_US  10000.0 /* p145 */
+#define OHCI_PORT_RESUME_US 23000.0 /* 20 ms resume, then the 3 ms resync (p145) */
+
+enum {
+    OHCI_PORT_TIMER_NONE = 0,
+    OHCI_PORT_TIMER_RESET,
+    OHCI_PORT_TIMER_RESUME
+};
+
 /* 12,000 bit times per frame (p135). */
 #define OHCI_FI_NOMINAL 0x00002edf
 
@@ -216,7 +251,12 @@ struct uhci_t {
 #define OHCI_MAX_PORTS 3
 
 typedef struct ohci_port_t {
-    uint32_t sts; /* HcRhPortStatus: status bits 15:0, change bits 31:16 */
+    uint32_t   sts; /* HcRhPortStatus: status bits 15:0 (PPS as switched), change bits 31:16 */
+    uint8_t    timer_op;
+    int        num;
+    usb_dev_t *usb; /* the device on the wire, if any */
+    ohci_t    *hc;
+    pc_timer_t timer;
 } ohci_port_t;
 
 struct ohci_t {
@@ -241,6 +281,9 @@ struct ohci_t {
     uint32_t    rh_status;
     int         ndp;
     ohci_port_t port[OHCI_MAX_PORTS];
+    int         bus; /* pcap bus number */
+    void      (*set_irq)(void *priv, int level);
+    void       *irq_priv;
     /* Legacy support (Appendix B): the registers only, no 60h/64h decode. */
     uint32_t    hce_control;
     uint8_t     hce_input;
@@ -1193,6 +1236,9 @@ uhci_set_bus_master(usb_t *dev, int enable)
 
 static usb_t *usb_hcs[USB_MAX_HC];
 
+static void ohci_port_attach(ohci_port_t *p, usb_dev_t *udev);
+static void ohci_port_detach(ohci_port_t *p);
+
 /* Only a UHCI the chipset wired up (it routes its interrupt) takes devices.
    A device left out is named to the user with the reason. */
 int
@@ -1203,19 +1249,30 @@ usb_attach(usb_dev_t *udev)
 
     for (int h = 0; h < USB_MAX_HC; h++) {
         uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+        ohci_t *oc = (usb_hcs[h] != NULL) ? usb_hcs[h]->ohci : NULL;
 
-        if ((hc == NULL) || (hc->set_irq == NULL))
-            continue;
+        if ((hc != NULL) && (hc->set_irq != NULL)) {
+            wired = 1;
+            for (int i = 0; i < UHCI_PORTS; i++) {
+                if (hc->port[i].usb == NULL) {
+                    hc->port[i].usb = udev;
+                    udev->port      = &hc->port[i];
+                    udev->bus       = hc->bus;
+                    usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s attached", i + 1, udev->name);
+                    uhci_schedule_detect(hc);
+                    return 1;
+                }
+            }
+        }
 
-        wired = 1;
-        for (int i = 0; i < UHCI_PORTS; i++) {
-            if (hc->port[i].usb == NULL) {
-                hc->port[i].usb = udev;
-                udev->port      = &hc->port[i];
-                udev->bus       = hc->bus;
-                usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s attached", i + 1, udev->name);
-                uhci_schedule_detect(hc);
-                return 1;
+        /* An OHCI is in use once its chipset routes its interrupt. */
+        if ((oc != NULL) && (oc->set_irq != NULL)) {
+            wired = 1;
+            for (int i = 0; i < oc->ndp; i++) {
+                if (oc->port[i].usb == NULL) {
+                    ohci_port_attach(&oc->port[i], udev);
+                    return 1;
+                }
             }
         }
     }
@@ -1223,12 +1280,17 @@ usb_attach(usb_dev_t *udev)
     /* Root ports full: a hub on one of them takes the device. */
     for (int h = 0; h < USB_MAX_HC; h++) {
         uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+        ohci_t *oc = (usb_hcs[h] != NULL) ? usb_hcs[h]->ohci : NULL;
 
-        if ((hc == NULL) || (hc->set_irq == NULL))
-            continue;
-
-        for (int i = 0; i < UHCI_PORTS; i++) {
+        for (int i = 0; (hc != NULL) && (hc->set_irq != NULL) && (i < UHCI_PORTS); i++) {
             usb_dev_t *hub = hc->port[i].usb;
+
+            if ((hub != NULL) && (hub->ops->attach != NULL) && hub->ops->attach(hub, udev))
+                return 1;
+        }
+
+        for (int i = 0; (oc != NULL) && (oc->set_irq != NULL) && (i < oc->ndp); i++) {
+            usb_dev_t *hub = oc->port[i].usb;
 
             if ((hub != NULL) && (hub->ops->attach != NULL) && hub->ops->attach(hub, udev))
                 return 1;
@@ -1278,17 +1340,338 @@ usb_detach(usb_dev_t *udev)
         }
     }
 
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        ohci_t *oc = (usb_hcs[h] != NULL) ? usb_hcs[h]->ohci : NULL;
+
+        for (int i = 0; (oc != NULL) && (i < OHCI_MAX_PORTS); i++) {
+            if (oc->port[i].usb == udev)
+                ohci_port_detach(&oc->port[i]);
+        }
+    }
+
     udev->port = NULL;
 }
 
+static void
+ohci_port_trace(const ohci_port_t *p, const char *what)
+{
+    usb_trace(USB_LOG_REG, -1, "OHCI port %i: %s, HcRhPortStatus %08x", p->num, what, p->sts);
+}
+
+static void
+ohci_port_timer_stop(ohci_port_t *p)
+{
+    timer_stop(&p->timer);
+    p->timer_op = OHCI_PORT_TIMER_NONE;
+}
+
+/* A change bit set by the root hub raises RootHubStatusChange (p121); the
+   HCD's own writes to the status bits do not. */
+static void
+ohci_port_change(ohci_port_t *p, uint32_t bits)
+{
+    p->sts |= bits;
+    p->hc->intsts |= OHCI_INT_RHSC;
+}
+
+static int
+ohci_port_fixed(const ohci_port_t *p)
+{
+    return !!(p->hc->rh_desc_b & (1 << p->num));
+}
+
+static int
+ohci_port_powered(const ohci_port_t *p)
+{
+    return (p->hc->rh_desc_a & OHCI_DA_NPS) || (p->sts & OHCI_PS_PPS);
+}
+
+static int
+ohci_rh_in_reset(const ohci_t *dev)
+{
+    return (dev->control & OHCI_CTL_HCFS) == OHCI_HCFS_RESET;
+}
+
+static uint32_t
+ohci_port_read(const ohci_port_t *p)
+{
+    uint32_t ret = p->sts;
+
+    if (p->hc->rh_desc_a & OHCI_DA_NPS)
+        ret |= OHCI_PS_PPS;
+    if (ohci_port_fixed(p))
+        ret |= OHCI_PS_CCS;
+
+    return ret;
+}
+
+/* Entering USBRESUME, by the HCD or the HC, ends every port suspend (p143). */
+static void
+ohci_rh_global_resume(ohci_t *dev)
+{
+    for (int i = 0; i < dev->ndp; i++) {
+        ohci_port_t *p = &dev->port[i];
+
+        if (p->timer_op == OHCI_PORT_TIMER_RESUME)
+            ohci_port_timer_stop(p);
+        p->sts &= ~OHCI_PS_PSS;
+    }
+}
+
+/* A resume event in USBSUSPEND: the HC moves itself to USBRESUME and sets
+   ResumeDetected (p120). */
+static void
+ohci_resume_detected(ohci_t *dev)
+{
+    if ((dev->control & OHCI_CTL_HCFS) != OHCI_HCFS_SUSPEND)
+        return;
+
+    usb_trace(USB_LOG_IRQ, -1, "OHCI resume detected: USBSUSPEND -> USBRESUME, ResumeDetected set");
+    dev->control = (dev->control & ~OHCI_CTL_HCFS) | OHCI_HCFS_RESUME;
+    dev->intsts |= OHCI_INT_RD;
+    ohci_rh_global_resume(dev);
+}
+
+/* With DeviceRemovable set, CSC comes only from a root hub reset (p145);
+   with DeviceRemoteWakeupEnable a connect change is a resume event (p141). */
+static void
+ohci_port_connect_change(ohci_port_t *p)
+{
+    if (!ohci_port_fixed(p))
+        ohci_port_change(p, OHCI_PS_CSC);
+    if (p->hc->rh_status & OHCI_RH_DRWE)
+        ohci_resume_detected(p->hc);
+}
+
+/* Connect detection: a device on a powered port, outside USBRESET. */
+static void
+ohci_port_detect(ohci_port_t *p)
+{
+    if ((p->usb == NULL) || (p->sts & OHCI_PS_CCS) || !ohci_port_powered(p) || ohci_rh_in_reset(p->hc))
+        return;
+
+    p->sts |= OHCI_PS_CCS | (p->usb->low_speed ? OHCI_PS_LSDA : 0);
+    ohci_port_connect_change(p);
+    ohci_port_trace(p, "connect detected");
+}
+
+/* Power off resets CCS, PES, PSS and PRS (p144); losing PES is a hardware
+   event (p143). The device loses its address and configuration. */
+static void
+ohci_port_power_off(ohci_port_t *p)
+{
+    ohci_port_timer_stop(p);
+    if (p->sts & OHCI_PS_PES)
+        ohci_port_change(p, OHCI_PS_PESC);
+    p->sts &= ~(OHCI_PS_CCS | OHCI_PS_PES | OHCI_PS_PSS | OHCI_PS_PRS | OHCI_PS_LSDA);
+    if (p->usb != NULL) {
+        usb_dev_bus_reset(p->usb);
+        p->usb->powered_reset = 0;
+    }
+    ohci_port_trace(p, "power off");
+}
+
+static void
+ohci_port_set_power(ohci_port_t *p, int on)
+{
+    int was = ohci_port_powered(p);
+
+    if (on)
+        p->sts |= OHCI_PS_PPS;
+    else
+        p->sts &= ~OHCI_PS_PPS;
+
+    if (was && !ohci_port_powered(p))
+        ohci_port_power_off(p);
+    else
+        ohci_port_detect(p);
+}
+
+/* Set/ClearGlobalPower reach every port in global mode, and the ports whose
+   PortPowerControlMask bit is clear in per-port mode (p140). */
+static void
+ohci_rh_global_power(ohci_t *dev, int on)
+{
+    for (int i = 0; i < dev->ndp; i++) {
+        if (!(dev->rh_desc_a & OHCI_DA_PSM) || !(dev->rh_desc_b & (0x10000 << (i + 1))))
+            ohci_port_set_power(&dev->port[i], on);
+    }
+}
+
+static void
+ohci_port_timer(void *priv)
+{
+    ohci_port_t *p  = (ohci_port_t *) priv;
+    int          op = p->timer_op;
+
+    p->timer_op = OHCI_PORT_TIMER_NONE;
+
+    switch (op) {
+        case OHCI_PORT_TIMER_RESET:
+            /* The end of reset enables the port and ends a suspend (p143-145). */
+            p->sts = (p->sts & ~(OHCI_PS_PRS | OHCI_PS_PSS | OHCI_PS_PSSC)) | OHCI_PS_PES;
+            ohci_port_change(p, OHCI_PS_PRSC);
+            ohci_port_trace(p, "reset done");
+            break;
+
+        case OHCI_PORT_TIMER_RESUME:
+            p->sts = (p->sts & ~OHCI_PS_PSS) | OHCI_PS_PES;
+            ohci_port_change(p, OHCI_PS_PSSC);
+            ohci_port_trace(p, "resume done");
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void
+ohci_port_write(ohci_port_t *p, uint32_t val)
+{
+    const ohci_t *dev       = p->hc;
+    int           connected = !!(ohci_port_read(p) & OHCI_PS_CCS);
+
+    if (ohci_rh_in_reset(dev))
+        return;
+
+    /* Clears first, so the CSC a command below sets survives the write. */
+    p->sts &= ~(val & OHCI_PS_CHANGE);
+
+    if (val & OHCI_PS_CCS)
+        p->sts &= ~OHCI_PS_PES;
+
+    /* SetPortEnable, SetPortSuspend and SetPortReset on a disconnected port
+       set CSC instead (p143-145). */
+    if (val & (OHCI_PS_PES | OHCI_PS_PSS | OHCI_PS_PRS)) {
+        if (!connected)
+            ohci_port_change(p, OHCI_PS_CSC);
+        else {
+            if (val & OHCI_PS_PES)
+                p->sts |= OHCI_PS_PES;
+            if (val & OHCI_PS_PSS)
+                p->sts |= OHCI_PS_PSS;
+            if ((val & OHCI_PS_PRS) && !(p->sts & OHCI_PS_PRS)) {
+                p->sts |= OHCI_PS_PRS;
+                p->timer_op = OHCI_PORT_TIMER_RESET;
+                timer_on_auto(&p->timer, OHCI_PORT_RESET_US);
+                if (p->usb != NULL)
+                    usb_dev_bus_reset(p->usb);
+                ohci_port_trace(p, "reset start");
+            }
+        }
+    }
+
+    /* ClearSuspendStatus starts a resume only on a suspended port. */
+    if ((val & OHCI_PS_POCI) && (p->sts & OHCI_PS_PSS) && (p->timer_op == OHCI_PORT_TIMER_NONE)) {
+        p->timer_op = OHCI_PORT_TIMER_RESUME;
+        timer_on_auto(&p->timer, OHCI_PORT_RESUME_US);
+        ohci_port_trace(p, "resume start");
+    }
+
+    /* Per-port power commands reach a port only in per-port mode with its
+       PortPowerControlMask bit set (p144). */
+    if (!(dev->rh_desc_a & OHCI_DA_NPS) && (dev->rh_desc_a & OHCI_DA_PSM) && (dev->rh_desc_b & (0x10000 << p->num))) {
+        if (val & OHCI_PS_PPS)
+            ohci_port_set_power(p, 1);
+        if (val & OHCI_PS_LSDA)
+            ohci_port_set_power(p, 0);
+    }
+}
+
+static void
+ohci_rh_status_write(ohci_t *dev, uint32_t val)
+{
+    if (ohci_rh_in_reset(dev))
+        return;
+
+    dev->rh_status &= ~(val & OHCI_RH_OCIC);
+    if (val & OHCI_RH_LPS)
+        ohci_rh_global_power(dev, 0);
+    if (val & OHCI_RH_LPSC)
+        ohci_rh_global_power(dev, 1);
+    if (val & OHCI_RH_DRWE)
+        dev->rh_status |= OHCI_RH_DRWE;
+    if (val & OHCI_RH_CRWE)
+        dev->rh_status &= ~OHCI_RH_DRWE;
+}
+
+static void
+ohci_rh_detect_all(ohci_t *dev)
+{
+    for (int i = 0; i < dev->ndp; i++)
+        ohci_port_detect(&dev->port[i]);
+}
+
 /* The root hub's reset: the USBRESET state and a hardware reset (p57,
-   ALi-C p187-188). Its descriptors are reset by hardware reset only. */
+   ALi-C p187-188). Reset signaling reaches every device; without
+   NoPowerSwitching the ports also lose power. The descriptors are reset by
+   hardware reset only. */
 static void
 ohci_root_hub_reset(ohci_t *dev)
 {
     dev->rh_status = 0x00000000;
-    for (int i = 0; i < OHCI_MAX_PORTS; i++)
-        dev->port[i].sts = 0x00000000;
+    for (int i = 0; i < OHCI_MAX_PORTS; i++) {
+        ohci_port_t *p = &dev->port[i];
+
+        ohci_port_timer_stop(p);
+        p->sts = 0x00000000;
+        if (p->usb != NULL) {
+            usb_dev_bus_reset(p->usb);
+            if (!(dev->rh_desc_a & OHCI_DA_NPS))
+                p->usb->powered_reset = 0;
+        }
+        /* ALi-C p188: CSC resets to 1 on a non-removable port. */
+        if ((i < dev->ndp) && ohci_port_fixed(p))
+            ohci_port_change(p, OHCI_PS_CSC);
+    }
+}
+
+/* Entering USBSUSPEND while a port resumes, or has finished resuming, ends
+   that resume and is a resume event for the HC (p120). */
+static void
+ohci_rh_suspend(ohci_t *dev)
+{
+    int event = 0;
+
+    for (int i = 0; i < dev->ndp; i++) {
+        ohci_port_t *p = &dev->port[i];
+
+        if ((p->timer_op == OHCI_PORT_TIMER_RESUME) || (p->sts & OHCI_PS_PSSC)) {
+            if (p->timer_op == OHCI_PORT_TIMER_RESUME)
+                ohci_port_timer_stop(p);
+            p->sts &= ~OHCI_PS_PSS;
+            event = 1;
+        }
+    }
+
+    if (event)
+        ohci_resume_detected(dev);
+}
+
+static void
+ohci_port_attach(ohci_port_t *p, usb_dev_t *udev)
+{
+    p->usb     = udev;
+    udev->port = p;
+    udev->bus  = p->hc->bus;
+    usb_trace(USB_LOG_REG, -1, "OHCI port %i: %s attached", p->num, udev->name);
+    ohci_port_detect(p);
+}
+
+/* A disconnect clears CCS and the port state; losing PES is a hardware
+   event (p143). */
+static void
+ohci_port_detach(ohci_port_t *p)
+{
+    ohci_port_timer_stop(p);
+    if (p->sts & OHCI_PS_CCS) {
+        if (p->sts & OHCI_PS_PES)
+            ohci_port_change(p, OHCI_PS_PESC);
+        p->sts &= ~(OHCI_PS_CCS | OHCI_PS_PES | OHCI_PS_PSS | OHCI_PS_PRS | OHCI_PS_LSDA);
+        ohci_port_connect_change(p);
+    }
+    usb_trace(USB_LOG_REG, -1, "OHCI port %i: %s detached, HcRhPortStatus %08x", p->num, p->usb->name, p->sts);
+    p->usb = NULL;
 }
 
 /* HCR (p126): the operational registers go to their reset values, FI to
@@ -1340,9 +1723,22 @@ ohci_control_write(ohci_t *dev, uint32_t val)
 
     if ((dev->control ^ old) & OHCI_CTL_HCFS) {
         usb_trace(USB_LOG_REG, -1, "OHCI HCFS %s -> %s", ohci_hcfs_name(old), ohci_hcfs_name(dev->control));
-        /* Entering USBRESET resets the root hub (p57). */
-        if ((dev->control & OHCI_CTL_HCFS) == OHCI_HCFS_RESET)
-            ohci_root_hub_reset(dev);
+        switch (dev->control & OHCI_CTL_HCFS) {
+            case OHCI_HCFS_RESET:
+                /* The root hub is held in reset while in USBRESET (p57). */
+                ohci_root_hub_reset(dev);
+                break;
+            case OHCI_HCFS_RESUME:
+                ohci_rh_global_resume(dev);
+                break;
+            case OHCI_HCFS_SUSPEND:
+                ohci_rh_suspend(dev);
+                break;
+            default:
+                break;
+        }
+        if ((old & OHCI_CTL_HCFS) == OHCI_HCFS_RESET)
+            ohci_rh_detect_all(dev);
     }
 }
 
@@ -1419,7 +1815,7 @@ ohci_reg_read(const ohci_t *dev, uint32_t off)
         default:
             n = (off - OHCI_HCRHPORTSTATUS1) >> 2;
             if ((off >= OHCI_HCRHPORTSTATUS1) && (n < (uint32_t) dev->ndp))
-                return dev->port[n].sts;
+                return ohci_port_read(&dev->port[n]);
             /* The rest of the window need not respond (p149). */
             return 0x00000000;
     }
@@ -1438,6 +1834,8 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
 {
     uint32_t cmd = val & lanes;
     uint32_t ports;
+    uint32_t n;
+    int      was_reset;
 
     switch (off) {
         case OHCI_HCCONTROL:
@@ -1449,7 +1847,11 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
                 /* Completes at once, so the self-clearing bit already reads 0. */
                 usb_trace(USB_LOG_REG, -1, "OHCI HostControllerReset: %s -> USBSUSPEND, InterruptRouting %i kept",
                           ohci_hcfs_name(dev->control), !!(dev->control & OHCI_CTL_IR));
+                was_reset = ohci_rh_in_reset(dev);
                 ohci_soft_reset(dev);
+                /* Out of USBRESET, the root hub is no longer held in reset. */
+                if (was_reset)
+                    ohci_rh_detect_all(dev);
                 break;
             }
             dev->cmdsts |= cmd & (OHCI_CS_CLF | OHCI_CS_BLF | OHCI_CS_OCR);
@@ -1512,13 +1914,26 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
 
         case OHCI_HCRHDESCRIPTORA:
             /* PSM, NPS, OCPM, NOCP; POTPGT bits 25:24 only (ALi-C p185,
-               SMSC p111). */
+               SMSC p111). A NoPowerSwitching change powers ports on or off. */
+            ports = 0;
+            for (int i = 0; i < dev->ndp; i++)
+                ports |= ohci_port_powered(&dev->port[i]) << i;
             dev->rh_desc_a = (ohci_merge(dev->rh_desc_a, val, lanes) & 0x03001b00) | dev->ndp;
+            for (int i = 0; i < dev->ndp; i++) {
+                if ((ports & (1 << i)) && !ohci_port_powered(&dev->port[i]))
+                    ohci_port_power_off(&dev->port[i]);
+                else
+                    ohci_port_detect(&dev->port[i]);
+            }
             break;
         case OHCI_HCRHDESCRIPTORB:
             /* Bit 0 of each field is reserved, and so are ports past NDP. */
             ports          = ((1u << dev->ndp) - 1) << 1;
             dev->rh_desc_b = ohci_merge(dev->rh_desc_b, val, lanes) & (ports | (ports << 16));
+            break;
+
+        case OHCI_HCRHSTATUS:
+            ohci_rh_status_write(dev, cmd);
             break;
 
         case OHCI_HCECONTROL:
@@ -1540,7 +1955,10 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
             break;
 
         default:
-            /* Read-only registers and the rest of the window. */
+            n = (off - OHCI_HCRHPORTSTATUS1) >> 2;
+            if ((off >= OHCI_HCRHPORTSTATUS1) && (n < (uint32_t) dev->ndp))
+                ohci_port_write(&dev->port[n], cmd);
+            /* Read-only registers and the rest of the window take no write. */
             break;
     }
 }
@@ -1640,6 +2058,13 @@ ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3,
     usb_trace(USB_LOG_REG, -1, "OHCI MMIO %08x %s", dev->ohci_mem_base, dev->ohci_enable ? "enabled" : "disabled");
 }
 
+void
+ohci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *priv)
+{
+    dev->ohci->set_irq  = set_irq;
+    dev->ohci->irq_priv = priv;
+}
+
 static void
 usb_reset(void *priv)
 {
@@ -1674,6 +2099,11 @@ usb_close(void *priv)
         if (dev->uhci->port[i].usb != NULL)
             dev->uhci->port[i].usb->port = NULL;
     }
+    for (int i = 0; i < OHCI_MAX_PORTS; i++) {
+        if (dev->ohci->port[i].usb != NULL)
+            dev->ohci->port[i].usb->port = NULL;
+        timer_disable(&dev->ohci->port[i].timer);
+    }
 
     timer_disable(&dev->uhci->frame_timer);
     timer_disable(&dev->uhci->detect_timer);
@@ -1700,16 +2130,23 @@ usb_init(UNUSED(const device_t *info))
     timer_add(&dev->uhci->frame_timer, uhci_frame_end, dev->uhci, 0);
     timer_add(&dev->uhci->detect_timer, uhci_detect, dev->uhci, 0);
 
+    dev->ohci      = (ohci_t *) calloc(1, sizeof(ohci_t));
+    dev->ohci->ndp = 2;
+    for (int i = 0; i < OHCI_MAX_PORTS; i++) {
+        dev->ohci->port[i].num = i + 1;
+        dev->ohci->port[i].hc  = dev->ohci;
+        timer_add(&dev->ohci->port[i].timer, ohci_port_timer, &dev->ohci->port[i], 0);
+    }
+
+    /* A board uses the UHCI or the OHCI of its usb_t, so they share a bus number. */
     for (int h = 0; h < USB_MAX_HC; h++) {
         if (usb_hcs[h] == NULL) {
             usb_hcs[h]     = dev;
             dev->uhci->bus = h + 1;
+            dev->ohci->bus = h + 1;
             break;
         }
     }
-
-    dev->ohci      = (ohci_t *) calloc(1, sizeof(ohci_t));
-    dev->ohci->ndp = 2;
 
     mem_mapping_add(&dev->ohci_mmio_mapping, 0, 0,
                     ohci_mmio_readb, ohci_mmio_readw, ohci_mmio_readl,

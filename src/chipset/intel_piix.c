@@ -45,6 +45,7 @@
 #include <86box/hdc_ide.h>
 #include <86box/hdc_ide_sff8038i.h>
 #include <86box/usb.h>
+#include <86box/usb_log.h>
 #include <86box/lpt.h>
 #include <86box/machine.h>
 #include <86box/smbus.h>
@@ -69,6 +70,8 @@ typedef struct _piix_ {
     uint16_t       nvr_io_base;
     uint16_t       acpi_io_base;
     uint16_t       irq_state;
+    uint8_t        usb_irq_level;
+    uint8_t        usb_irq_state;
     double         fast_off_period;
     sff8038i_t    *bm[2];
     smbus_piix4_t *smbus;
@@ -513,6 +516,33 @@ piix_extsmi_raise(void)
         smi_raise();
 }
 
+/* The UHCI IRQ shows in LEGSUP bit 12 and reaches PIRQD (INTD) only while
+   USBPIRQDEN, LEGSUP bit 13, is set (PIIX4 datasheet 6.1.12). */
+static void
+piix_usb_update_irq(piix_t *dev)
+{
+    uint8_t *fregs = dev->regs[2];
+
+    if (dev->usb_irq_level)
+        fregs[0xc1] |= 0x10;
+    else
+        fregs[0xc1] &= ~0x10;
+
+    if (dev->usb_irq_level && (fregs[0xc1] & 0x20))
+        pci_set_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+    else
+        pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+}
+
+static void
+piix_usb_irq(void *priv, int level)
+{
+    piix_t *dev = (piix_t *) priv;
+
+    dev->usb_irq_level = !!level;
+    piix_usb_update_irq(dev);
+}
+
 static void
 piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 {
@@ -543,6 +573,9 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 
     piix_log("PIIX function %i write: %02X to %02X\n", func, val, addr);
     fregs = (uint8_t *) dev->regs[func];
+
+    if (func == 2)
+        usb_trace(USB_LOG_REG, -1, "PIIX fn2 cfg %02x <- %02x", addr, val);
 
     if (func == 0)
         switch (addr) {
@@ -1095,10 +1128,14 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             case 0xc0:
                 if (dev->type <= 4)
                     fregs[0xc0] = (fregs[0xc0] & 0x40) | (val & 0xbf);
+                usb_trace(USB_LOG_REG, -1, "PIIX LEGSUP now %02x%02x", fregs[0xc1], fregs[0xc0]);
                 break;
             case 0xc1:
-                if (dev->type <= 4)
+                if (dev->type <= 4) {
                     fregs[0xc1] = (fregs[0xc1] & 0x9f & ~(val & 0x8f)) | (val & 0x20);
+                    piix_usb_update_irq(dev);
+                }
+                usb_trace(USB_LOG_REG, -1, "PIIX LEGSUP now %02x%02x", fregs[0xc1], fregs[0xc0]);
                 break;
             case 0xff:
                 if (dev->type == 4) {
@@ -1645,8 +1682,11 @@ piix_init(const device_t *info)
     else
         sff_set_irq_mode(dev->bm[1], IRQ_MODE_MIRQ_0);
 
-    if (dev->type >= 3)
+    if (dev->type >= 3) {
         dev->usb   = device_add(&usb_device);
+        if (dev->type <= 4)
+            uhci_set_irq_handler(dev->usb, piix_usb_irq, dev);
+    }
 
     if (dev->type > 3) {
         if (info->local & PIIX4_NVR_AMI_1995J)

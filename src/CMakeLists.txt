@@ -46,6 +46,7 @@ add_executable(86Box
     eisa.c
     mca.c
     usb.c
+    usb_log.c
     device.c
     nvr.c
     nvr_at.c

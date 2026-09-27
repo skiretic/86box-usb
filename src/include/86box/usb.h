@@ -20,8 +20,10 @@
 extern "C" {
 #endif
 
+typedef struct uhci_t uhci_t;
+
 typedef struct usb_t {
-    uint8_t       uhci_io[32];
+    uhci_t       *uhci;
     uint8_t       ohci_mmio[4096];
     uint16_t      uhci_io_base;
     int           uhci_enable;
@@ -35,6 +37,8 @@ extern const device_t usb_device;
 
 /* Functions. */
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);
+/* The chipset routes the UHCI interrupt; level is the controller's IRQ output. */
+extern void uhci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *priv);
 extern void ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3, int enable);
 
 #ifdef __cplusplus

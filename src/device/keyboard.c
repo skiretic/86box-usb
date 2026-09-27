@@ -317,9 +317,6 @@ key_process(uint16_t scan, int down)
 void
 keyboard_input(int down, uint16_t scan)
 {
-    if (kbd_in_reset)
-        return;
-
     /* Special case for E1 1D, translate it to 0100 - special case. */
     if ((scan >> 8) == 0xe1) {
         if ((scan & 0xff) == 0x1d)
@@ -335,6 +332,17 @@ keyboard_input(int down, uint16_t scan)
                            that already sends us preprocessed scan codes, which
                            means we then use the scan code as is, and need to
                            make sure we do not accidentally strip that upper byte */
+
+    /* A PS/2 keyboard reset leaves a USB keyboard alone: its keys still go through. */
+    if (kbd_in_reset) {
+        if ((keyboard_usb_handler != NULL) &&
+            (override_capture || mouse_capture || !kbd_req_capture || (video_fullscreen && !fullscreen_ui_visible)) &&
+            keyboard_usb_handler(scancode_config_map[scan & 0x1ff], down, keyboard_usb_priv)) {
+            recv_key_ui[scan & 0x1ff] = down;
+            recv_key[scan & 0x1ff]    = down;
+        }
+        return;
+    }
 
     if (recv_key[scan & 0x1ff] ^ down) {
         if (down) {

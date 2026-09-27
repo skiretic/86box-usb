@@ -200,7 +200,7 @@
 #define pci_clear_iirq(pci_int, irq_state) \
         pci_irq(PCI_IIRQ_BASE | (pci_int), 0, 0, 0, irq_state)
 #define pci_clear_dirq(dirq, irq_state) \
-        pci_irq(PCI_DIRQ_BASE | (irq), 0, 1, 0, irq_state)
+        pci_irq(PCI_DIRQ_BASE | (dirq), 0, 1, 0, irq_state)
 #define pci_clear_irq(slot, pci_int, irq_state) \
         pci_irq(slot, pci_int, 0, 0, irq_state)
 

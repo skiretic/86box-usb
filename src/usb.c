@@ -282,6 +282,12 @@ struct ohci_t {
     int         ndp;
     ohci_port_t port[OHCI_MAX_PORTS];
     int         bus; /* pcap bus number */
+    uint8_t     bus_master; /* PCI COMMAND Bus Master Enable from the chipset */
+    /* The frame in progress: FrameRemaining counts down from fr_load, and
+       FrameNumber bit 15 as of the last HCCA update. */
+    uint32_t    fr_load;
+    uint32_t    fn_msb;
+    pc_timer_t  frame_timer;
     void      (*set_irq)(void *priv, int level);
     void       *irq_priv;
     /* Legacy support (Appendix B): the registers only, no 60h/64h decode. */
@@ -1674,12 +1680,96 @@ ohci_port_detach(ohci_port_t *p)
     p->usb = NULL;
 }
 
+/* A frame is FrameInterval + 1 bit times of 12 MHz (p104). */
+static double
+ohci_frame_us(uint32_t fi)
+{
+    return ((double) (fi & 0x3fff) + 1.0) / 12.0;
+}
+
+/* FrameRemaining from the frame timer: FI in the first bit time of the
+   frame, 0 in the last (p104). */
+static uint32_t
+ohci_fr_live(ohci_t *dev)
+{
+    double   bits = ((double) timer_get_remaining_u64(&dev->frame_timer) / (double) TIMER_USEC) * 12.0;
+    uint32_t fr   = (bits >= 1.0) ? (uint32_t) ceil(bits) - 1 : 0;
+
+    return (fr > dev->fr_load) ? dev->fr_load : fr;
+}
+
+/* It counts only in USBOPERATIONAL (ALi-C p182) and holds otherwise. */
+static uint32_t
+ohci_fm_remaining(ohci_t *dev)
+{
+    if ((dev->control & OHCI_CTL_HCFS) != OHCI_HCFS_OPERATIONAL)
+        return dev->fm_remaining;
+
+    return (dev->fm_remaining & 0x80000000) | ohci_fr_live(dev);
+}
+
+/* Entering USBOPERATIONAL loads FrameRemaining and increments FrameNumber,
+   with no SOF; the first SOF is at the next frame boundary (p102). */
+static void
+ohci_frame_start(ohci_t *dev)
+{
+    dev->fr_load      = dev->fm_interval & 0x3fff;
+    dev->fm_remaining = (dev->fm_remaining & 0x80000000) | dev->fr_load;
+    dev->fm_number    = (dev->fm_number + 1) & 0xffff;
+    timer_on_auto(&dev->frame_timer, ohci_frame_us(dev->fr_load));
+    usb_trace(USB_LOG_REG, dev->fm_number, "OHCI frame clock started, HcHCCA %08x", dev->hcca);
+}
+
+static void
+ohci_frame_stop(ohci_t *dev)
+{
+    if (!(dev->frame_timer.flags & TIMER_ENABLED))
+        return;
+
+    dev->fm_remaining = (dev->fm_remaining & 0x80000000) | ohci_fr_live(dev);
+    timer_stop(&dev->frame_timer);
+    usb_trace(USB_LOG_REG, dev->fm_number, "OHCI frame clock stopped, HcFmRemaining %08x", dev->fm_remaining);
+}
+
+/* The frame boundary, the 0 -> FI transition of FrameRemaining (p104). */
+static void
+ohci_frame_boundary(void *priv)
+{
+    ohci_t *dev = (ohci_t *) priv;
+    uint8_t hcca_fn[4];
+
+    /* FR reloads with the FI in force now and FRT follows FIT (p135). */
+    dev->fr_load      = dev->fm_interval & 0x3fff;
+    dev->fm_remaining = (dev->fm_interval & 0x80000000) | dev->fr_load;
+    dev->fm_number    = (dev->fm_number + 1) & 0xffff;
+    timer_on_auto(&dev->frame_timer, ohci_frame_us(dev->fr_load));
+
+    /* SOF, then HccaFrameNumber with HccaPad1 = 0 before the first ED of
+       the frame, then StartOfFrame (p48-49, p104). Without Bus Master
+       Enable there is no HCCA write (p148). */
+    if (dev->bus_master) {
+        hcca_fn[0] = dev->fm_number & 0xff;
+        hcca_fn[1] = dev->fm_number >> 8;
+        hcca_fn[2] = hcca_fn[3] = 0x00;
+        dma_bm_write(dev->hcca + 0x80, hcca_fn, 4, 4);
+    }
+    /* FrameNumberOverflow: bit 15 changed since the last update (p120). */
+    if ((dev->fm_number & 0x8000) != dev->fn_msb) {
+        dev->fn_msb = dev->fm_number & 0x8000;
+        dev->intsts |= OHCI_INT_FNO;
+    }
+    dev->intsts |= OHCI_INT_SF;
+}
+
 /* HCR (p126): the operational registers go to their reset values, FI to
    nominal (p135), except InterruptRouting (p125). The root hub (p146) and
    the legacy support registers keep their contents. */
 static void
 ohci_soft_reset(ohci_t *dev)
 {
+    timer_stop(&dev->frame_timer);
+    dev->fn_msb         = 0x0000;
+    dev->fr_load        = 0x0000;
     dev->control        = (dev->control & OHCI_CTL_IR) | OHCI_HCFS_SUSPEND;
     dev->cmdsts         = 0x00000000;
     dev->intsts         = 0x00000000;
@@ -1723,6 +1813,10 @@ ohci_control_write(ohci_t *dev, uint32_t val)
 
     if ((dev->control ^ old) & OHCI_CTL_HCFS) {
         usb_trace(USB_LOG_REG, -1, "OHCI HCFS %s -> %s", ohci_hcfs_name(old), ohci_hcfs_name(dev->control));
+        if ((old & OHCI_CTL_HCFS) == OHCI_HCFS_OPERATIONAL)
+            ohci_frame_stop(dev);
+        else if ((dev->control & OHCI_CTL_HCFS) == OHCI_HCFS_OPERATIONAL)
+            ohci_frame_start(dev);
         switch (dev->control & OHCI_CTL_HCFS) {
             case OHCI_HCFS_RESET:
                 /* The root hub is held in reset while in USBRESET (p57). */
@@ -1757,7 +1851,7 @@ ohci_emulation_interrupt(const ohci_t *dev)
 }
 
 static uint32_t
-ohci_reg_read(const ohci_t *dev, uint32_t off)
+ohci_reg_read(ohci_t *dev, uint32_t off)
 {
     uint32_t n;
 
@@ -1791,7 +1885,7 @@ ohci_reg_read(const ohci_t *dev, uint32_t off)
         case OHCI_HCFMINTERVAL:
             return dev->fm_interval;
         case OHCI_HCFMREMAINING:
-            return dev->fm_remaining;
+            return ohci_fm_remaining(dev);
         case OHCI_HCFMNUMBER:
             return dev->fm_number;
         case OHCI_HCPERIODICSTART:
@@ -1966,9 +2060,9 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
 static uint8_t
 ohci_mmio_readb(uint32_t addr, void *priv)
 {
-    const ohci_t *dev = (ohci_t *) priv;
-    uint32_t      off = addr & 0xfff;
-    uint8_t       ret = ohci_reg_read(dev, off & 0xffc) >> ((off & 3) << 3);
+    ohci_t  *dev = (ohci_t *) priv;
+    uint32_t off = addr & 0xfff;
+    uint8_t  ret = ohci_reg_read(dev, off & 0xffc) >> ((off & 3) << 3);
 
     usb_trace(USB_LOG_REG, -1, "R8  +%03x %-18s = %02x", off, ohci_reg_name(off), ret);
 
@@ -1978,9 +2072,9 @@ ohci_mmio_readb(uint32_t addr, void *priv)
 static uint16_t
 ohci_mmio_readw(uint32_t addr, void *priv)
 {
-    const ohci_t *dev = (ohci_t *) priv;
-    uint32_t      off = addr & 0xfff;
-    uint16_t      ret;
+    ohci_t  *dev = (ohci_t *) priv;
+    uint32_t off = addr & 0xfff;
+    uint16_t ret;
 
     if ((off & 3) == 3)
         ret = (ohci_reg_read(dev, off & 0xffc) >> 24) | (ohci_reg_read(dev, (off + 1) & 0xffc) << 8);
@@ -1995,9 +2089,9 @@ ohci_mmio_readw(uint32_t addr, void *priv)
 static uint32_t
 ohci_mmio_readl(uint32_t addr, void *priv)
 {
-    const ohci_t *dev = (ohci_t *) priv;
-    uint32_t      off = addr & 0xffc;
-    uint32_t      ret = ohci_reg_read(dev, off);
+    ohci_t  *dev = (ohci_t *) priv;
+    uint32_t off = addr & 0xffc;
+    uint32_t ret = ohci_reg_read(dev, off);
 
     usb_trace(USB_LOG_REG, -1, "R32 +%03x %-18s = %08x", off, ohci_reg_name(off), ret);
 
@@ -2065,6 +2159,12 @@ ohci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *p
     dev->ohci->irq_priv = priv;
 }
 
+void
+ohci_set_bus_master(usb_t *dev, int enable)
+{
+    dev->ohci->bus_master = !!enable;
+}
+
 static void
 usb_reset(void *priv)
 {
@@ -2077,6 +2177,7 @@ usb_reset(void *priv)
     uhci_schedule_detect(dev->uhci);
 
     ohci_hard_reset(dev->ohci);
+    dev->ohci->bus_master = 0;
 
     if (dev->uhci_enable && (dev->uhci_io_base != 0x0000))
         io_removehandler(dev->uhci_io_base, 0x20, uhci_inb, uhci_inw, uhci_inl, uhci_outb, uhci_outw, uhci_outl, dev->uhci);
@@ -2104,6 +2205,7 @@ usb_close(void *priv)
             dev->ohci->port[i].usb->port = NULL;
         timer_disable(&dev->ohci->port[i].timer);
     }
+    timer_disable(&dev->ohci->frame_timer);
 
     timer_disable(&dev->uhci->frame_timer);
     timer_disable(&dev->uhci->detect_timer);
@@ -2132,6 +2234,7 @@ usb_init(UNUSED(const device_t *info))
 
     dev->ohci      = (ohci_t *) calloc(1, sizeof(ohci_t));
     dev->ohci->ndp = 2;
+    timer_add(&dev->ohci->frame_timer, ohci_frame_boundary, dev->ohci, 0);
     for (int i = 0; i < OHCI_MAX_PORTS; i++) {
         dev->ohci->port[i].num = i + 1;
         dev->ohci->port[i].hc  = dev->ohci;

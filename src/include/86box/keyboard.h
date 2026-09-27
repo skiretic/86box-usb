@@ -56,7 +56,8 @@ enum {
     KEYBOARD_TYPE_AT,
     KEYBOARD_TYPE_AX,
     KEYBOARD_TYPE_PS2,
-    KEYBOARD_TYPE_PS55
+    KEYBOARD_TYPE_PS55,
+    KEYBOARD_TYPE_USB
 };
 
 /* Used by the AT / PS/2 keyboard controller, common device, keyboard, and mouse. */
@@ -157,7 +158,6 @@ extern "C" {
 #endif
 
 extern int     keyboard_type;
-extern int     keyboard_usb;
 
 extern uint8_t keyboard_mode;
 extern int     keyboard_scan;
@@ -221,8 +221,6 @@ extern void     keyboard_close(void);
 extern void     keyboard_set_table(const scancode *ptr);
 extern void     keyboard_set_input_handler(void (*handler)(uint16_t scan, int down, void *priv),
                                            void *priv);
-extern void     keyboard_set_usb_handler(int (*handler)(uint16_t scan, int down, void *priv),
-                                         void *priv);
 extern void     keyboard_poll_host(void);
 extern void     keyboard_process(void);
 extern void     keyboard_process_10x(void);

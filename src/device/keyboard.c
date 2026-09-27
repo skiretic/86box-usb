@@ -41,7 +41,6 @@ typedef struct keyboard_t {
 } keyboard_t;
 
 int          keyboard_type    = 0;
-int          keyboard_usb     = 0; /* a USB keyboard next to the machine's own */
 
 static int   override_capture = 0;
 
@@ -67,6 +66,7 @@ static keyboard_t keyboard_devices[] = {
     { &keyboard_ax_device              },
     { &keyboard_ps2_device             },
     { &keyboard_ps55_device            },
+    { &keyboard_usb_device             },
     { NULL                             }
     // clang-format on
 };
@@ -92,8 +92,6 @@ kbc_at_log(const char* fmt, ...)
 void (*keyboard_send)(uint16_t val);
 static void (*keyboard_input_handler)(uint16_t scan, int down, void *priv);
 static void *keyboard_input_priv;
-static int (*keyboard_usb_handler)(uint16_t scan, int down, void *priv);
-static void *keyboard_usb_priv;
 
 static int recv_key[768] = { 0 }; /* keyboard input buffer */
 static int recv_key_ui[768] = { 0 }; /* keyboard input buffer */
@@ -188,14 +186,6 @@ keyboard_set_input_handler(void (*handler)(uint16_t scan, int down, void *priv),
     keyboard_input_priv    = handler ? priv : NULL;
 }
 
-/* A USB keyboard sees each host key first and returns 1 if it takes it. */
-void
-keyboard_set_usb_handler(int (*handler)(uint16_t scan, int down, void *priv), void *priv)
-{
-    keyboard_usb_handler = handler;
-    keyboard_usb_priv    = handler ? priv : NULL;
-}
-
 static uint8_t
 fake_shift_needed(uint16_t scan)
 {
@@ -223,12 +213,6 @@ key_process(uint16_t scan, int down)
 {
     const scancode *codes = scan_table;
     int             c;
-
-    /* A USB keyboard in use takes the key before the PS/2 keyboard's scan state applies. */
-    if ((keyboard_usb_handler != NULL) && keyboard_usb_handler(scancode_config_map[scan], down, keyboard_usb_priv)) {
-        oldkey[scancode_config_map[scan]] = down;
-        return;
-    }
 
     if (!keyboard_scan)
         return;
@@ -317,6 +301,9 @@ key_process(uint16_t scan, int down)
 void
 keyboard_input(int down, uint16_t scan)
 {
+    if (kbd_in_reset)
+        return;
+
     /* Special case for E1 1D, translate it to 0100 - special case. */
     if ((scan >> 8) == 0xe1) {
         if ((scan & 0xff) == 0x1d)
@@ -332,17 +319,6 @@ keyboard_input(int down, uint16_t scan)
                            that already sends us preprocessed scan codes, which
                            means we then use the scan code as is, and need to
                            make sure we do not accidentally strip that upper byte */
-
-    /* A PS/2 keyboard reset leaves a USB keyboard alone: its keys still go through. */
-    if (kbd_in_reset) {
-        if ((keyboard_usb_handler != NULL) &&
-            (override_capture || mouse_capture || !kbd_req_capture || (video_fullscreen && !fullscreen_ui_visible)) &&
-            keyboard_usb_handler(scancode_config_map[scan & 0x1ff], down, keyboard_usb_priv)) {
-            recv_key_ui[scan & 0x1ff] = down;
-            recv_key[scan & 0x1ff]    = down;
-        }
-        return;
-    }
 
     if (recv_key[scan & 0x1ff] ^ down) {
         if (down) {
@@ -655,8 +631,11 @@ keyboard_get_ndev(void)
     return ((sizeof(keyboard_devices) / sizeof(keyboard_t)) - 1);
 }
 
+/* The keyboard on the 8042's keyboard port. A USB keyboard leaves the port
+   empty; it is added once the machine's USB controller exists. */
 void
 keyboard_add_device(void)
 {
-    device_add(keyboard_devices[keyboard_type].device);
+    if (keyboard_type != KEYBOARD_TYPE_USB)
+        device_add(keyboard_devices[keyboard_type].device);
 }

@@ -190,13 +190,6 @@
        </item>
       </layout>
      </item>
-     <item row="5" column="0" colspan="3">
-      <widget class="QCheckBox" name="checkBoxUsbKeyboard">
-       <property name="text">
-        <string>USB keyboard</string>
-       </property>
-      </widget>
-     </item>
     </layout>
    </item>
 

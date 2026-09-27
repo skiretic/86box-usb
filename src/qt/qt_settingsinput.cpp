@@ -70,8 +70,6 @@ SettingsInput::SettingsInput(QWidget *parent)
     tabletType   = tablet_type;
     joystickType = joystick_type[0];
 
-    ui->checkBoxUsbKeyboard->setChecked(keyboard_usb != 0);
-
     onCurrentMachineChanged(machine);
 }
 
@@ -120,7 +118,6 @@ SettingsInput::changed()
 
     has_changed |= (keyboard_type != ui->comboBoxKeyboard->currentData().toInt());
     has_changed |= kbd_config_changed;
-    has_changed |= (keyboard_usb != (ui->checkBoxUsbKeyboard->isChecked() ? 1 : 0));
     has_changed |= (mouse_type    != ui->comboBoxMouse->currentData().toInt());
     has_changed |= mouse_config_changed;
     has_changed |= (tablet_type   != ui->comboBoxTablet->currentData().toInt());
@@ -146,7 +143,6 @@ SettingsInput::save(int soft)
         return;
 
     keyboard_type = ui->comboBoxKeyboard->currentData().toInt();
-    keyboard_usb  = ui->checkBoxUsbKeyboard->isChecked() ? 1 : 0;
     mouse_type    = ui->comboBoxMouse->currentData().toInt();
     tablet_type   = ui->comboBoxTablet->currentData().toInt();
 
@@ -207,12 +203,6 @@ SettingsInput::onCurrentMachineChanged(int machineId)
         ui->comboBoxKeyboard->setEnabled(false);
     else
         ui->comboBoxKeyboard->setEnabled(true);
-
-    /* A USB keyboard needs a machine with USB. */
-    const bool usb_kbd_valid = device_is_valid(&keyboard_usb_device, machineId);
-    if (!usb_kbd_valid)
-        ui->checkBoxUsbKeyboard->setChecked(false);
-    ui->checkBoxUsbKeyboard->setEnabled(usb_kbd_valid);
 
     // Mouse.
     auto *mouseModel = ui->comboBoxMouse->model();

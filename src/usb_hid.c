@@ -528,15 +528,6 @@ static const uint8_t hid_kbd_usage[0x200] = {
 
 #define HID_KBD_QUEUE 32
 
-/* A host that polled the interrupt pipe this recently is using the keyboard. */
-#define HID_KBD_IN_USE_US 100000ULL
-
-enum {
-    KBD_OWNER_NONE = 0,
-    KBD_OWNER_USB,
-    KBD_OWNER_PS2
-};
-
 typedef struct hid_kbd_t {
     usb_dev_t  usb;
     uint8_t    protocol; /* 0 boot, 1 report; both send the B.1 report */
@@ -549,10 +540,8 @@ typedef struct hid_kbd_t {
     uint8_t    queue[HID_KBD_QUEUE][8];
     int        q_head;
     int        q_len;
-    int        polled;
-    uint64_t   polled_us;
     int        configured;
-    uint8_t    owner[0x200]; /* which keyboard took each held host key */
+    uint8_t    down[0x200]; /* host keys down; a host repeat is no change */
     int        attached;
     /* Host keys arrive on the GUI thread, polls on the emulation thread. */
     mutex_t   *lock;
@@ -614,55 +603,22 @@ hid_kbd_press(hid_kbd_t *dev, uint8_t usage, int down)
     hid_kbd_changed(dev);
 }
 
-static int
-hid_kbd_in_use(const hid_kbd_t *dev)
-{
-    return dev->attached && dev->configured && dev->polled &&
-           ((hid_now_us() - dev->polled_us) < HID_KBD_IN_USE_US);
-}
-
-/* Host keys come here before the PS/2 keyboard. A key goes to the USB
-   keyboard while a host is using it; its release follows the press. */
-static int
-hid_kbd_key_locked(hid_kbd_t *dev, uint16_t scan, int down)
-{
-    uint8_t usage = hid_kbd_usage[scan & 0x1ff];
-
-    scan &= 0x1ff;
-
-    /* Host key repeats stay with the keyboard that took the press. */
-    if (down) {
-        if (dev->owner[scan] == KBD_OWNER_USB)
-            return 1;
-        if ((dev->owner[scan] == KBD_OWNER_PS2) || (usage == 0) || !hid_kbd_in_use(dev)) {
-            dev->owner[scan] = KBD_OWNER_PS2;
-            return 0;
-        }
-        dev->owner[scan] = KBD_OWNER_USB;
-        hid_kbd_press(dev, usage, 1);
-        return 1;
-    }
-
-    if (dev->owner[scan] != KBD_OWNER_USB) {
-        dev->owner[scan] = KBD_OWNER_NONE;
-        return 0;
-    }
-    dev->owner[scan] = KBD_OWNER_NONE;
-    hid_kbd_press(dev, usage, 0);
-    return 1;
-}
-
-static int
+/* Every host key, as the machine's keyboard type (keyboard.c key_process). */
+static void
 hid_kbd_key(uint16_t scan, int down, void *priv)
 {
-    hid_kbd_t *dev = (hid_kbd_t *) priv;
-    int        ret;
+    hid_kbd_t *dev   = (hid_kbd_t *) priv;
+    uint8_t    usage = hid_kbd_usage[scan & 0x1ff];
+
+    scan &= 0x1ff;
+    down = !!down;
 
     thread_wait_mutex(dev->lock);
-    ret = hid_kbd_key_locked(dev, scan, down);
+    if ((usage != 0) && (dev->down[scan] != down)) {
+        dev->down[scan] = down;
+        hid_kbd_press(dev, usage, down);
+    }
     thread_release_mutex(dev->lock);
-
-    return ret;
 }
 
 static int
@@ -759,9 +715,6 @@ hid_kbd_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
 static int
 hid_kbd_data_in_locked(hid_kbd_t *dev, uint8_t *buf)
 {
-    dev->polled    = 1;
-    dev->polled_us = hid_now_us();
-
     if (dev->q_len > 0) {
         memcpy(dev->sent, dev->queue[dev->q_head], 8);
         dev->q_head = (dev->q_head + 1) % HID_KBD_QUEUE;
@@ -792,8 +745,14 @@ hid_kbd_configured(usb_dev_t *usb, int config)
 {
     hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
 
+    /* Reports queued for the old configuration are dropped; keys still held
+       show in the first report of the new one. */
     thread_wait_mutex(dev->lock);
     dev->configured = (config != 0);
+    dev->q_head     = 0;
+    dev->q_len      = 0;
+    memset(dev->sent, 0x00, sizeof(dev->sent));
+    hid_kbd_changed(dev);
     thread_release_mutex(dev->lock);
 }
 
@@ -810,14 +769,10 @@ hid_kbd_reset(usb_dev_t *usb)
     dev->idle.pending = 0;
     dev->idle.last_us = hid_now_us();
     dev->leds         = 0x00;
-    dev->polled       = 0;
     dev->configured   = 0;
-
-    /* Keys still held show in the first report after enumeration. */
-    dev->q_head = 0;
-    dev->q_len  = 0;
+    dev->q_head       = 0;
+    dev->q_len        = 0;
     memset(dev->sent, 0x00, sizeof(dev->sent));
-    hid_kbd_changed(dev);
 
     thread_release_mutex(dev->lock);
 }
@@ -850,7 +805,9 @@ hid_kbd_init(UNUSED(const device_t *info))
 
     dev->attached = usb_attach(&dev->usb);
 
-    keyboard_set_usb_handler(hid_kbd_key, dev);
+    /* The machine's keyboard: every host key comes here, none to the 8042. */
+    keyboard_scan = 1;
+    keyboard_set_input_handler(hid_kbd_key, dev);
 
     return dev;
 }
@@ -860,7 +817,7 @@ hid_kbd_close(void *priv)
 {
     hid_kbd_t *dev = (hid_kbd_t *) priv;
 
-    keyboard_set_usb_handler(NULL, NULL);
+    keyboard_set_input_handler(NULL, NULL);
     if (dev->attached)
         usb_detach(&dev->usb);
     thread_close_mutex(dev->lock);

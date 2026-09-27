@@ -826,8 +826,6 @@ load_input_devices(void)
     } else
         keyboard_type = KEYBOARD_TYPE_PC_XT;
 
-    keyboard_usb = !!ini_section_get_int(cat, "keyboard_usb", 0);
-
     p = ini_section_get_string(cat, "mouse_type", NULL);
     if (p != NULL) {
         mouse_type = mouse_get_from_internal_name(p);
@@ -2907,7 +2905,6 @@ config_load(void)
         time_sync              = TIME_SYNC_ENABLED;
 
         keyboard_type          = KEYBOARD_TYPE_PC_XT;
-        keyboard_usb           = 0;
 
         for (int i = 0; i < HDC_MAX; i++)
             hdc_current[i]         = hdc_get_from_internal_name("none");
@@ -3542,11 +3539,6 @@ save_input_devices(void)
     char          tmp2[32];
 
     ini_section_set_string(cat, "keyboard_type", keyboard_get_internal_name(keyboard_type));
-
-    if (keyboard_usb)
-        ini_section_set_int(cat, "keyboard_usb", 1);
-    else
-        ini_section_delete_var(cat, "keyboard_usb");
 
     ini_section_set_string(cat, "mouse_type", mouse_get_internal_name(mouse_type));
 

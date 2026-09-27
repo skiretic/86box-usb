@@ -805,6 +805,10 @@ stpc_reset(void *priv)
         dev->regs[0x4c] |= 0x80; /* LPT strap */
     if (stpc_serial_handlers(0x00))
         dev->regs[0x4c] |= 0x03; /* UART straps */
+
+    /* BAR_OHCI resets to 0 (PM 8.10.3); usb_reset unmaps the window. */
+    if (dev->usb)
+        memset(&dev->pci_conf[3][0x10], 0x00, 4);
 }
 
 static void

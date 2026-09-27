@@ -400,6 +400,11 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     usb = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
     ret = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
 
+    /* An isochronous OUT has no handshake (USB 1.1 s8.5.4): once token and
+       data are sent the transaction is over, whoever took the data. */
+    if (iso && (pid == USB_PID_OUT))
+        ret = USB_RET_ACK;
+
     /* OUT data is on the bus whatever the handshake; IN data only if sent. */
     *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.actual : len);
 

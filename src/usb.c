@@ -241,11 +241,13 @@ enum {
 #define OHCI_ED_H     0x00000001
 #define OHCI_ED_C     0x00000002
 #define OHCI_TD_R     0x00040000
+#define OHCI_TD_DI    0x00e00000
 #define OHCI_TD_T     0x03000000
 #define OHCI_TD_EC    0x0c000000
 #define OHCI_TD_CC    0xf0000000
 
 #define OHCI_CC_NOERROR             0x0
+#define OHCI_CC_DATATOGGLEMISMATCH  0x3
 #define OHCI_CC_STALL               0x4
 #define OHCI_CC_DEVICENOTRESPONDING 0x5
 #define OHCI_CC_DATAOVERRUN         0x8
@@ -320,6 +322,7 @@ struct ohci_t {
     int         ratio_left;
     uint8_t     np_first[2];
     uint8_t     so_pending; /* the periodic list overran: SO at the next HCCA update */
+    uint8_t     di_count;   /* Done Queue Interrupt Counter, 7 = no writeback due */
     void      (*set_irq)(void *priv, int level);
     void       *irq_priv;
     /* Legacy support (Appendix B): the registers only, no 60h/64h decode. */
@@ -1794,15 +1797,34 @@ ohci_td_data(uint32_t cbp, uint32_t be, uint8_t *buf, int n, int write)
     }
 }
 
-/* Normal retirement (p117, p51): the ED moves on to the next TD, the TD
-   joins the done queue, toggleCarry takes the TD's toggle. */
+/* The Done Queue Interrupt Counter at a retirement (p118): DelayInterrupt
+   111b leaves it, a smaller DI pulls it in, an error clears it. */
+static void
+ohci_done_delay(ohci_t *dev, uint32_t dw0)
+{
+    uint8_t di = (dw0 & OHCI_TD_DI) >> 21;
+
+    if ((dw0 & OHCI_TD_CC) != ((uint32_t) OHCI_CC_NOERROR << 28))
+        di = 0;
+    if ((di != 7) && (di < dev->di_count))
+        dev->di_count = di;
+}
+
+/* Retirement (p117, p51): the ED moves on to the next TD, the TD joins the
+   done queue, toggleCarry takes the TD's last toggle (ED.C if it never
+   moved data), and an error halts the ED (p47). */
 static void
 ohci_td_retire(ohci_t *dev, uint32_t ed_addr, uint32_t *ed, uint32_t td_addr, const uint32_t *td)
 {
-    ed[2] = (td[2] & 0xfffffff0) | ((td[0] & 0x01000000) ? OHCI_ED_C : 0);
+    int carry = (td[0] & 0x02000000) ? !!(td[0] & 0x01000000) : !!(ed[2] & OHCI_ED_C);
+
+    ed[2] = (td[2] & 0xfffffff0) | (carry ? OHCI_ED_C : 0);
+    if ((td[0] & OHCI_TD_CC) != ((uint32_t) OHCI_CC_NOERROR << 28))
+        ed[2] |= OHCI_ED_H;
     ohci_write_dword(td_addr + 8, dev->done_head);
     dev->done_head = td_addr;
     ohci_write_dword(ed_addr + 8, ed[2]);
+    ohci_done_delay(dev, td[0]);
 }
 
 /* One transaction attempt on the ED's head General TD (p113-117). */
@@ -1822,6 +1844,8 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     int          size;
     int          toggle;
     int          ret;
+    int          ec;
+    int          cc;
     int          bytes    = 0;
     int          complete = 0;
 
@@ -1873,20 +1897,36 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     /* The bus time of the USB 1.1 formulas the UHCI uses, in bit times. */
     dev->bits_left -= uhci_bus_ns(ls, 0, dir == 2, (dir == 2) ? p.actual : size) * 12.0 / 1000.0;
 
+    ec = (td[0] & OHCI_TD_EC) >> 26;
+    cc = OHCI_CC_NOERROR;
+
     switch (ret) {
+        case USB_RET_NAK:
+            /* NAK leaves every TD field as it was (p39). */
+            break;
+
+        case USB_RET_STALL:
+            /* Retired with CBP, EC and T as they were (p39). */
+            cc       = OHCI_CC_STALL;
+            complete = 1;
+            break;
+
         case USB_RET_ACK:
+        case USB_RET_BABBLE:
+            /* The toggle advances and EC goes to 0 (p36, p116). IN data past
+               the buffer is a data overrun: kept up to the buffer, CBP left
+               at the packet's start (p38). */
             bytes = size;
             if (dir == 2) {
                 bytes = p.actual;
                 ohci_td_data(td[1], td[3], buf, bytes, 1);
             }
-            /* A short IN packet ends the TD with bufferRounding set; without
-               it, it is a data underrun, not written back here. */
-            if ((dir == 2) && (bytes < size) && !(td[0] & OHCI_TD_R))
-                break;
-
-            td[0] = (td[0] & ~(OHCI_TD_T | OHCI_TD_EC | OHCI_TD_CC)) | 0x02000000 | ((toggle ^ 1) << 24) | ((uint32_t) OHCI_CC_NOERROR << 28);
-            if (bytes == remaining) {
+            ec    = 0;
+            td[0] = (td[0] & ~OHCI_TD_T) | 0x02000000 | ((toggle ^ 1) << 24);
+            if (ret == USB_RET_BABBLE) {
+                cc       = OHCI_CC_DATAOVERRUN;
+                complete = 1;
+            } else if (bytes == remaining) {
                 td[1]    = 0x00000000;
                 complete = 1;
             } else {
@@ -1894,22 +1934,36 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
                     td[1] = (td[3] & 0xfffff000) | ((td[1] + bytes) & 0xfff);
                 else
                     td[1] += bytes;
-                complete = (bytes < size);
+                /* A short IN packet ends the TD; without bufferRounding it
+                   is a data underrun (p37-38). */
+                if (bytes < size) {
+                    complete = 1;
+                    if (!(td[0] & OHCI_TD_R))
+                        cc = OHCI_CC_DATAUNDERRUN;
+                }
             }
-            ohci_write_dword(td_addr, td[0]);
-            ohci_write_dword(td_addr + 4, td[1]);
-            if (complete)
-                ohci_td_retire(dev, ed_addr, ed, td_addr, td);
             break;
 
         default:
-            /* NAK leaves every TD field as it was (p39). */
+            /* Transmission errors (p37): no handshake, or IN data with the
+               wrong toggle, which is discarded. The third in a row retires. */
+            cc       = (ret == USB_RET_TOGGLE_MISMATCH) ? OHCI_CC_DATATOGGLEMISMATCH : OHCI_CC_DEVICENOTRESPONDING;
+            complete = (++ec == 3);
             break;
+    }
+
+    if (ret != USB_RET_NAK) {
+        td[0] = (td[0] & ~(OHCI_TD_EC | OHCI_TD_CC)) | ((uint32_t) ec << 26) | ((uint32_t) cc << 28);
+        ohci_write_dword(td_addr, td[0]);
+        ohci_write_dword(td_addr + 4, td[1]);
+        if (complete)
+            ohci_td_retire(dev, ed_addr, ed, td_addr, td);
     }
 
     usb_trace(USB_LOG_SCHED, dev->fm_number, "ED %08x TD %08x %s dev %i ep %i D%i len %i%s -> %s, TD %08x CBP %08x%s",
               ed_addr, td_addr, (dir == 0) ? "SETUP" : ((dir == 1) ? "OUT" : "IN"), ed[0] & 0x7f, p.ep, toggle, size,
-              ls ? " LS" : "", uhci_ret_names[ret], td[0], td[1], complete ? ", retired" : "");
+              ls ? " LS" : "", uhci_ret_names[ret], td[0], td[1],
+              complete ? ((ed[2] & OHCI_ED_H) ? ", retired, ED halted" : ", retired") : "");
 
     return OHCI_ED_SENT;
 }
@@ -1991,7 +2045,8 @@ ohci_run_nonperiodic(ohci_t *dev, double stop)
     }
 }
 
-/* An isochronous TD retires without touching toggleCarry (p31). */
+/* An isochronous TD retires without touching toggleCarry (p31) and never
+   halts the ED (p47). */
 static void
 ohci_itd_retire(ohci_t *dev, uint32_t ed_addr, uint32_t *ed, uint32_t td_addr, const uint32_t *td)
 {
@@ -1999,6 +2054,7 @@ ohci_itd_retire(ohci_t *dev, uint32_t ed_addr, uint32_t *ed, uint32_t td_addr, c
     ohci_write_dword(td_addr + 8, dev->done_head);
     dev->done_head = td_addr;
     ohci_write_dword(ed_addr + 8, ed[2]);
+    ohci_done_delay(dev, td[0]);
 }
 
 /* The Isochronous TD at the ED's head (p39-45): packet R = FrameNumber -
@@ -2231,6 +2287,7 @@ ohci_frame_start(ohci_t *dev)
     dev->np_list     = OHCI_LIST_CONTROL;
     dev->ratio_left  = (dev->control & OHCI_CTL_CBSR) + 1;
     dev->np_first[0] = dev->np_first[1] = 1;
+    dev->di_count    = 7; /* p118 */
     timer_on_auto(&dev->frame_timer, ohci_frame_us(dev->fr_load));
     usb_trace(USB_LOG_REG, dev->fm_number, "OHCI frame clock started, HcHCCA %08x", dev->hcca);
 }
@@ -2244,6 +2301,38 @@ ohci_frame_stop(ohci_t *dev)
     dev->fm_remaining = (dev->fm_remaining & 0x80000000) | ohci_fr_live(dev);
     timer_stop(&dev->frame_timer);
     usb_trace(USB_LOG_REG, dev->fm_number, "OHCI frame clock stopped, HcFmRemaining %08x", dev->fm_remaining);
+}
+
+/* The done queue at a frame boundary (p118-119): the counter as it stood in
+   the frame's last bit time. At 0 with WDH clear, HccaDoneHead takes
+   HcDoneHead, its LSb set when another enabled status bit is set (p49);
+   otherwise the counter counts down, 111b and 0 holding. */
+static void
+ohci_done_writeback(ohci_t *dev)
+{
+    uint32_t head;
+    uint8_t  b[4];
+
+    if (dev->di_count != 0) {
+        if (dev->di_count != 7)
+            dev->di_count--;
+        return;
+    }
+    if ((dev->intsts & OHCI_INT_WDH) || !dev->bus_master)
+        return;
+
+    head = dev->done_head;
+    if (dev->intsts & dev->inten & OHCI_INT_ALL & ~OHCI_INT_WDH)
+        head |= 1;
+    b[0] = head & 0xff;
+    b[1] = (head >> 8) & 0xff;
+    b[2] = (head >> 16) & 0xff;
+    b[3] = head >> 24;
+    dma_bm_write(dev->hcca + 0x84, b, 4, 4);
+    dev->done_head = 0x00000000;
+    dev->intsts |= OHCI_INT_WDH;
+    dev->di_count = 7;
+    usb_trace(USB_LOG_SCHED, dev->fm_number, "HccaDoneHead <- %08x, WritebackDoneHead set", head);
 }
 
 /* The frame boundary, the 0 -> FI transition of FrameRemaining (p104). */
@@ -2280,6 +2369,7 @@ ohci_frame_boundary(void *priv)
         dev->cmdsts = (dev->cmdsts & ~OHCI_CS_SOC) | ((dev->cmdsts + 0x00010000) & OHCI_CS_SOC);
     }
     dev->intsts |= OHCI_INT_SF;
+    ohci_done_writeback(dev);
 
     ohci_run_frame(dev);
 }
@@ -2292,6 +2382,7 @@ ohci_soft_reset(ohci_t *dev)
 {
     timer_stop(&dev->frame_timer);
     dev->so_pending     = 0;
+    dev->di_count       = 7;
     dev->fn_msb         = 0x0000;
     dev->fr_load        = 0x0000;
     dev->control        = (dev->control & OHCI_CTL_IR) | OHCI_HCFS_SUSPEND;

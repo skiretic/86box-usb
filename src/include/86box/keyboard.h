@@ -210,6 +210,8 @@ extern const device_t keyboard_ax_device;
 extern const device_t keyboard_ps2_device;
 extern const device_t keyboard_ps55_device;
 extern const device_t keyboard_at_generic_device;
+
+extern const device_t keyboard_usb_device;
 #endif /*EMU_DEVICE_H*/
 
 extern void     keyboard_toggle_override(void);
@@ -218,6 +220,8 @@ extern void     keyboard_close(void);
 extern void     keyboard_set_table(const scancode *ptr);
 extern void     keyboard_set_input_handler(void (*handler)(uint16_t scan, int down, void *priv),
                                            void *priv);
+extern void     keyboard_set_usb_handler(int (*handler)(uint16_t scan, int down, void *priv),
+                                         void *priv);
 extern void     keyboard_poll_host(void);
 extern void     keyboard_process(void);
 extern void     keyboard_process_10x(void);

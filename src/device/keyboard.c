@@ -91,6 +91,8 @@ kbc_at_log(const char* fmt, ...)
 void (*keyboard_send)(uint16_t val);
 static void (*keyboard_input_handler)(uint16_t scan, int down, void *priv);
 static void *keyboard_input_priv;
+static int (*keyboard_usb_handler)(uint16_t scan, int down, void *priv);
+static void *keyboard_usb_priv;
 
 static int recv_key[768] = { 0 }; /* keyboard input buffer */
 static int recv_key_ui[768] = { 0 }; /* keyboard input buffer */
@@ -185,6 +187,14 @@ keyboard_set_input_handler(void (*handler)(uint16_t scan, int down, void *priv),
     keyboard_input_priv    = handler ? priv : NULL;
 }
 
+/* A USB keyboard sees each host key first and returns 1 if it takes it. */
+void
+keyboard_set_usb_handler(int (*handler)(uint16_t scan, int down, void *priv), void *priv)
+{
+    keyboard_usb_handler = handler;
+    keyboard_usb_priv    = handler ? priv : NULL;
+}
+
 static uint8_t
 fake_shift_needed(uint16_t scan)
 {
@@ -212,6 +222,12 @@ key_process(uint16_t scan, int down)
 {
     const scancode *codes = scan_table;
     int             c;
+
+    /* A USB keyboard in use takes the key before the PS/2 keyboard's scan state applies. */
+    if ((keyboard_usb_handler != NULL) && keyboard_usb_handler(scancode_config_map[scan], down, keyboard_usb_priv)) {
+        oldkey[scancode_config_map[scan]] = down;
+        return;
+    }
 
     if (!keyboard_scan)
         return;

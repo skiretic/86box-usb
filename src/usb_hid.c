@@ -290,8 +290,6 @@ hid_mouse_init(UNUSED(const device_t *info))
     mouse_set_buttons(4);
 
     dev->attached = usb_attach(&dev->usb);
-    if (!dev->attached)
-        pclog("USB Mouse: no free USB port\n");
 
     return dev;
 }
@@ -785,8 +783,6 @@ hid_kbd_init(UNUSED(const device_t *info))
     hid_kbd_reset(&dev->usb);
 
     dev->attached = usb_attach(&dev->usb);
-    if (!dev->attached)
-        pclog("USB Keyboard: no free USB port\n");
 
     keyboard_set_usb_handler(hid_kbd_key, dev);
 

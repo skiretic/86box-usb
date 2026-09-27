@@ -464,8 +464,6 @@ usb_msd_init(UNUSED(const device_t *info))
     dev->state = MSD_CBW;
 
     dev->attached = usb_attach(&dev->usb);
-    if (!dev->attached)
-        pclog("USB Mass Storage: no free USB port\n");
 
     return dev;
 }

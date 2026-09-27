@@ -32,6 +32,8 @@
 #include <86box/usb.h>
 #include <86box/usb_dev.h>
 #include <86box/usb_log.h>
+#include <86box/plat.h>
+#include <86box/ui.h>
 #include "cpu.h"
 #include <86box/plat_unused.h>
 
@@ -1046,16 +1048,21 @@ uhci_set_bus_master(usb_t *dev, int enable)
 
 static usb_t *usb_hcs[USB_MAX_HC];
 
-/* Only a UHCI the chipset wired up (it routes its interrupt) takes devices. */
+/* Only a UHCI the chipset wired up (it routes its interrupt) takes devices.
+   A device left out is named to the user with the reason. */
 int
 usb_attach(usb_dev_t *udev)
 {
+    char msg[512];
+    int  wired = 0;
+
     for (int h = 0; h < USB_MAX_HC; h++) {
         uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
 
         if ((hc == NULL) || (hc->set_irq == NULL))
             continue;
 
+        wired = 1;
         for (int i = 0; i < UHCI_PORTS; i++) {
             if (hc->port[i].usb == NULL) {
                 hc->port[i].usb = udev;
@@ -1067,6 +1074,10 @@ usb_attach(usb_dev_t *udev)
             }
         }
     }
+
+    snprintf(msg, sizeof(msg), plat_get_string(wired ? STRING_USB_NO_PORT : STRING_USB_NO_CONTROLLER), udev->name);
+    pclog("USB: %s\n", msg);
+    ui_msgbox_header(MBX_WARNING, NULL, msg);
 
     return 0;
 }

@@ -1007,6 +1007,8 @@ Preferences::reloadStrings()
     translatedstrings[STRING_CHARDEV_ATTACHED]          = QCoreApplication::translate("", "%s: Attached to %s").toUtf8();
     translatedstrings[STRING_CHARDEV_VCON_IN_USE]       = QCoreApplication::translate("", "%s: Virtual console already in use by %s").toUtf8();
     translatedstrings[STRING_CHARDEV_TERMINAL_ERROR]    = QCoreApplication::translate("", "%s: Could not create terminal: %s").toUtf8();
+    translatedstrings[STRING_USB_NO_PORT]               = QCoreApplication::translate("", "%s was not connected: every USB port of this machine is in use.").toUtf8();
+    translatedstrings[STRING_USB_NO_CONTROLLER]         = QCoreApplication::translate("", "%s was not connected: this machine has no USB controller that can take devices.").toUtf8();
 }
 
 char *

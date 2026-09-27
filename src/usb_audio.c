@@ -396,8 +396,6 @@ usb_audio_init(UNUSED(const device_t *info))
     sound_add_handler(usb_audio_get_buffer, dev);
 
     dev->attached = usb_attach(&dev->usb);
-    if (!dev->attached)
-        pclog("USB Speaker: no free USB port\n");
 
     return dev;
 }

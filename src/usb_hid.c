@@ -100,6 +100,8 @@ typedef struct hid_mouse_t {
     usb_dev_t usb;
     uint8_t   protocol;  /* 0 boot, 1 report */
     uint8_t   idle;      /* 4 ms units, 0 = report only on change */
+    uint8_t   idle_next; /* a SET_IDLE held until the current period's report */
+    uint8_t   idle_pending;
     uint8_t   buttons;
     uint64_t  last_us;
     int       attached;
@@ -131,6 +133,11 @@ hid_mouse_report(hid_mouse_t *dev, uint8_t *buf)
     buf[3] = (uint8_t) dz;
 
     dev->last_us = hid_now_us();
+
+    if (dev->idle_pending) {
+        dev->idle         = dev->idle_next;
+        dev->idle_pending = 0;
+    }
 
     /* Boot protocol: the first three bytes only (HID B.2). */
     return dev->protocol ? 4 : 3;
@@ -180,7 +187,15 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0x21) {
         switch (setup[1]) {
             case HID_SET_IDLE:
-                dev->idle = wvalue >> 8;
+                /* Inside the last 4 ms of a running period the new value waits
+                   for that period's report (HID 7.2.4 Latency). */
+                if ((dev->idle != 0) && ((hid_now_us() + 4000ULL) > (dev->last_us + (uint64_t) dev->idle * 4000ULL))) {
+                    dev->idle_next    = wvalue >> 8;
+                    dev->idle_pending = 1;
+                } else {
+                    dev->idle         = wvalue >> 8;
+                    dev->idle_pending = 0;
+                }
                 return 0;
             case HID_SET_PROTOCOL:
                 if (wvalue > 1)
@@ -217,8 +232,9 @@ hid_mouse_reset(usb_dev_t *usb)
     hid_mouse_t *dev = (hid_mouse_t *) usb->priv;
 
     /* Report protocol after initialization (HID 7.2.6); mice idle indefinitely. */
-    dev->protocol = 1;
-    dev->idle     = 0;
+    dev->protocol     = 1;
+    dev->idle         = 0;
+    dev->idle_pending = 0;
 }
 
 static const usb_dev_ops_t hid_mouse_ops = {

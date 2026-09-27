@@ -310,14 +310,28 @@ sis_5595_ddma_recalc(sis_5513_pci_to_isa_t *dev)
 static void
 sis_5513_usbirq_remap(sis_5513_pci_to_isa_t *dev, uint8_t val)
 {
-    if (dev->sis->usb_irq_level)
+    int held = dev->sis->usb_irq_level && dev->sis->usb_enabled;
+
+    if (held)
         pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
     if (val & 0x80)
         pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
     else
         pci_set_mirq_routing(PCI_MIRQ3, val & 0xf);
-    if (dev->sis->usb_irq_level)
+    if (held)
         pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+}
+
+/* The integrated USB enable (SiS71 p61, SiS82 p150, SiS95 p105). */
+static void
+sis_5513_usb_enable(sis_5513_pci_to_isa_t *dev, int on)
+{
+    if (on == dev->sis->usb_enabled)
+        return;
+
+    dev->sis->usb_enabled = on;
+    if (dev->sis->usb_priv != NULL)
+        sis_5572_usb_apply_enable(dev->sis->usb_priv);
 }
 
 static void
@@ -418,7 +432,7 @@ sis_5513_01_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val & 0xcf;
             /* Bit 6 enables the integrated USB function (SiS71 p61). */
-            dev->sis->usb_enabled = !!(val & 0x40);
+            sis_5513_usb_enable(dev, !!(val & 0x40));
             sis_5513_usbirq_remap(dev, val);
             break;
 
@@ -498,7 +512,7 @@ sis_5513_11_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
         case 0x62: /* USBIRQ Remapping Control Register */
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val;
-            dev->sis->usb_enabled = !!(val & 0x40);
+            sis_5513_usb_enable(dev, !!(val & 0x40));
             sis_5513_usbirq_remap(dev, val);
             break;
 
@@ -626,7 +640,7 @@ sis_5513_b0_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
         case 0x62: /* USBIRQ Remapping Control Register */
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val;
-            dev->sis->usb_enabled = !!(val & 0x40);
+            sis_5513_usb_enable(dev, !!(val & 0x40));
             sis_5513_usbirq_remap(dev, val);
             break;
 

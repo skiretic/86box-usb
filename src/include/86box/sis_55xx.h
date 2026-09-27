@@ -23,6 +23,7 @@ typedef struct
     uint8_t     usb_enabled;
     uint8_t     usb_irq_level; /* the OHCI's USBIRQ output */
     uint8_t     usb_irq_state;
+    void       *usb_priv;      /* the USB function, for its enable */
 
     uint8_t    *pmu_regs;
 
@@ -49,6 +50,8 @@ extern void    sis_5513_ide_write(int addr, uint8_t val, void *priv);
 extern uint8_t sis_5513_ide_read(int addr, void *priv);
 extern void    sis_5572_usb_write(int addr, uint8_t val, void *priv);
 extern uint8_t sis_5572_usb_read(int addr, void *priv);
+/* Applies sis->usb_enabled to the USB function's window, bus master and IRQ. */
+extern void    sis_5572_usb_apply_enable(void *priv);
 extern void    sis_5595_pmu_write(int addr, uint8_t val, void *priv);
 extern uint8_t sis_5595_pmu_read(int addr, void *priv);
 

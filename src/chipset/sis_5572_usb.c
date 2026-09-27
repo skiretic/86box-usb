@@ -115,7 +115,29 @@ sis_5572_usb_irq(void *priv, int level)
     sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
 
     dev->sis->usb_irq_level = !!level;
+    if (!dev->sis->usb_enabled)
+        return;
     if (level)
+        pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+    else
+        pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+}
+
+/* The integrated USB disable leaves the function invisible: no window, no
+   bus master, no USBIRQ. Its registers are kept for when it comes back. */
+void
+sis_5572_usb_apply_enable(void *priv)
+{
+    sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
+    int             on  = dev->sis->usb_enabled;
+
+    ohci_update_mem_mapping(dev->usb,
+                            dev->pci_conf[0x11], dev->pci_conf[0x12],
+                            dev->pci_conf[0x13], on && (dev->pci_conf[0x04] & 0x02));
+    ohci_set_bus_master(dev->usb, on && (dev->pci_conf[0x04] & 0x04));
+    if (!dev->sis->usb_irq_level)
+        return;
+    if (on)
         pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
     else
         pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
@@ -294,6 +316,7 @@ sis_5572_usb_init(UNUSED(const device_t *info))
     /* USB */
     dev->usb = device_add(&usb_device);
     ohci_set_irq_handler(dev->usb, sis_5572_usb_irq, dev);
+    dev->sis->usb_priv = dev;
 
     sis_5572_usb_reset(dev);
 

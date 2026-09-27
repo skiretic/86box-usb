@@ -476,10 +476,13 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
             break;
     }
 
-    /* Isochronous TDs go inactive after one execution whatever happened (s3.2.2 bit 25). */
+    /* Isochronous TDs go inactive after one execution whatever happened (s3.2.2
+       bit 25); one retired with an error sets USB Error Interrupt (s4.1.2). */
     if (iso && (ctrl & UHCI_TD_ACTIVE)) {
         ctrl &= ~UHCI_TD_ACTIVE;
         result = TD_FAILED;
+        if (ctrl & (UHCI_TD_CRCTO | UHCI_TD_BITSTUFF | UHCI_TD_DBE))
+            dev->eof_err = 1;
     }
 
     if (!(ctrl & UHCI_TD_ACTIVE) && (ctrl & UHCI_TD_IOC))

@@ -119,6 +119,10 @@ struct uhci_t {
     uint8_t     irq_level;
     uint8_t     frame_frozen;
     uint8_t     bus_master; /* PCICMD BME from the chipset */
+    /* Where a debug single step stopped inside the frozen frame. */
+    uint8_t     dbg_resume;
+    uint32_t    dbg_link;
+    double      dbg_left;
     uint64_t    frame_left_us;
     /* Completions of the frame in progress; they reach USBSTS at its end (s4.1). */
     uint8_t     eof_ioc;
@@ -254,8 +258,10 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
     if (running) {
         if (dev->frame_frozen && (dev->cmd & UHCI_CMD_SWDBG))
             timer_on_auto(&dev->frame_timer, (double) dev->frame_left_us);
-        else
+        else {
             timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
+            dev->dbg_resume = 0;
+        }
         dev->frame_frozen = 0;
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock started, FLBASEADD %08x", dev->flbaseadd);
         uhci_run_frame(dev);
@@ -525,8 +531,16 @@ uhci_run_frame(uhci_t *dev)
     if (!uhci_running(dev) || !dev->bus_master)
         return;
 
-    dma_bm_read(dev->flbaseadd + ((dev->frnum & 0x3ff) << 2), (uint8_t *) &link, 4, 4);
-    usb_trace(USB_LOG_SCHED, dev->frnum, "frame list entry %08x", link);
+    /* A debug single step picks up where the last one stopped (Table 4). */
+    if (dev->dbg_resume) {
+        dev->dbg_resume = 0;
+        link            = dev->dbg_link;
+        left            = dev->dbg_left;
+        usb_trace(USB_LOG_SCHED, dev->frnum, "debug step resumes at %08x", link);
+    } else {
+        dma_bm_read(dev->flbaseadd + ((dev->frnum & 0x3ff) << 2), (uint8_t *) &link, 4, 4);
+        usb_trace(USB_LOG_SCHED, dev->frnum, "frame list entry %08x", link);
+    }
 
     while (!(link & UHCI_LP_T) && (steps++ < 4096)) {
         left -= UHCI_FETCH_NS;
@@ -589,6 +603,9 @@ uhci_run_frame(uhci_t *dev)
 
         /* Debug mode stops after each executed TD (s2.1.1.1). */
         if ((dev->cmd & UHCI_CMD_SWDBG) && (r != TD_INACTIVE)) {
+            dev->dbg_link   = link;
+            dev->dbg_left   = left;
+            dev->dbg_resume = 1;
             uhci_self_stop(dev, 0);
             break;
         }
@@ -604,7 +621,8 @@ uhci_frame_end(void *priv)
     uhci_t *dev = (uhci_t *) priv;
 
     uhci_latch_frame_status(dev);
-    dev->frnum = (dev->frnum + 1) & 0x07ff;
+    dev->frnum      = (dev->frnum + 1) & 0x07ff;
+    dev->dbg_resume = 0;
     timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
     uhci_run_frame(dev);
 }
@@ -676,6 +694,7 @@ uhci_power_on_reset(uhci_t *dev)
     dev->eof_spd      = 0;
     dev->eof_err      = 0;
     dev->frame_frozen = 0;
+    dev->dbg_resume   = 0;
 
     for (int i = 0; i < UHCI_PORTS; i++)
         dev->port[i].sc = 0x0000;
@@ -703,6 +722,7 @@ uhci_hc_reset(uhci_t *dev)
     dev->eof_spd      = 0;
     dev->eof_err      = 0;
     dev->frame_frozen = 0;
+    dev->dbg_resume   = 0;
 
     for (int i = 0; i < UHCI_PORTS; i++) {
         uhci_port_t *port = &dev->port[i];

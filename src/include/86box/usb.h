@@ -43,6 +43,21 @@ extern void uhci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int lev
 extern void uhci_set_bus_master(usb_t *dev, int enable);
 extern void ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3, int enable);
 
+/* UHCI legacy keyboard support (UHCI 1.1 s5.2) on a function's LEGSUP
+   bytes, legsup[0] = C0h and legsup[1] = C1h. */
+#define UHCI_LEGSUP_STATUS_ALWAYS  0x01 /* trap status bits set without the enables (VIA Rx41 bit 2) */
+#define UHCI_LEGSUP_A20_FF_TRAPPED 0x02 /* the sequence's final 64h <- FFh is not passed (VIA Rx41 bit 1) */
+/* A cycle at 60h or 64h; returns 1 if it is trapped and must not reach the
+   8042. a20 keeps the pass-through sequence position. */
+extern int  uhci_legsup_kbc_cycle(uint8_t *legsup, uint8_t *a20, uint16_t port, int write, uint8_t val, int opts);
+/* Whether keyboard controller cycles need to be seen at all. */
+extern int  uhci_legsup_kbc_armed(const uint8_t *legsup, int opts);
+/* The legacy USB event sources that are active, one bit each (enabled trap
+   statuses, bits 3-0; the IRQ with USBSMIEN, bit 4; A20PTS with SMIEPTE,
+   bit 7): a source going active is an event (SMI#). irq is the UHCI IRQ. */
+extern uint8_t uhci_legsup_event(const uint8_t *legsup, int irq);
+extern void uhci_legsup_write_c0(uint8_t *legsup, uint8_t val);
+
 #ifdef __cplusplus
 }
 #endif

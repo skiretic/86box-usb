@@ -139,7 +139,8 @@ typedef struct _pipc_ {
     uint8_t        usb_irq_level[2];
     uint8_t        usb_irq_state[2];
     uint8_t        usb_irq_line[2]; /* IRQ driven now, 0xff = none */
-    uint8_t        usb_smi_level[2];
+    uint8_t        usb_smi_level[2]; /* legacy USB event sources last seen */
+    uint8_t        usb_a20[2];       /* LEGSUP A20GATE pass-through position */
 
     acpi_t        *acpi;
     pipc_io_trap_t io_traps[TRAP_MAX];
@@ -237,26 +238,81 @@ pipc_usb_update_irq(pipc_t *dev, int n)
 }
 
 /* Legacy Support C1-C0 is the UHCI 1.1 s5.2.1 register: USBIRQS (bit 12)
-   shows the USB IRQ, and with USBSMIEN (bit 4) its rising edge is a legacy
-   USB event, PM Global Status LEG_USB_STS (bit 4), SMI# on LEG_USB_EN. */
+   shows the USB IRQ. A legacy USB event (the IRQ with USBSMIEN, an enabled
+   keyboard trap, A20PTS with SMIEPTE) sets PM Global Status LEG_USB_STS
+   (bit 4), SMI# on LEG_USB_EN; none is raised during an A20GATE
+   pass-through sequence. */
 static void
 pipc_usb_update_legacy(pipc_t *dev, int n)
 {
-    uint8_t event = dev->usb_irq_level[n] && !pipc_usb_disabled(dev, n) && (dev->usb_regs[n][0xc0] & 0x10);
+    uint8_t sources = pipc_usb_disabled(dev, n) ? 0x00 : uhci_legsup_event(&dev->usb_regs[n][0xc0], dev->usb_irq_level[n]);
+    uint8_t event   = (sources & ~dev->usb_smi_level[n]) && !(dev->usb_regs[n][0xc0] & 0x40);
 
     if (dev->usb_irq_level[n])
         dev->usb_regs[n][0xc1] |= 0x10;
     else
         dev->usb_regs[n][0xc1] &= ~0x10;
 
-    if (event && !dev->usb_smi_level[n] && (dev->acpi != NULL)) {
+    if (event && (dev->acpi != NULL)) {
         usb_trace(USB_LOG_IRQ, -1, "VIA UHCI %i legacy USB event, GLBEN %04x GLBCTL %04x",
                   n + 1, dev->acpi->regs.glben, dev->acpi->regs.glbctl);
         dev->acpi->regs.glbsts |= 0x0010;
         if (dev->acpi->regs.glben & 0x0010)
             acpi_raise_smi(dev->acpi, 1);
     }
-    dev->usb_smi_level[n] = event;
+    dev->usb_smi_level[n] = sources;
+}
+
+/* Rx41 bit 1 keeps the A20GATE sequence's final 64h <- FFh from the 8042;
+   bit 2 "Trap Option" sets the trap statuses without their enables when 0
+   on the 586A/B and when 1 from the 596B on. */
+static int
+pipc_usb_kbc_opts(const pipc_t *dev, int n)
+{
+    uint8_t rx41 = dev->usb_regs[n][0x41];
+    int     opts = (rx41 & 0x02) ? UHCI_LEGSUP_A20_FF_TRAPPED : 0;
+
+    if ((dev->local <= VIA_PIPC_586B) ? !(rx41 & 0x04) : !!(rx41 & 0x04))
+        opts |= UHCI_LEGSUP_STATUS_ALWAYS;
+
+    return opts;
+}
+
+/* LEGSUP keyboard controller traps (UHCI 1.1 s5.2.2): a cycle trapped by
+   either UHCI never reaches the 8042; the SMI handler stands in for it. */
+static int
+pipc_usb_kbc_claim(uint16_t port, uint8_t write, uint8_t val, void *priv)
+{
+    pipc_t *dev     = (pipc_t *) priv;
+    int     trapped = 0;
+
+    for (int n = 0; n < 2; n++) {
+        if ((dev->usb[n] == NULL) || pipc_usb_disabled(dev, n))
+            continue;
+        if (uhci_legsup_kbc_cycle(&dev->usb_regs[n][0xc0], &dev->usb_a20[n], port, write, val, pipc_usb_kbc_opts(dev, n))) {
+            trapped = 1;
+            usb_trace(USB_LOG_IRQ, -1, "VIA UHCI %i legacy KBC trap: %s %02X (written %02X), LEGSUP %02x%02x", n + 1,
+                      write ? "write" : "read", port, write ? val : 0x00, dev->usb_regs[n][0xc1], dev->usb_regs[n][0xc0]);
+        }
+        pipc_usb_update_legacy(dev, n);
+    }
+
+    return trapped;
+}
+
+static void
+pipc_usb_update_kbc_claim(pipc_t *dev)
+{
+    int armed = 0;
+
+    for (int n = 0; n < 2; n++) {
+        if ((dev->usb[n] != NULL) && !pipc_usb_disabled(dev, n) &&
+            uhci_legsup_kbc_armed(&dev->usb_regs[n][0xc0], pipc_usb_kbc_opts(dev, n)))
+            armed = 1;
+    }
+
+    io_set_claim(0x60, armed ? pipc_usb_kbc_claim : NULL, dev);
+    io_set_claim(0x64, armed ? pipc_usb_kbc_claim : NULL, dev);
 }
 
 static void
@@ -443,6 +499,7 @@ pipc_reset_hard(void *priv)
         pipc_usb_update_irq(dev, i);
         pipc_usb_update_legacy(dev, i);
     }
+    pipc_usb_update_kbc_claim(dev);
 
     /* Power management registers. */
     if (dev->acpi) {
@@ -1107,6 +1164,7 @@ pipc_usb_update_enable(pipc_t *dev, int n)
     usb_update_io_mapping(dev, n + 2);
     pipc_usb_update_irq(dev, n);
     pipc_usb_update_legacy(dev, n);
+    pipc_usb_update_kbc_claim(dev);
 }
 
 static void
@@ -1523,9 +1581,14 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 pipc_usb_update_irq(dev, func - 2);
                 break;
 
+            case 0x41:
+                dev->usb_regs[func - 2][0x41] = val;
+                pipc_usb_update_kbc_claim(dev);
+                break;
+
             case 0xc0:
-                /* Bit 6 (PSS) is read-only. */
-                dev->usb_regs[func - 2][0xc0] = (dev->usb_regs[func - 2][0xc0] & 0x40) | (val & 0xbf);
+                uhci_legsup_write_c0(&dev->usb_regs[func - 2][0xc0], val);
+                pipc_usb_update_kbc_claim(dev);
                 pipc_usb_update_legacy(dev, func - 2);
                 break;
             case 0xc1:
@@ -1938,6 +2001,9 @@ pipc_close(void *priv)
 
     for (uint8_t i = 0; i < TRAP_MAX; i++)
         io_trap_remove(dev->io_traps[i].trap);
+
+    io_set_claim(0x60, NULL, NULL);
+    io_set_claim(0x64, NULL, NULL);
 
     free(dev);
 }

@@ -72,7 +72,8 @@ typedef struct _piix_ {
     uint16_t       irq_state;
     uint8_t        usb_irq_level;
     uint8_t        usb_irq_state;
-    uint8_t        usb_smi_level;
+    uint8_t        usb_smi_level; /* legacy USB event sources last seen */
+    uint8_t        usb_a20;       /* LEGSUP A20GATE pass-through position */
     double         fast_off_period;
     sff8038i_t    *bm[2];
     smbus_piix4_t *smbus;
@@ -523,6 +524,7 @@ static void
 piix_usb_update_irq(piix_t *dev)
 {
     uint8_t *fregs = dev->regs[2];
+    uint8_t  sources;
     uint8_t  smi;
 
     if (dev->usb_irq_level)
@@ -535,12 +537,15 @@ piix_usb_update_irq(piix_t *dev)
     else
         pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
 
-    /* USBSMIEN (LEGSUP bit 4) makes the IRQ a legacy USB SMI event, gated by
-       SMIEN bit 8 into SMIREQ bit 8 on the PIIX3 (2.2.19, 2.2.22) and by
-       GLBEN LEGACY_USB_EN on the PIIX4, whose LEGACY_USB_STS it sets. */
-    smi = dev->usb_irq_level && (fregs[0xc0] & 0x10);
+    /* A legacy USB event (the IRQ with USBSMIEN, an enabled keyboard trap, or
+       A20PTS with SMIEPTE), gated by SMIEN bit 8 into SMIREQ bit 8 on the
+       PIIX3 (2.2.19, 2.2.22) and by GLBEN LEGACY_USB_EN on the PIIX4, whose
+       LEGACY_USB_STS it sets. None is raised while an A20GATE pass-through
+       sequence runs (UHCI 1.1 s5.2.1 bit 5). */
+    sources = uhci_legsup_event(&fregs[0xc0], dev->usb_irq_level);
+    smi     = (sources & ~dev->usb_smi_level) && !(fregs[0xc0] & 0x40);
     if (dev->type == 3) {
-        if (smi && !dev->usb_smi_level) {
+        if (smi) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX3 legacy USB SMI event, SMIEN %02x%02x SMICNTL %02x",
                       dev->regs[0][0xa3], dev->regs[0][0xa2], dev->regs[0][0xa0]);
             if (dev->regs[0][0xa3] & 0x01) {
@@ -550,13 +555,14 @@ piix_usb_update_irq(piix_t *dev)
             }
         }
     } else if (dev->acpi != NULL) {
-        /* LEGACY_USB_STS clears only with its child status, USBIRQS: masking
-           USBSMIEN does not clear it (PIIX4 7.2.10 bit 1). */
+        /* LEGACY_USB_STS clears only with its child statuses, USBIRQS, the trap
+           statuses and A20PTS: masking USBSMIEN does not clear it (PIIX4
+           7.2.10 bit 1). */
         if (smi)
             dev->acpi->regs.glbsts |= 0x0002;
-        else if (!dev->usb_irq_level)
+        else if (!(fregs[0xc1] & 0x9f))
             dev->acpi->regs.glbsts &= ~0x0002;
-        if (smi && !dev->usb_smi_level) {
+        if (smi) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX4 legacy USB SMI event, GLBEN %04x GLBCTL %08x",
                       dev->acpi->regs.glben, dev->acpi->regs.glbctl);
             /* With EOS (GLBCTL bit 16) clear only the status is set; setting
@@ -565,7 +571,34 @@ piix_usb_update_irq(piix_t *dev)
                 acpi_raise_smi(dev->acpi, 1);
         }
     }
-    dev->usb_smi_level = smi;
+    dev->usb_smi_level = sources;
+}
+
+/* LEGSUP keyboard controller traps (UHCI 1.1 s5.2.2): a trapped cycle at
+   60h/64h never reaches the 8042; the SMI handler stands in for it. */
+static int
+piix_usb_kbc_claim(uint16_t port, uint8_t write, uint8_t val, void *priv)
+{
+    piix_t  *dev   = (piix_t *) priv;
+    uint8_t *fregs = dev->regs[2];
+    int      trapped;
+
+    trapped = uhci_legsup_kbc_cycle(&fregs[0xc0], &dev->usb_a20, port, write, val, 0);
+    if (trapped)
+        usb_trace(USB_LOG_IRQ, -1, "PIIX legacy KBC trap: %s %02X (written %02X), LEGSUP %02x%02x",
+                  write ? "write" : "read", port, write ? val : 0x00, fregs[0xc1], fregs[0xc0]);
+    piix_usb_update_irq(dev);
+
+    return trapped;
+}
+
+static void
+piix_usb_update_kbc_claim(piix_t *dev)
+{
+    int armed = uhci_legsup_kbc_armed(&dev->regs[2][0xc0], 0);
+
+    io_set_claim(0x60, armed ? piix_usb_kbc_claim : NULL, dev);
+    io_set_claim(0x64, armed ? piix_usb_kbc_claim : NULL, dev);
 }
 
 static void
@@ -1162,7 +1195,8 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 break;
             case 0xc0:
                 if (dev->type <= 4) {
-                    fregs[0xc0] = (fregs[0xc0] & 0x40) | (val & 0xbf);
+                    uhci_legsup_write_c0(&fregs[0xc0], val);
+                    piix_usb_update_kbc_claim(dev);
                     piix_usb_update_irq(dev);
                 }
                 usb_trace(USB_LOG_REG, -1, "PIIX LEGSUP now %02x%02x", fregs[0xc1], fregs[0xc0]);
@@ -1630,7 +1664,8 @@ piix_reset(void *priv)
             piix_write(2, 0x23, 1, 0x00, priv);
 
             piix_write(2, 0xc0, 1, 0x00, priv);
-            piix_write(2, 0xc1, 1, 0x20, priv);
+            /* 2000h: the write-1-to-clear statuses cleared, USBPIRQDEN set. */
+            piix_write(2, 0xc1, 1, 0xaf, priv);
         }
     }
 
@@ -1665,6 +1700,11 @@ piix_close(void *priv)
 
     for (int i = 0; i < (sizeof(dev->io_traps) / sizeof(dev->io_traps[0])); i++)
         io_trap_remove(dev->io_traps[i].trap);
+
+    if (uhci_legsup_kbc_armed(&dev->regs[2][0xc0], 0)) {
+        io_set_claim(0x60, NULL, NULL);
+        io_set_claim(0x64, NULL, NULL);
+    }
 
     free(dev);
 }

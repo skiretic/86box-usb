@@ -28,6 +28,7 @@
 #include <86box/device.h>
 #include <86box/keyboard.h>
 #include <86box/plat.h>
+#include <86box/thread.h>
 
 #include "cpu.h"
 
@@ -92,6 +93,9 @@ kbc_at_log(const char* fmt, ...)
 void (*keyboard_send)(uint16_t val);
 static void (*keyboard_input_handler)(uint16_t scan, int down, void *priv);
 static void *keyboard_input_priv;
+/* Host keys arrive on the GUI thread while a hard reset on the emulation
+   thread closes the keyboard: unregistering waits for a call in flight. */
+static mutex_t *keyboard_input_lock;
 
 static int recv_key[768] = { 0 }; /* keyboard input buffer */
 static int recv_key_ui[768] = { 0 }; /* keyboard input buffer */
@@ -150,6 +154,11 @@ keyboard_toggle_override(void)
 void
 keyboard_init(void)
 {
+    /* Created once, at startup: a hard reset runs this again while the GUI
+       thread may be using the lock. */
+    if (keyboard_input_lock == NULL)
+        keyboard_input_lock = thread_create_mutex();
+
     num_lock     = 0;
     caps_lock    = 0;
     scroll_lock  = 0;
@@ -182,8 +191,12 @@ keyboard_set_table(const scancode *ptr)
 void
 keyboard_set_input_handler(void (*handler)(uint16_t scan, int down, void *priv), void *priv)
 {
+    if (keyboard_input_lock != NULL)
+        thread_wait_mutex(keyboard_input_lock);
     keyboard_input_handler = handler;
     keyboard_input_priv    = handler ? priv : NULL;
+    if (keyboard_input_lock != NULL)
+        thread_release_mutex(keyboard_input_lock);
 }
 
 static uint8_t
@@ -213,17 +226,24 @@ key_process(uint16_t scan, int down)
 {
     const scancode *codes = scan_table;
     int             c;
+    int             handled;
 
     if (!keyboard_scan)
         return;
 
     scan = scancode_config_map[scan];
 
-    if (keyboard_input_handler) {
+    if (keyboard_input_lock != NULL)
+        thread_wait_mutex(keyboard_input_lock);
+    handled = (keyboard_input_handler != NULL);
+    if (handled) {
         oldkey[scan] = down;
         keyboard_input_handler(scan, down, keyboard_input_priv);
-        return;
     }
+    if (keyboard_input_lock != NULL)
+        thread_release_mutex(keyboard_input_lock);
+    if (handled)
+        return;
 
     if (!codes || !keyboard_send)
         return;

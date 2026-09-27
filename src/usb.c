@@ -580,7 +580,7 @@ uhci_run_frame(uhci_t *dev)
             }
 
             r = uhci_exec_td(dev, qh[1] & ~0x0f, 1, &left, &td_link);
-            if (r >= TD_END_FRAME)
+            if (r == TD_HALT)
                 break;
             if ((r != TD_INACTIVE) && (r != TD_NO_TIME))
                 work++;
@@ -594,23 +594,25 @@ uhci_run_frame(uhci_t *dev)
                 link = qh[0];
         } else {
             r = uhci_exec_td(dev, link & ~0x0f, 0, &left, &td_link);
-            if (r >= TD_END_FRAME)
+            if (r == TD_HALT)
                 break;
             if ((r != TD_INACTIVE) && (r != TD_NO_TIME))
                 work++;
             link = td_link;
         }
 
-        /* Debug mode stops after each executed TD (s2.1.1.1). */
+        /* Debug mode stops after each executed TD (s2.1.1.1). A babble ends
+           the frame, so that step resumes at nothing until the next frame. */
         if ((dev->cmd & UHCI_CMD_SWDBG) && (r != TD_INACTIVE)) {
-            dev->dbg_link   = link;
+            dev->dbg_link   = (r == TD_END_FRAME) ? UHCI_LP_T : link;
             dev->dbg_left   = left;
             dev->dbg_resume = 1;
             uhci_self_stop(dev, 0);
             break;
         }
 
-        if (left <= 0.0)
+        /* Babble ends the frame: no further TDs in it (s3.2.2 bit 20). */
+        if ((r == TD_END_FRAME) || (left <= 0.0))
             break;
     }
 }

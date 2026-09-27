@@ -315,7 +315,9 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
             }
             if ((rt == 0x02) && (wvalue == FEAT_ENDPOINT_HALT)) {
                 ep = usb_dev_endpoint(dev, windex);
-                if ((ep == NULL) || !ep->present)
+                /* An isochronous endpoint never halts (5.6.5); Halt is for
+                   interrupt and bulk endpoints (9.4.5). */
+                if ((ep == NULL) || !ep->present || (ep->type == 1))
                     return USB_DATA_STALL;
                 ep->halt = (setup[1] == REQ_SET_FEATURE);
                 /* EP0 IN and OUT are one control pipe with one Halt feature. */

@@ -118,33 +118,85 @@ usb_dev_reset_endpoints(usb_dev_t *dev, int with_ep0)
     }
 }
 
-void
-usb_dev_init(usb_dev_t *dev)
+static int
+usb_dev_alt_exists(const usb_dev_t *dev, int intf, int alt)
 {
-    const uint8_t *d   = dev->cfg_desc;
-    int            pos = 0;
+    const uint8_t *d = dev->cfg_desc;
 
-    memset(dev->ep_in, 0x00, sizeof(dev->ep_in));
-    memset(dev->ep_out, 0x00, sizeof(dev->ep_out));
+    for (int pos = 0; ((pos + 3) < dev->cfg_len) && (d[pos] != 0); pos += d[pos]) {
+        if ((d[pos + 1] == 0x04) && (d[pos + 2] == intf) && (d[pos + 3] == alt))
+            return 1;
+    }
 
-    dev->ep_in[0].present  = dev->ep_out[0].present = 1;
-    dev->ep_in[0].mps      = dev->ep_out[0].mps = dev->dev_desc[7];
+    return 0;
+}
 
-    /* Endpoint descriptors (type 5) of the one configuration. */
-    while ((pos + 1) < dev->cfg_len) {
-        if (d[pos] == 0)
-            break;
-        if ((d[pos + 1] == 0x05) && ((pos + 6) < dev->cfg_len)) {
+/* An alternate setting brings its own endpoints (9.6.3); selecting one puts
+   the interface's endpoints at their defaults, toggle DATA0 and no halt
+   (9.1.1.5). Other interfaces' endpoints are left alone. */
+static void
+usb_dev_select_alt(usb_dev_t *dev, int intf, int alt)
+{
+    const uint8_t *d        = dev->cfg_desc;
+    int            cur_intf = -1;
+    int            cur_alt  = -1;
+
+    for (int n = 1; n < 16; n++) {
+        usb_ep_t *eps[2] = { &dev->ep_in[n], &dev->ep_out[n] };
+
+        for (int i = 0; i < 2; i++) {
+            if (eps[i]->intf == intf) {
+                eps[i]->present = 0;
+                eps[i]->intf    = 0xff;
+            }
+        }
+    }
+
+    for (int pos = 0; ((pos + 1) < dev->cfg_len) && (d[pos] != 0); pos += d[pos]) {
+        if ((d[pos + 1] == 0x04) && ((pos + 3) < dev->cfg_len)) {
+            cur_intf = d[pos + 2];
+            cur_alt  = d[pos + 3];
+        } else if ((d[pos + 1] == 0x05) && ((pos + 6) < dev->cfg_len) && (cur_intf == intf) && (cur_alt == alt) &&
+                   (d[pos + 2] & 0x0f)) {
             usb_ep_t *ep = (d[pos + 2] & 0x80) ? &dev->ep_in[d[pos + 2] & 0x0f] : &dev->ep_out[d[pos + 2] & 0x0f];
 
             ep->present = 1;
+            ep->intf    = intf;
             ep->type    = d[pos + 3] & 0x03;
             ep->mps     = (d[pos + 4] | (d[pos + 5] << 8)) & 0x07ff;
             if (ep->mps > sizeof(ep->pend_buf))
                 ep->mps = sizeof(ep->pend_buf);
+            ep->toggle  = 0;
+            ep->halt    = 0;
+            ep->pending = 0;
         }
-        pos += d[pos];
     }
+
+    dev->alt[intf] = alt;
+}
+
+/* Every interface in alternate setting 0, as at configuration (9.6.3). */
+static void
+usb_dev_default_alts(usb_dev_t *dev)
+{
+    for (int i = 0; (i < dev->cfg_desc[4]) && (i < USB_DEV_INTERFACES); i++)
+        usb_dev_select_alt(dev, i, 0);
+}
+
+void
+usb_dev_init(usb_dev_t *dev)
+{
+    memset(dev->ep_in, 0x00, sizeof(dev->ep_in));
+    memset(dev->ep_out, 0x00, sizeof(dev->ep_out));
+    memset(dev->alt, 0x00, sizeof(dev->alt));
+
+    for (int n = 0; n < 16; n++)
+        dev->ep_in[n].intf = dev->ep_out[n].intf = 0xff;
+
+    dev->ep_in[0].present  = dev->ep_out[0].present = 1;
+    dev->ep_in[0].mps      = dev->ep_out[0].mps = dev->dev_desc[7];
+
+    usb_dev_default_alts(dev);
 
     dev->powered_reset = 0;
     dev->addr          = 0;
@@ -166,6 +218,7 @@ usb_dev_bus_reset(usb_dev_t *dev)
     dev->remote_wakeup = 0;
     dev->ctl_stage     = CTL_IDLE;
     usb_dev_reset_endpoints(dev, 1);
+    usb_dev_default_alts(dev);
 
     if (dev->ops->reset != NULL)
         dev->ops->reset(dev);
@@ -174,7 +227,7 @@ usb_dev_bus_reset(usb_dev_t *dev)
 static int
 usb_dev_interface_exists(const usb_dev_t *dev, int intf)
 {
-    return dev->config && (intf < dev->cfg_desc[4]);
+    return dev->config && (intf < dev->cfg_desc[4]) && (intf < USB_DEV_INTERFACES);
 }
 
 static usb_ep_t *
@@ -320,8 +373,10 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
                 dev->config = wvalue & 0xff;
             else
                 return USB_DATA_STALL;
-            /* Configuring resets every endpoint's toggle and halt (9.1.1.5, 9.4.5). */
+            /* Configuring resets every endpoint's toggle and halt and puts every
+               interface in alternate setting 0 (9.1.1.5, 9.4.5, 9.6.3). */
             usb_dev_reset_endpoints(dev, 0);
+            usb_dev_default_alts(dev);
             if (dev->ops->configured != NULL)
                 dev->ops->configured(dev, dev->config);
             return 0;
@@ -329,13 +384,16 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
         case REQ_GET_INTERFACE:
             if ((rt != 0x81) || !usb_dev_interface_exists(dev, windex))
                 return USB_DATA_STALL;
-            buf[0] = 0x00;
+            buf[0] = dev->alt[windex];
             return 1;
 
         case REQ_SET_INTERFACE:
-            if ((rt != 0x01) || !usb_dev_interface_exists(dev, windex) || (wvalue != 0))
+            if ((rt != 0x01) || !usb_dev_interface_exists(dev, windex) || (wvalue > 0xff) ||
+                !usb_dev_alt_exists(dev, windex, wvalue))
                 return USB_DATA_STALL;
-            usb_dev_reset_endpoints(dev, 0);
+            usb_dev_select_alt(dev, windex, wvalue);
+            if (dev->ops->set_interface != NULL)
+                dev->ops->set_interface(dev, windex, wvalue);
             return 0;
 
         default:
@@ -526,6 +584,12 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
                 return usb_dev_ctl_out(dev, p);
             if (ep->halt)
                 return USB_RET_STALL;
+            /* Isochronous: no data toggle and no handshake (5.6, 8.5.4). */
+            if (ep->type == 1) {
+                if (dev->ops->data_out != NULL)
+                    dev->ops->data_out(dev, n, p->data, p->len);
+                return USB_RET_ACK;
+            }
             if (p->toggle != ep->toggle)
                 return USB_RET_ACK;
             ret = (dev->ops->data_out != NULL) ? dev->ops->data_out(dev, n, p->data, p->len) : USB_DATA_STALL;
@@ -545,6 +609,15 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
             /* EP0's Halt acts per request, through the control stage. */
             if (ep->halt && (n != 0))
                 return USB_RET_STALL;
+
+            /* Isochronous: each packet is sent once; nothing to send is no answer. */
+            if (ep->type == 1) {
+                ret = (dev->ops->data_in != NULL) ? dev->ops->data_in(dev, n, p->data, p->len) : USB_DATA_NAK;
+                if (ret < 0)
+                    return USB_RET_NO_RESPONSE;
+                p->actual = ret;
+                return USB_RET_ACK;
+            }
 
             /* An unacknowledged packet is resent unchanged (8.6.4). */
             if (!ep->pending) {

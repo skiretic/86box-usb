@@ -63,11 +63,16 @@ typedef struct usb_dev_ops_t {
     int (*data_out)(usb_dev_t *dev, int ep, const uint8_t *buf, int len);
     void (*reset)(usb_dev_t *dev);
     void (*configured)(usb_dev_t *dev, int config);
+    /* SET_INTERFACE selected alternate setting alt of interface intf. */
+    void (*set_interface)(usb_dev_t *dev, int intf, int alt);
 } usb_dev_ops_t;
+
+#define USB_DEV_INTERFACES 16
 
 typedef struct usb_ep_t {
     uint16_t mps;
     uint8_t  type;      /* bmAttributes transfer type: 0 control, 1 iso, 2 bulk, 3 interrupt */
+    uint8_t  intf;      /* interface it belongs to, 0xff = EP0 or none */
     uint8_t  present;
     uint8_t  toggle;
     uint8_t  halt;
@@ -94,6 +99,7 @@ struct usb_dev_t {
     uint8_t               set_addr;
     uint8_t               config;
     uint8_t               remote_wakeup;
+    uint8_t               alt[USB_DEV_INTERFACES]; /* alternate setting of each interface */
 
     usb_ep_t              ep_in[16];
     usb_ep_t              ep_out[16];

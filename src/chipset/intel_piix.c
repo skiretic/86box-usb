@@ -1052,6 +1052,7 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 } else {
                     fregs[0x04] = (val & 5);
                     uhci_update_io_mapping(dev->usb, fregs[0x20] & ~0x1f, fregs[0x21], fregs[PCI_REG_COMMAND] & PCI_COMMAND_IO);
+                    uhci_set_bus_master(dev->usb, fregs[PCI_REG_COMMAND] & PCI_COMMAND_L_BM);
                 }
                 break;
             case 0x07:

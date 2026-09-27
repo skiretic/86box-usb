@@ -118,6 +118,7 @@ struct uhci_t {
     uint8_t     int_spd;
     uint8_t     irq_level;
     uint8_t     frame_frozen;
+    uint8_t     bus_master; /* PCICMD BME from the chipset */
     uint64_t    frame_left_us;
     /* Completions of the frame in progress; they reach USBSTS at its end (s4.1). */
     uint8_t     eof_ioc;
@@ -519,7 +520,9 @@ uhci_run_frame(uhci_t *dev)
     int      r;
     double   left = uhci_frame_us(dev) * 1000.0;
 
-    if (!uhci_running(dev))
+    /* With Bus Master Enable clear the UHCI may not touch memory at all
+       (PIIX4 6.1.3); the frame counter needs no memory and keeps counting. */
+    if (!uhci_running(dev) || !dev->bus_master)
         return;
 
     dma_bm_read(dev->flbaseadd + ((dev->frnum & 0x3ff) << 2), (uint8_t *) &link, 4, 4);
@@ -1018,6 +1021,12 @@ uhci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *p
     dev->uhci->irq_priv = priv;
 }
 
+void
+uhci_set_bus_master(usb_t *dev, int enable)
+{
+    dev->uhci->bus_master = !!enable;
+}
+
 #define USB_MAX_HC 8
 
 static usb_t *usb_hcs[USB_MAX_HC];
@@ -1318,6 +1327,8 @@ usb_reset(void *priv)
     usb_t *dev = (usb_t *) priv;
 
     uhci_power_on_reset(dev->uhci);
+    /* PCICMD resets to 0; GRESET leaves PCI configuration alone. */
+    dev->uhci->bus_master = 0;
 
     memset(dev->ohci_mmio, 0x00, 4096);
     dev->ohci_mmio[0x00] = 0x10;

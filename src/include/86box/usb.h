@@ -39,6 +39,8 @@ extern const device_t usb_device;
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);
 /* The chipset routes the UHCI interrupt; level is the controller's IRQ output. */
 extern void uhci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *priv);
+/* PCICMD Bus Master Enable: with it clear the UHCI makes no memory accesses. */
+extern void uhci_set_bus_master(usb_t *dev, int enable);
 extern void ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3, int enable);
 
 #ifdef __cplusplus

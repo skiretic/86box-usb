@@ -15,6 +15,7 @@
  *          Copyright 2020 Miran Grca.
  *          Copyright 2026 skiretic.
  */
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -27,13 +28,15 @@
 #include <86box/io.h>
 #include <86box/mem.h>
 #include <86box/timer.h>
+#include <86box/dma.h>
 #include <86box/usb.h>
+#include <86box/usb_dev.h>
 #include <86box/usb_log.h>
 #include "cpu.h"
 #include <86box/plat_unused.h>
 
-/* UHCI, written from the Intel UHCI Design Guide 1.1 (section 2.1) and the
-   PIIX3/PIIX4 datasheets. Registers and root hub only; no schedule yet. */
+/* UHCI, written from the Intel UHCI Design Guide 1.1 and the PIIX3/PIIX4
+   datasheets. */
 #define UHCI_USBCMD    0x00
 #define UHCI_USBSTS    0x02
 #define UHCI_USBINTR   0x04
@@ -78,10 +81,30 @@
 
 #define UHCI_PORTS 2
 
+/* Frame list / QH / TD link pointer bits (s3.1-3.3). */
+#define UHCI_LP_T  0x00000001
+#define UHCI_LP_Q  0x00000002
+#define UHCI_LP_VF 0x00000004
+
+/* TD control and status, dword 1 (s3.2.2). */
+#define UHCI_TD_ACTLEN   0x000007ff
+#define UHCI_TD_BITSTUFF 0x00020000
+#define UHCI_TD_CRCTO    0x00040000
+#define UHCI_TD_NAK      0x00080000
+#define UHCI_TD_BABBLE   0x00100000
+#define UHCI_TD_DBE      0x00200000
+#define UHCI_TD_STALLED  0x00400000
+#define UHCI_TD_ACTIVE   0x00800000
+#define UHCI_TD_IOC      0x01000000
+#define UHCI_TD_IOS      0x02000000
+#define UHCI_TD_LS       0x04000000
+#define UHCI_TD_CERR     0x18000000
+#define UHCI_TD_SPD      0x20000000
+#define UHCI_TD_STATUS   0x00fe0000
+
 typedef struct uhci_port_t {
-    uint16_t sc;       /* CCS, CSC, PE, PEDC, RD, LSDA, PR, SUSP */
-    uint8_t  attached; /* a device is on the wire */
-    uint8_t  low_speed;
+    uint16_t   sc;  /* CCS, CSC, PE, PEDC, RD, LSDA, PR, SUSP */
+    usb_dev_t *usb; /* the device on the wire, if any */
 } uhci_port_t;
 
 struct uhci_t {
@@ -96,6 +119,11 @@ struct uhci_t {
     uint8_t     irq_level;
     uint8_t     frame_frozen;
     uint64_t    frame_left_us;
+    /* Completions of the frame in progress; they reach USBSTS at its end (s4.1). */
+    uint8_t     eof_ioc;
+    uint8_t     eof_spd;
+    uint8_t     eof_err;
+    int         bus;     /* pcap bus number */
     uhci_port_t port[UHCI_PORTS];
     pc_timer_t  frame_timer;
     pc_timer_t  detect_timer;
@@ -183,14 +211,33 @@ uhci_running(const uhci_t *dev)
     return (dev->cmd & UHCI_CMD_RS) && !(dev->cmd & (UHCI_CMD_EGSM | UHCI_CMD_GRESET));
 }
 
+/* Completions of the frame reach USBSTS at its end (s4.1.2, s4.1.3). */
 static void
-uhci_frame_end(void *priv)
+uhci_latch_frame_status(uhci_t *dev)
 {
-    uhci_t *dev = (uhci_t *) priv;
+    uint16_t old = dev->sts;
 
-    dev->frnum = (dev->frnum + 1) & 0x07ff;
-    timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
+    if (dev->eof_ioc) {
+        dev->sts |= UHCI_STS_USBINT;
+        dev->int_ioc = 1;
+    }
+    if (dev->eof_spd) {
+        dev->sts |= UHCI_STS_USBINT;
+        dev->int_spd = 1;
+    }
+    if (dev->eof_err)
+        dev->sts |= UHCI_STS_ERRINT;
+
+    dev->eof_ioc = dev->eof_spd = dev->eof_err = 0;
+
+    if (dev->sts != old) {
+        usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS %04x -> %04x (end of frame%s%s)", old, dev->sts,
+                  dev->int_ioc ? ", IOC" : "", dev->int_spd ? ", SPD" : "");
+        uhci_update_irq(dev);
+    }
 }
+
+static void uhci_run_frame(uhci_t *dev);
 
 /* Called after every USBCMD change: starts or stops the frame clock. */
 static void
@@ -208,13 +255,348 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
             timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
         dev->frame_frozen = 0;
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock started, FLBASEADD %08x", dev->flbaseadd);
+        uhci_run_frame(dev);
     } else {
         /* Outside debug mode a stop resets the SOF counter; in debug mode it freezes (Table 4). */
         dev->frame_frozen  = !!(dev->cmd & UHCI_CMD_SWDBG);
         dev->frame_left_us = timer_get_remaining_us(&dev->frame_timer);
         timer_stop(&dev->frame_timer);
+        uhci_latch_frame_status(dev);
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock stopped%s", dev->frame_frozen ? " (frozen, SWDBG)" : "");
     }
+}
+
+/* The controller clears Run/Stop itself: process error or debug single step (Table 7). */
+static void
+uhci_self_stop(uhci_t *dev, uint16_t sts_bit)
+{
+    int was_running = uhci_running(dev);
+
+    dev->cmd &= ~UHCI_CMD_RS;
+    if (sts_bit != 0) {
+        dev->sts |= sts_bit;
+        usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS %04x (%s), Run/Stop cleared", dev->sts,
+                  (sts_bit == UHCI_STS_HCPE) ? "process error" : "host system error");
+    }
+    uhci_set_halted(dev, 1);
+    uhci_update_frame_clock(dev, was_running);
+    uhci_update_irq(dev);
+}
+
+/* Bus time of one transaction in ns (USB 1.1 s5.11.3), Host_Delay 0 and
+   Hub_LS_Setup at its minimum of four full-speed bit times. */
+static double
+uhci_bus_ns(int low_speed, int iso, int in, int bytes)
+{
+    double bits = floor(3.167 + (1.1667 * 8.0 * (double) bytes));
+
+    if (low_speed)
+        return (in ? 64060.0 : 64107.0) + (2.0 * 333.0) + ((in ? 676.67 : 667.0) * bits);
+    if (iso)
+        return (in ? 7268.0 : 6265.0) + (83.54 * bits);
+
+    return 9107.0 + (83.54 * bits);
+}
+
+/* One descriptor fetch, about one PCI burst read; it also bounds a loop
+   of empty queue heads to the frame. */
+#define UHCI_FETCH_NS 250.0
+
+static usb_dev_t *
+uhci_find_device(uhci_t *dev, int addr, int low_speed)
+{
+    for (int i = 0; i < UHCI_PORTS; i++) {
+        const uhci_port_t *port = &dev->port[i];
+
+        /* Only an enabled, unsuspended port carries traffic, and a low-speed
+           token only reaches a low-speed device. */
+        if ((port->usb == NULL) || !(port->sc & UHCI_PORT_PE) || (port->sc & (UHCI_PORT_SUSP | UHCI_PORT_PR)))
+            continue;
+        if ((port->usb->addr == addr) && (port->usb->low_speed == low_speed))
+            return port->usb;
+    }
+
+    return NULL;
+}
+
+enum {
+    TD_INACTIVE = 0,
+    TD_ADVANCE,   /* completed: the queue moves on */
+    TD_SHORT,     /* short packet with SPD: inactive, queue not advanced */
+    TD_RETRY,     /* left active: NAK or a counted error */
+    TD_FAILED,    /* inactive with an error: queue not advanced */
+    TD_END_FRAME, /* babble ends the frame */
+    TD_NO_TIME,   /* not started: past the point where it could finish */
+    TD_HALT       /* process error: Run/Stop cleared */
+};
+
+#ifdef ENABLE_USB_LOG
+static const char *const uhci_ret_names[] = { "ACK", "NAK", "STALL", "timeout", "babble", "toggle mismatch" };
+static const uint8_t     usbmon_xfer[4]   = { 2, 0, 3, 1 };
+#endif
+
+static int
+uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *link)
+{
+    uint32_t     td[4];
+    uint32_t     ctrl;
+    uint8_t      buf[1280];
+    usb_packet_t p;
+    usb_dev_t   *usb;
+    int          pid;
+    int          len;
+    int          ls;
+    int          iso;
+    int          cerr;
+    int          ret;
+    int          result;
+    double       cost;
+    double       maxp_ns;
+
+    dma_bm_read(addr, (uint8_t *) td, 16, 4);
+    *link = td[0];
+    ctrl  = td[1];
+
+    /* IOC fires at the end of the frame for any TD found inactive (s3.2.2 bit 24). */
+    if (!(ctrl & UHCI_TD_ACTIVE)) {
+        if (ctrl & UHCI_TD_IOC)
+            dev->eof_ioc = 1;
+        usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x inactive, ctrl %08x", addr, ctrl);
+        return TD_INACTIVE;
+    }
+
+    pid = td[2] & 0xff;
+    len = (td[2] >> 21) & 0x7ff;
+
+    /* Illegal PID or MaxLen 500h-7FEh: consistency check failure (s3.2.3, s4.2.2). */
+    if (((pid != USB_PID_IN) && (pid != USB_PID_OUT) && (pid != USB_PID_SETUP)) ||
+        ((len >= 0x500) && (len != 0x7ff))) {
+        usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x token %08x: process error", addr, td[2]);
+        uhci_self_stop(dev, UHCI_STS_HCPE);
+        return TD_HALT;
+    }
+
+    len = (len + 1) & 0x7ff;
+    ls  = !!(ctrl & UHCI_TD_LS);
+    iso = !!(ctrl & UHCI_TD_IOS);
+
+    /* Nothing starts that cannot finish before EOF, nor inside the window
+       kept for a MAXP-sized packet (s1.3.1 cases A and B). */
+    cost    = uhci_bus_ns(ls, iso, pid == USB_PID_IN, len);
+    maxp_ns = uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
+    if (*left < ((cost > maxp_ns) ? cost : maxp_ns))
+        return TD_NO_TIME;
+
+    p.pid    = pid;
+    p.ep     = (td[2] >> 15) & 0x0f;
+    p.toggle = (td[2] >> 19) & 1;
+    p.data   = buf;
+    p.len    = len;
+    p.actual = 0;
+
+    if ((pid != USB_PID_IN) && (len > 0))
+        dma_bm_read(td[3], buf, len, 1);
+
+    usb = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
+    ret = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
+
+    /* OUT data is on the bus whatever the handshake; IN data only if sent. */
+    *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.actual : len);
+
+    /* Each execution rewrites the status field (s3.2.2 bits 23:16). */
+    ctrl &= ~(UHCI_TD_STATUS & ~UHCI_TD_ACTIVE);
+    result = TD_RETRY;
+
+    switch (ret) {
+        case USB_RET_ACK:
+            if (pid == USB_PID_IN) {
+                if (p.actual > 0)
+                    dma_bm_write(td[3], buf, p.actual, 1);
+                len = p.actual;
+            }
+            /* ActLen is n-1 encoded: 7FFh is zero bytes. */
+            ctrl   = (ctrl & ~(UHCI_TD_ACTIVE | UHCI_TD_ACTLEN)) | ((len - 1) & UHCI_TD_ACTLEN);
+            result = TD_ADVANCE;
+            if ((pid == USB_PID_IN) && in_queue && (ctrl & UHCI_TD_SPD) && (p.actual < p.len)) {
+                dev->eof_spd = 1;
+                result       = TD_SHORT;
+            }
+            break;
+
+        case USB_RET_TOGGLE_MISMATCH:
+            /* ACKed and discarded (USB 1.1 s8.6.4): the TD waits for the right packet. */
+            break;
+
+        case USB_RET_NAK:
+            ctrl |= UHCI_TD_NAK;
+            break;
+
+        case USB_RET_STALL:
+            ctrl   = (ctrl & ~UHCI_TD_ACTIVE) | UHCI_TD_STALLED;
+            result = TD_FAILED;
+            dev->eof_err = 1;
+            break;
+
+        case USB_RET_BABBLE:
+            if (p.actual > 0)
+                dma_bm_write(td[3], buf, p.actual, 1);
+            ctrl   = (ctrl & ~(UHCI_TD_ACTIVE | UHCI_TD_ACTLEN)) | UHCI_TD_BABBLE | UHCI_TD_STALLED |
+                     ((p.actual - 1) & UHCI_TD_ACTLEN);
+            result = TD_END_FRAME;
+            dev->eof_err = 1;
+            break;
+
+        default:
+            /* No handshake: CRC/timeout, counted down by C_ERR; 0 retries forever (s3.2.2). */
+            ctrl |= UHCI_TD_CRCTO;
+            cerr = (ctrl & UHCI_TD_CERR) >> 27;
+            if (cerr != 0) {
+                cerr--;
+                ctrl = (ctrl & ~UHCI_TD_CERR) | (cerr << 27);
+                if (cerr == 0) {
+                    ctrl   = (ctrl & ~UHCI_TD_ACTIVE) | UHCI_TD_STALLED;
+                    result = TD_FAILED;
+                    dev->eof_err = 1;
+                }
+            }
+            break;
+    }
+
+    /* Isochronous TDs go inactive after one execution whatever happened (s3.2.2 bit 25). */
+    if (iso && (ctrl & UHCI_TD_ACTIVE)) {
+        ctrl &= ~UHCI_TD_ACTIVE;
+        result = TD_FAILED;
+    }
+
+    if (!(ctrl & UHCI_TD_ACTIVE) && (ctrl & UHCI_TD_IOC))
+        dev->eof_ioc = 1;
+
+    dma_bm_write(addr + 4, (uint8_t *) &ctrl, 4, 4);
+
+    usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x %s dev %i ep %i D%i len %i%s -> %s, ctrl %08x",
+              addr, (pid == USB_PID_IN) ? "IN" : ((pid == USB_PID_OUT) ? "OUT" : "SETUP"),
+              (td[2] >> 8) & 0x7f, p.ep, p.toggle, p.len, ls ? " LS" : "",
+              uhci_ret_names[ret], ctrl);
+
+#ifdef ENABLE_USB_LOG
+    if ((usb != NULL) && (ret != USB_RET_NAK)) {
+        int xfer = usbmon_xfer[((pid == USB_PID_IN) ? usb->ep_in[p.ep].type : usb->ep_out[p.ep].type) & 3];
+
+        if (pid == USB_PID_SETUP)
+            usb_log_pcap(addr, 'S', xfer, buf[0] >> 7, p.ep, dev->bus, usb->addr, -115, buf, NULL, 0);
+        else if (pid == USB_PID_OUT)
+            usb_log_pcap(addr, 'S', xfer, 0, p.ep, dev->bus, usb->addr, -115, NULL, buf, len);
+        else
+            usb_log_pcap(addr, 'C', xfer, 1, p.ep, dev->bus, usb->addr,
+                         (ret == USB_RET_STALL) ? -32 : 0, NULL, buf, (ret == USB_RET_ACK) ? p.actual : 0);
+    }
+#endif
+
+    return result;
+}
+
+/* One frame of the schedule (s3.4): the frame list entry, then TDs and
+   queue heads by their link pointers until a terminate bit or the end of
+   the frame. */
+static void
+uhci_run_frame(uhci_t *dev)
+{
+    uint32_t link;
+    uint32_t qh[2];
+    uint32_t td_link;
+    uint32_t seen_qh[32];
+    int      seen_work[32];
+    int      n_seen = 0;
+    int      work   = 0;
+    int      steps  = 0;
+    int      r;
+    double   left = uhci_frame_us(dev) * 1000.0;
+
+    if (!uhci_running(dev))
+        return;
+
+    dma_bm_read(dev->flbaseadd + ((dev->frnum & 0x3ff) << 2), (uint8_t *) &link, 4, 4);
+    usb_trace(USB_LOG_SCHED, dev->frnum, "frame list entry %08x", link);
+
+    while (!(link & UHCI_LP_T) && (steps++ < 4096)) {
+        left -= UHCI_FETCH_NS;
+
+        if (link & UHCI_LP_Q) {
+            uint32_t qh_addr = link & ~0x0f;
+            int      i;
+
+            /* A queue head reached again with no transaction since the last
+               visit is a reclamation loop with nothing left to run. */
+            for (i = 0; i < n_seen; i++) {
+                if (seen_qh[i] == qh_addr)
+                    break;
+            }
+            if (i < n_seen) {
+                if (seen_work[i] == work)
+                    break;
+                seen_work[i] = work;
+            } else if (n_seen < 32) {
+                seen_qh[n_seen]   = qh_addr;
+                seen_work[n_seen] = work;
+                n_seen++;
+            }
+
+            dma_bm_read(qh_addr, (uint8_t *) qh, 8, 4);
+            usb_trace(USB_LOG_SCHED, dev->frnum, "QH %08x link %08x element %08x", qh_addr, qh[0], qh[1]);
+
+            if (qh[1] & UHCI_LP_T) {
+                link = qh[0];
+                continue;
+            }
+            /* An element that is a QH starts a new queue context; the one
+               just left is not written back (s3.4.1.3). */
+            if (qh[1] & UHCI_LP_Q) {
+                link = qh[1];
+                continue;
+            }
+
+            r = uhci_exec_td(dev, qh[1] & ~0x0f, 1, &left, &td_link);
+            if (r >= TD_END_FRAME)
+                break;
+            if ((r != TD_INACTIVE) && (r != TD_NO_TIME))
+                work++;
+
+            if (r == TD_ADVANCE) {
+                /* The TD's link becomes the queue element (s3.4.1.3 step 9). */
+                dma_bm_write(qh_addr + 4, (uint8_t *) &td_link, 4, 4);
+                /* Depth first stays in this queue; else on to the next QH. */
+                link = ((td_link & UHCI_LP_VF) && !(td_link & UHCI_LP_T)) ? (qh_addr | UHCI_LP_Q) : qh[0];
+            } else
+                link = qh[0];
+        } else {
+            r = uhci_exec_td(dev, link & ~0x0f, 0, &left, &td_link);
+            if (r >= TD_END_FRAME)
+                break;
+            if ((r != TD_INACTIVE) && (r != TD_NO_TIME))
+                work++;
+            link = td_link;
+        }
+
+        /* Debug mode stops after each executed TD (s2.1.1.1). */
+        if ((dev->cmd & UHCI_CMD_SWDBG) && (r != TD_INACTIVE)) {
+            uhci_self_stop(dev, 0);
+            break;
+        }
+
+        if (left <= 0.0)
+            break;
+    }
+}
+
+static void
+uhci_frame_end(void *priv)
+{
+    uhci_t *dev = (uhci_t *) priv;
+
+    uhci_latch_frame_status(dev);
+    dev->frnum = (dev->frnum + 1) & 0x07ff;
+    timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
+    uhci_run_frame(dev);
 }
 
 static int
@@ -232,11 +614,11 @@ uhci_detect(void *priv)
     for (int i = 0; i < UHCI_PORTS; i++) {
         uhci_port_t *port = &dev->port[i];
 
-        if (!port->attached || (port->sc & UHCI_PORT_CCS) || uhci_port_in_reset(dev, port))
+        if ((port->usb == NULL) || (port->sc & UHCI_PORT_CCS) || uhci_port_in_reset(dev, port))
             continue;
 
         port->sc |= UHCI_PORT_CCS | UHCI_PORT_CSC;
-        if (port->low_speed)
+        if (port->usb->low_speed)
             port->sc |= UHCI_PORT_LSDA;
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i connect detected, PORTSC %04x", i + 1, port->sc);
 
@@ -255,7 +637,7 @@ static void
 uhci_schedule_detect(uhci_t *dev)
 {
     for (int i = 0; i < UHCI_PORTS; i++) {
-        if (dev->port[i].attached) {
+        if (dev->port[i].usb != NULL) {
             timer_on_auto(&dev->detect_timer, 64.0 / 12.0);
             return;
         }
@@ -280,6 +662,9 @@ uhci_power_on_reset(uhci_t *dev)
     dev->sofmod       = 0x40;
     dev->int_ioc      = 0;
     dev->int_spd      = 0;
+    dev->eof_ioc      = 0;
+    dev->eof_spd      = 0;
+    dev->eof_err      = 0;
     dev->frame_frozen = 0;
 
     for (int i = 0; i < UHCI_PORTS; i++)
@@ -304,6 +689,9 @@ uhci_hc_reset(uhci_t *dev)
     dev->sofmod       = 0x40;
     dev->int_ioc      = 0;
     dev->int_spd      = 0;
+    dev->eof_ioc      = 0;
+    dev->eof_spd      = 0;
+    dev->eof_err      = 0;
     dev->frame_frozen = 0;
 
     for (int i = 0; i < UHCI_PORTS; i++) {
@@ -333,6 +721,11 @@ uhci_cmd_write(uhci_t *dev, uint16_t val)
     if (val & UHCI_CMD_GRESET) {
         if (!(old & UHCI_CMD_GRESET)) {
             uhci_power_on_reset(dev);
+            /* Global reset signaling reaches every device on the bus. */
+            for (int i = 0; i < UHCI_PORTS; i++) {
+                if (dev->port[i].usb != NULL)
+                    usb_dev_bus_reset(dev->port[i].usb);
+            }
             usb_trace(USB_LOG_REG, dev->frnum, "UHCI GRESET start");
         }
         dev->cmd = UHCI_CMD_GRESET;
@@ -368,7 +761,7 @@ uhci_portsc_read(const uhci_t *dev, int n)
     /* Line status: SE0 with nothing attached or in reset, else idle J, or K
        while resume is driven. J is D+ at full speed, D- at low speed. */
     if ((port->sc & UHCI_PORT_CCS) && !uhci_port_in_reset(dev, port)) {
-        j = port->low_speed ? UHCI_PORT_DM : UHCI_PORT_DP;
+        j = port->usb->low_speed ? UHCI_PORT_DM : UHCI_PORT_DP;
         if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) ||
             ((dev->cmd & UHCI_CMD_FGR) && (port->sc & UHCI_PORT_PE)))
             j ^= (UHCI_PORT_DP | UHCI_PORT_DM);
@@ -392,6 +785,8 @@ uhci_portsc_write(uhci_t *dev, int n, uint16_t val)
         if (old & UHCI_PORT_PE)
             port->sc |= UHCI_PORT_PEDC;
         port->sc = (port->sc & ~(UHCI_PORT_PE | UHCI_PORT_SUSP | UHCI_PORT_RD)) | UHCI_PORT_PR;
+        if (port->usb != NULL)
+            usb_dev_bus_reset(port->usb);
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i reset start", n + 1);
     } else if (!(val & UHCI_PORT_PR) && (old & UHCI_PORT_PR)) {
         port->sc &= ~UHCI_PORT_PR;
@@ -614,6 +1009,68 @@ uhci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *p
 {
     dev->uhci->set_irq  = set_irq;
     dev->uhci->irq_priv = priv;
+}
+
+#define USB_MAX_HC 8
+
+static usb_t *usb_hcs[USB_MAX_HC];
+
+/* Only a UHCI the chipset wired up (it routes its interrupt) takes devices. */
+int
+usb_attach(usb_dev_t *udev)
+{
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+
+        if ((hc == NULL) || (hc->set_irq == NULL))
+            continue;
+
+        for (int i = 0; i < UHCI_PORTS; i++) {
+            if (hc->port[i].usb == NULL) {
+                hc->port[i].usb = udev;
+                udev->port      = &hc->port[i];
+                usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s attached", i + 1, udev->name);
+                uhci_schedule_detect(hc);
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/* A disconnect clears CCS and PE and sets CSC and PEDC (s2.1.7, Tables 5-6). */
+void
+usb_detach(usb_dev_t *udev)
+{
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+
+        if (hc == NULL)
+            continue;
+
+        for (int i = 0; i < UHCI_PORTS; i++) {
+            uhci_port_t *port = &hc->port[i];
+
+            if (port->usb != udev)
+                continue;
+
+            port->usb = NULL;
+            if (port->sc & UHCI_PORT_CCS)
+                port->sc |= UHCI_PORT_CSC;
+            if (port->sc & UHCI_PORT_PE)
+                port->sc |= UHCI_PORT_PEDC;
+            port->sc &= ~(UHCI_PORT_CCS | UHCI_PORT_PE | UHCI_PORT_LSDA | UHCI_PORT_SUSP | UHCI_PORT_RD);
+            if (hc->cmd & UHCI_CMD_EGSM) {
+                hc->cmd |= UHCI_CMD_FGR;
+                hc->sts |= UHCI_STS_RD;
+            }
+            usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s detached, PORTSC %04x", i + 1, udev->name, port->sc);
+            uhci_update_irq(hc);
+        }
+    }
+
+    udev->port = NULL;
 }
 
 static uint8_t
@@ -873,6 +1330,15 @@ usb_close(void *priv)
 {
     usb_t *dev = (usb_t *) priv;
 
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        if (usb_hcs[h] == dev)
+            usb_hcs[h] = NULL;
+    }
+    for (int i = 0; i < UHCI_PORTS; i++) {
+        if (dev->uhci->port[i].usb != NULL)
+            dev->uhci->port[i].usb->port = NULL;
+    }
+
     timer_disable(&dev->uhci->frame_timer);
     timer_disable(&dev->uhci->detect_timer);
     free(dev->uhci);
@@ -896,6 +1362,14 @@ usb_init(UNUSED(const device_t *info))
     dev->uhci = (uhci_t *) calloc(1, sizeof(uhci_t));
     timer_add(&dev->uhci->frame_timer, uhci_frame_end, dev->uhci, 0);
     timer_add(&dev->uhci->detect_timer, uhci_detect, dev->uhci, 0);
+
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        if (usb_hcs[h] == NULL) {
+            usb_hcs[h]     = dev;
+            dev->uhci->bus = h + 1;
+            break;
+        }
+    }
 
     memset(dev->ohci_mmio, 0x00, 4096);
     dev->ohci_mmio[0x00] = 0x10;

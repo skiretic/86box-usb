@@ -144,6 +144,60 @@ usb_log_line(int layer, int frame, const char *fmt, ...)
     usb_log_write(layer, line, len);
 }
 
+/* LINKTYPE_USB_LINUX_MMAPPED record: pcap record header, 64-byte usbmon
+   header, then the data, all in host byte order like the global header. */
+void
+usb_log_pcap(uint64_t id, char type, int xfer, int ep_in, int ep, int bus, int addr,
+             int status, const uint8_t *setup, const uint8_t *data, int len)
+{
+    uint64_t us = (uint64_t) ((double) tsc * 4294967296.0 / (double) TIMER_USEC);
+    struct {
+        uint32_t ts_sec, ts_usec, incl_len, orig_len;
+    } rec;
+    struct {
+        uint64_t id;
+        uint8_t  type, xfer_type, epnum, devnum;
+        uint16_t busnum;
+        char     flag_setup, flag_data;
+        int64_t  ts_sec;
+        int32_t  ts_usec, status;
+        uint32_t length, len_cap;
+        uint8_t  setup[8];
+        int32_t  interval, start_frame;
+        uint32_t xfer_flags, ndesc;
+    } hdr;
+
+    if (!(usb_log_mask & (1 << USB_LOG_PCAP)) || (log_files[USB_LOG_PCAP].fp == NULL))
+        return;
+
+    memset(&hdr, 0x00, sizeof(hdr));
+    hdr.id         = id;
+    hdr.type       = type;
+    hdr.xfer_type  = xfer;
+    hdr.epnum      = (ep & 0x0f) | (ep_in ? 0x80 : 0x00);
+    hdr.devnum     = addr;
+    hdr.busnum     = bus;
+    hdr.flag_setup = (setup != NULL) ? 0 : '-';
+    hdr.flag_data  = (len > 0) ? 0 : (ep_in ? '<' : '>');
+    hdr.ts_sec     = us / 1000000;
+    hdr.ts_usec    = us % 1000000;
+    hdr.status     = status;
+    hdr.length     = len;
+    hdr.len_cap    = len;
+    if (setup != NULL)
+        memcpy(hdr.setup, setup, 8);
+
+    rec.ts_sec   = hdr.ts_sec;
+    rec.ts_usec  = hdr.ts_usec;
+    rec.incl_len = rec.orig_len = sizeof(hdr) + len;
+
+    usb_log_write(USB_LOG_PCAP, &rec, sizeof(rec));
+    if (log_files[USB_LOG_PCAP].fp != NULL)
+        usb_log_write(USB_LOG_PCAP, &hdr, sizeof(hdr));
+    if ((log_files[USB_LOG_PCAP].fp != NULL) && (len > 0))
+        usb_log_write(USB_LOG_PCAP, data, len);
+}
+
 void
 usb_log_open(void)
 {

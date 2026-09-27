@@ -1,0 +1,125 @@
+/*
+ * 86Box    A hypervisor and IBM PC system emulator that specializes in
+ *          running old operating systems and software designed for IBM
+ *          PC systems and compatibles from 1981 through fairly recent
+ *          system designs based on the PCI bus.
+ *
+ *          This file is part of the 86Box distribution.
+ *
+ *          Definitions for the USB device core: the device side of one
+ *          bus transaction, the default control pipe and the standard
+ *          requests of USB 1.1 chapter 9.
+ *
+ * Authors: skiretic, <skiretic@proton.me>
+ *
+ *          Copyright 2026 skiretic.
+ */
+
+#ifndef EMU_USB_DEV_H
+#define EMU_USB_DEV_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define USB_PID_OUT   0xe1
+#define USB_PID_IN    0x69
+#define USB_PID_SETUP 0x2d
+
+/* Outcome of one transaction, as the host controller sees it. */
+enum {
+    USB_RET_ACK = 0,         /* OUT/SETUP accepted, or IN data received and ACKed */
+    USB_RET_NAK,
+    USB_RET_STALL,
+    USB_RET_NO_RESPONSE,     /* no device answered: the host times out */
+    USB_RET_BABBLE,          /* IN data longer than the host allowed; not ACKed */
+    USB_RET_TOGGLE_MISMATCH  /* IN data with the wrong DATA PID: ACKed, discarded */
+};
+
+/* Class hooks return this for "NAK the IN" or "STALL". */
+#define USB_DATA_NAK   (-1)
+#define USB_DATA_STALL (-2)
+
+#define USB_CTRL_BUF 1024
+
+typedef struct usb_dev_t usb_dev_t;
+
+typedef struct usb_packet_t {
+    uint8_t  pid;
+    uint8_t  ep;
+    uint8_t  toggle; /* OUT/SETUP: DATA PID sent; IN: DATA PID the host expects */
+    uint8_t *data;
+    int      len;    /* OUT/SETUP: bytes sent; IN: bytes the host accepts */
+    int      actual; /* IN: bytes received */
+} usb_packet_t;
+
+typedef struct usb_dev_ops_t {
+    /* Class/vendor request, and standard requests to an interface the core
+       does not know. Returns the Data-IN length, 0, or USB_DATA_STALL. */
+    int (*control)(usb_dev_t *dev, const uint8_t *setup, uint8_t *data);
+    /* Next packet for IN endpoint ep, at most maxlen bytes, or USB_DATA_NAK/STALL. */
+    int (*data_in)(usb_dev_t *dev, int ep, uint8_t *buf, int maxlen);
+    /* OUT data for endpoint ep. Returns 0, USB_DATA_NAK or USB_DATA_STALL. */
+    int (*data_out)(usb_dev_t *dev, int ep, const uint8_t *buf, int len);
+    void (*reset)(usb_dev_t *dev);
+    void (*configured)(usb_dev_t *dev, int config);
+} usb_dev_ops_t;
+
+typedef struct usb_ep_t {
+    uint16_t mps;
+    uint8_t  type;      /* bmAttributes transfer type: 0 control, 1 iso, 2 bulk, 3 interrupt */
+    uint8_t  present;
+    uint8_t  toggle;
+    uint8_t  halt;
+    uint8_t  pending;   /* IN packet sent but not yet ACKed: resent unchanged */
+    int      pend_len;
+    uint8_t  pend_buf[64];
+} usb_ep_t;
+
+struct usb_dev_t {
+    const char           *name;
+    int                   low_speed;
+    const uint8_t        *dev_desc;
+    const uint8_t        *cfg_desc;
+    int                   cfg_len;
+    const char *const    *strings; /* string descriptor 1..n_strings */
+    int                   n_strings;
+    const usb_dev_ops_t  *ops;
+    void                 *priv;
+
+    /* Chapter 9 state. */
+    uint8_t               powered_reset; /* has seen a bus reset since attach */
+    uint8_t               addr;
+    uint8_t               new_addr;
+    uint8_t               set_addr;
+    uint8_t               config;
+    uint8_t               remote_wakeup;
+
+    usb_ep_t              ep_in[16];
+    usb_ep_t              ep_out[16];
+
+    /* Default control pipe. */
+    uint8_t               ctl_stage;
+    uint8_t               ctl_setup[8];
+    uint8_t               ctl_buf[USB_CTRL_BUF];
+    int                   ctl_len;
+    int                   ctl_pos;
+    int                   ctl_zlp;
+
+    /* Root hub port the device sits on, set by the host controller. */
+    void                 *port;
+};
+
+extern void usb_dev_init(usb_dev_t *dev);
+extern void usb_dev_bus_reset(usb_dev_t *dev);
+extern int  usb_dev_packet(usb_dev_t *dev, usb_packet_t *p);
+
+/* Attach to the first free root-hub port of any USB host controller. */
+extern int  usb_attach(usb_dev_t *dev);
+extern void usb_detach(usb_dev_t *dev);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /*EMU_USB_DEV_H*/

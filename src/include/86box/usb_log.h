@@ -46,6 +46,10 @@ extern int usb_log_mask;
 extern void usb_log_open(void);
 extern void usb_log_close(void);
 extern void usb_log_line(int layer, int frame, const char *fmt, ...);
+/* One usbmon record: type 'S' (host to device) or 'C' (completion),
+   xfer 0 iso, 1 interrupt, 2 control, 3 bulk; setup is 8 bytes or NULL. */
+extern void usb_log_pcap(uint64_t id, char type, int xfer, int ep_in, int ep, int bus, int addr,
+                         int status, const uint8_t *setup, const uint8_t *data, int len);
 
 /* frame < 0 when the controller has no frame number to report. */
 #    define usb_trace(layer, frame, ...)                   \
@@ -56,6 +60,7 @@ extern void usb_log_line(int layer, int frame, const char *fmt, ...);
 #else
 #    define usb_log_open()
 #    define usb_log_close()
+#    define usb_log_pcap(...)
 #    define usb_trace(layer, frame, ...) \
         do {                             \
         } while (0)

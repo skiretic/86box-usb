@@ -325,6 +325,10 @@ struct ohci_t {
     uint8_t     di_count;   /* Done Queue Interrupt Counter, 7 = no writeback due */
     void      (*set_irq)(void *priv, int level);
     void       *irq_priv;
+    void      (*set_smi)(void *priv, int level);
+    void       *smi_priv;
+    uint8_t     int_level; /* the INT and SMI outputs as last driven */
+    uint8_t     smi_level;
     /* Legacy support (Appendix B): the registers only, no 60h/64h decode. */
     uint32_t    hce_control;
     uint8_t     hce_input;
@@ -1393,6 +1397,34 @@ usb_detach(usb_dev_t *udev)
     udev->port = NULL;
 }
 
+/* The INT and SMI outputs (p119, p121): an enabled status bit with MIE set
+   requests an interrupt, on INT with InterruptRouting clear and on SMI with
+   it set; OwnershipChange goes to SMI only. */
+static void
+ohci_update_irq(ohci_t *dev)
+{
+    uint32_t pending = (dev->inten & OHCI_INT_MIE) ? (dev->intsts & dev->inten & OHCI_INT_ALL) : 0;
+    uint8_t  req     = !!(pending & ~OHCI_INT_OC);
+    uint8_t  ir      = !!(dev->control & OHCI_CTL_IR);
+    uint8_t  int_lvl = req && !ir;
+    uint8_t  smi_lvl = (req && ir) || !!(pending & OHCI_INT_OC);
+
+    if (int_lvl != dev->int_level) {
+        dev->int_level = int_lvl;
+        usb_trace(USB_LOG_IRQ, dev->fm_number, "OHCI INT %s (HcInterruptStatus %08x HcInterruptEnable %08x)%s",
+                  int_lvl ? "assert" : "deassert", dev->intsts, dev->inten, dev->set_irq ? "" : ", no route");
+        if (dev->set_irq != NULL)
+            dev->set_irq(dev->irq_priv, int_lvl);
+    }
+    if (smi_lvl != dev->smi_level) {
+        dev->smi_level = smi_lvl;
+        usb_trace(USB_LOG_IRQ, dev->fm_number, "OHCI SMI %s (HcInterruptStatus %08x HcInterruptEnable %08x IR %i)%s",
+                  smi_lvl ? "assert" : "deassert", dev->intsts, dev->inten, ir, dev->set_smi ? "" : ", no route");
+        if (dev->set_smi != NULL)
+            dev->set_smi(dev->smi_priv, smi_lvl);
+    }
+}
+
 static void
 ohci_port_trace(const ohci_port_t *p, const char *what)
 {
@@ -1564,6 +1596,7 @@ ohci_port_timer(void *priv)
         default:
             break;
     }
+    ohci_update_irq(p->hc);
 }
 
 static void
@@ -1697,6 +1730,7 @@ ohci_port_attach(ohci_port_t *p, usb_dev_t *udev)
     udev->bus  = p->hc->bus;
     usb_trace(USB_LOG_REG, -1, "OHCI port %i: %s attached", p->num, udev->name);
     ohci_port_detect(p);
+    ohci_update_irq(p->hc);
 }
 
 /* A disconnect clears CCS and the port state; losing PES is a hardware
@@ -1713,6 +1747,7 @@ ohci_port_detach(ohci_port_t *p)
     }
     usb_trace(USB_LOG_REG, -1, "OHCI port %i: %s detached, HcRhPortStatus %08x", p->num, p->usb->name, p->sts);
     p->usb = NULL;
+    ohci_update_irq(p->hc);
 }
 
 enum {
@@ -2372,6 +2407,7 @@ ohci_frame_boundary(void *priv)
     ohci_done_writeback(dev);
 
     ohci_run_frame(dev);
+    ohci_update_irq(dev);
 }
 
 /* HCR (p126): the operational registers go to their reset values, FI to
@@ -2670,6 +2706,8 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
             /* Read-only registers and the rest of the window take no write. */
             break;
     }
+
+    ohci_update_irq(dev);
 }
 
 static uint8_t
@@ -2775,6 +2813,13 @@ ohci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *p
 }
 
 void
+ohci_set_smi_handler(usb_t *dev, void (*set_smi)(void *priv, int level), void *priv)
+{
+    dev->ohci->set_smi  = set_smi;
+    dev->ohci->smi_priv = priv;
+}
+
+void
 ohci_set_bus_master(usb_t *dev, int enable)
 {
     dev->ohci->bus_master = !!enable;
@@ -2793,6 +2838,7 @@ usb_reset(void *priv)
 
     ohci_hard_reset(dev->ohci);
     dev->ohci->bus_master = 0;
+    ohci_update_irq(dev->ohci);
 
     if (dev->uhci_enable && (dev->uhci_io_base != 0x0000))
         io_removehandler(dev->uhci_io_base, 0x20, uhci_inb, uhci_inw, uhci_inl, uhci_outb, uhci_outw, uhci_outl, dev->uhci);

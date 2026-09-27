@@ -58,6 +58,8 @@ extern void uhci_set_bus_master(usb_t *dev, int enable);
 extern void ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3, int enable);
 /* The chipset routes the OHCI interrupt; level is the controller's INT output. */
 extern void ohci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *priv);
+/* The chipset takes the OHCI's SMI output; level is the SMI pin. */
+extern void ohci_set_smi_handler(usb_t *dev, void (*set_smi)(void *priv, int level), void *priv);
 /* PCICMD Bus Master Enable: with it clear the OHCI makes no memory accesses. */
 extern void ohci_set_bus_master(usb_t *dev, int enable);
 

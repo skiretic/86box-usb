@@ -200,6 +200,10 @@ plat_get_string(int i)
             return "%s: Virtual console already in use by %s";
         case STRING_CHARDEV_TERMINAL_ERROR:
             return "%s: Could not create terminal: %s";
+        case STRING_USB_NO_PORT:
+            return "%s was not connected: every USB port of this machine is in use.";
+        case STRING_USB_NO_CONTROLLER:
+            return "%s was not connected: this machine has no USB controller that can take devices.";
     }
     return "";
 }

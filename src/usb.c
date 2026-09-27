@@ -587,8 +587,9 @@ uhci_run_frame(uhci_t *dev)
         }
 
         /* Debug mode stops after each executed TD (s2.1.1.1). A babble ends
-           the frame, so that step resumes at nothing until the next frame. */
-        if ((dev->cmd & UHCI_CMD_SWDBG) && (r != TD_INACTIVE)) {
+           the frame, so that step resumes at nothing until the next frame.
+           A TD not started for lack of time was not executed. */
+        if ((dev->cmd & UHCI_CMD_SWDBG) && (r != TD_INACTIVE) && (r != TD_NO_TIME)) {
             dev->dbg_link   = (r == TD_END_FRAME) ? UHCI_LP_T : link;
             dev->dbg_left   = left;
             dev->dbg_resume = 1;

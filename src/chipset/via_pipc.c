@@ -335,6 +335,67 @@ pipc_usb1_irq(void *priv, int level)
     pipc_usb_irq((pipc_t *) priv, 1, level);
 }
 
+/* One UHCI function's configuration space at its defaults, as at power-on
+   and on PCIRST#; LEGSUP back at 2000h disarms the keyboard traps. */
+static void
+pipc_usb_reset_regs(pipc_t *dev, int i)
+{
+    memset(dev->usb_regs[i], 0, 256);
+
+    dev->usb_regs[i][0x00] = 0x06;
+    dev->usb_regs[i][0x01] = 0x11;
+    dev->usb_regs[i][0x02] = 0x38;
+    dev->usb_regs[i][0x03] = 0x30;
+    dev->usb_regs[i][0x04] = 0x00;
+    dev->usb_regs[i][0x05] = 0x00;
+    dev->usb_regs[i][0x06] = 0x00;
+    dev->usb_regs[i][0x07] = 0x02;
+    switch (dev->local) {
+        case VIA_PIPC_586A:
+        case VIA_PIPC_586B:
+        case VIA_PIPC_596A:
+            dev->usb_regs[i][0x08] = 0x02;
+            break;
+
+        case VIA_PIPC_596B:
+            dev->usb_regs[i][0x08] = 0x08;
+            break;
+
+        case VIA_PIPC_686A:
+            dev->usb_regs[i][0x08] = 0x06;
+            break;
+
+        case VIA_PIPC_686B:
+            dev->usb_regs[i][0x08] = 0x1a;
+            break;
+
+        case VIA_PIPC_8231:
+            dev->usb_regs[i][0x08] = 0x1e;
+            break;
+        default:
+            break;
+    }
+
+    dev->usb_regs[i][0x0a] = 0x03;
+    dev->usb_regs[i][0x0b] = 0x0c;
+    dev->usb_regs[i][0x0d] = 0x16;
+    dev->usb_regs[i][0x20] = 0x01;
+    dev->usb_regs[i][0x21] = 0x03;
+    if (dev->local == VIA_PIPC_686B)
+        dev->usb_regs[i][0x34] = 0x80;
+    dev->usb_regs[i][0x3d] = 0x04;
+
+    dev->usb_regs[i][0x60] = 0x10;
+    if (dev->local >= VIA_PIPC_686A) {
+        dev->usb_regs[i][0x80] = 0x01;
+        dev->usb_regs[i][0x82] = 0x02;
+    }
+    dev->usb_regs[i][0xc1] = 0x20;
+    dev->usb_smi_level[i]  = 0;
+    pipc_usb_update_irq(dev, i);
+    pipc_usb_update_legacy(dev, i);
+}
+
 static void
 pipc_reset_hard(void *priv)
 {
@@ -446,58 +507,7 @@ pipc_reset_hard(void *priv)
     /* USB registers. */
     for (i = 0; i <= (dev->local >= VIA_PIPC_686A); i++) {
         dev->max_func++;
-        dev->usb_regs[i][0x00] = 0x06;
-        dev->usb_regs[i][0x01] = 0x11;
-        dev->usb_regs[i][0x02] = 0x38;
-        dev->usb_regs[i][0x03] = 0x30;
-        dev->usb_regs[i][0x04] = 0x00;
-        dev->usb_regs[i][0x05] = 0x00;
-        dev->usb_regs[i][0x06] = 0x00;
-        dev->usb_regs[i][0x07] = 0x02;
-        switch (dev->local) {
-            case VIA_PIPC_586A:
-            case VIA_PIPC_586B:
-            case VIA_PIPC_596A:
-                dev->usb_regs[i][0x08] = 0x02;
-                break;
-
-            case VIA_PIPC_596B:
-                dev->usb_regs[i][0x08] = 0x08;
-                break;
-
-            case VIA_PIPC_686A:
-                dev->usb_regs[i][0x08] = 0x06;
-                break;
-
-            case VIA_PIPC_686B:
-                dev->usb_regs[i][0x08] = 0x1a;
-                break;
-
-            case VIA_PIPC_8231:
-                dev->usb_regs[i][0x08] = 0x1e;
-                break;
-            default:
-                break;
-        }
-
-        dev->usb_regs[i][0x0a] = 0x03;
-        dev->usb_regs[i][0x0b] = 0x0c;
-        dev->usb_regs[i][0x0d] = 0x16;
-        dev->usb_regs[i][0x20] = 0x01;
-        dev->usb_regs[i][0x21] = 0x03;
-        if (dev->local == VIA_PIPC_686B)
-            dev->usb_regs[i][0x34] = 0x80;
-        dev->usb_regs[i][0x3d] = 0x04;
-
-        dev->usb_regs[i][0x60] = 0x10;
-        if (dev->local >= VIA_PIPC_686A) {
-            dev->usb_regs[i][0x80] = 0x01;
-            dev->usb_regs[i][0x82] = 0x02;
-        }
-        dev->usb_regs[i][0xc1] = 0x20;
-        dev->usb_smi_level[i]  = 0;
-        pipc_usb_update_irq(dev, i);
-        pipc_usb_update_legacy(dev, i);
+        pipc_usb_reset_regs(dev, i);
     }
     pipc_usb_update_kbc_claim(dev);
 
@@ -1870,6 +1880,12 @@ pipc_reset(void *priv)
         pipc_write(0, 0x44, 1, 0x00, priv);
 
     pipc_write(0, 0x77, 1, 0x00, priv);
+
+    for (int i = 0; i <= (dev->local >= VIA_PIPC_686A); i++) {
+        pipc_usb_reset_regs(dev, i);
+        usb_update_io_mapping(dev, i + 2);
+    }
+    pipc_usb_update_kbc_claim(dev);
 
     sff_set_slot(dev->bm[0], dev->pci_slot);
     sff_set_slot(dev->bm[1], dev->pci_slot);

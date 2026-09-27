@@ -59,6 +59,7 @@ typedef struct ali1543_t {
     uint8_t usb_slot;
     uint8_t pmu_slot;
     uint8_t usb_dev_enable;
+    uint8_t usb_irq_level; /* the M5237's INT output */
     uint8_t ide_dev_enable;
     uint8_t pmu_dev_enable;
     uint8_t type;
@@ -110,6 +111,40 @@ static void ali5229_write(int func, int addr, int len, uint8_t val, void *priv);
 
 static void    ali7101_write(int func, int addr, int len, uint8_t val, void *priv);
 static uint8_t ali7101_read(int func, int addr, int len, void *priv);
+
+/* The M5237's INTAJ reaches the 8259 through 74h (ALi-C p80): bits 3:0 pick
+   the IRQ, bit 4 turns the level into an edge. MIRQ4 stands in for it. */
+static void
+ali5237_drive_irq(ali1543_t *dev, int set)
+{
+    if (set)
+        pci_set_mirq(PCI_MIRQ4, pci_get_mirq_level(PCI_MIRQ4), &dev->mirq_states[4]);
+    else
+        pci_clear_mirq(PCI_MIRQ4, pci_get_mirq_level(PCI_MIRQ4), &dev->mirq_states[4]);
+}
+
+static void
+ali5237_irq(void *priv, int level)
+{
+    ali1543_t *dev = (ali1543_t *) priv;
+
+    dev->usb_irq_level = !!level;
+    ali5237_drive_irq(dev, dev->usb_irq_level);
+}
+
+/* The OHCI's SMI output sets M7101 USB Bus SMI Status, 4Ah bit 5 (ALi-C
+   p133), which has no enable of its own; 77h bit 3 gates the SMI (p144). */
+static void
+ali5237_smi(void *priv, int level)
+{
+    ali1543_t *dev = (ali1543_t *) priv;
+
+    if (!level)
+        return;
+    dev->pmu_conf[0x4a] |= 0x20;
+    if (dev->pmu_conf[0x77] & 0x08)
+        smi_raise();
+}
 
 static void
 ali1533_write(int func, int addr, int len, uint8_t val, void *priv)
@@ -404,10 +439,14 @@ ali1533_write(int func, int addr, int len, uint8_t val, void *priv)
             break;
 
         case 0x74: /* USB IRQ Routing - we cheat and use MIRQ4 */
+            /* A line held high moves to the new route and trigger mode. */
+            if (dev->usb_irq_level)
+                ali5237_drive_irq(dev, 0);
             dev->pci_conf[addr] = val & 0xdf;
-            /* TODO: MIRQ level/edge control - if bit 4 = 1, it's level */
             pci_set_mirq_level(PCI_MIRQ4, !(val & 0x10));
             pci_set_mirq_routing(PCI_MIRQ4, ali1533_irq_routing[val & 0x0f]);
+            if (dev->usb_irq_level)
+                ali5237_drive_irq(dev, 1);
             break;
 
         case 0x75: /* Set IRQ Line for Secondary IDE if it's on native mode */
@@ -916,7 +955,9 @@ ali5237_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
     switch (addr) {
         case 0x04: /* USB Enable */
             dev->usb_conf[addr] = val & 0x5f;
-            ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13], dev->usb_conf[0x04] & 1);
+            /* Memory Space is bit 1, PCI Master bit 2 (ALi-C p117). */
+            ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13], dev->usb_conf[0x04] & 2);
+            ohci_set_bus_master(dev->usb, dev->usb_conf[0x04] & 4);
             break;
 
         case 0x05:
@@ -947,12 +988,12 @@ ali5237_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
         /* USB Base I/O */
         case 0x11:
             dev->usb_conf[addr] = val & 0xf0;
-            ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13], dev->usb_conf[0x04] & 1);
+            ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13], dev->usb_conf[0x04] & 2);
             break;
         case 0x12:
         case 0x13:
             dev->usb_conf[addr] = val;
-            ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13], dev->usb_conf[0x04] & 1);
+            ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13], dev->usb_conf[0x04] & 2);
             break;
 
         case 0x2c: /* Subsystem Vendor ID */
@@ -1664,6 +1705,8 @@ ali1543_init(const device_t *info)
 
     /* USB */
     dev->usb = device_add(&usb_device);
+    ohci_set_irq_handler(dev->usb, ali5237_irq, dev);
+    ohci_set_smi_handler(dev->usb, ali5237_smi, dev);
 
     dev->type   = info->local & 0xff;
     dev->offset = (info->local >> 8) & 0x7f;

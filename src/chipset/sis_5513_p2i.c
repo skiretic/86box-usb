@@ -417,6 +417,8 @@ sis_5513_01_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
         case 0x68: /* USBIRQ Remapping Control Register */
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val & 0xcf;
+            /* Bit 6 enables the integrated USB function (SiS71 p61). */
+            dev->sis->usb_enabled = !!(val & 0x40);
             sis_5513_usbirq_remap(dev, val);
             break;
 
@@ -1090,6 +1092,8 @@ sis_5513_01_pci_to_isa_reset(sis_5513_pci_to_isa_t *dev)
 
     pci_set_mirq_routing(PCI_MIRQ1, PCI_IRQ_DISABLED);
     pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
+
+    dev->sis->usb_enabled = 0;
 }
 
 static void

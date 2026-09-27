@@ -319,12 +319,18 @@ uhci_find_device(uhci_t *dev, int addr, int low_speed)
     for (int i = 0; i < UHCI_PORTS; i++) {
         const uhci_port_t *port = &dev->port[i];
 
+        usb_dev_t         *usb;
+
         /* Only an enabled, unsuspended port carries traffic, and a low-speed
-           token only reaches a low-speed device. */
+           token only reaches a low-speed device. On a port with a full-speed
+           hub it goes out behind a preamble (s3.2.2 bit 26) for the hub to
+           repeat to its low-speed ports. */
         if ((port->usb == NULL) || !(port->sc & UHCI_PORT_PE) || (port->sc & (UHCI_PORT_SUSP | UHCI_PORT_PR)))
             continue;
         if ((port->usb->addr == addr) && (port->usb->low_speed == low_speed))
             return port->usb;
+        if ((port->usb->ops->route != NULL) && ((usb = port->usb->ops->route(port->usb, addr, low_speed)) != NULL))
+            return usb;
     }
 
     return NULL;
@@ -1075,6 +1081,21 @@ usb_attach(usb_dev_t *udev)
         }
     }
 
+    /* Root ports full: a hub on one of them takes the device. */
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+
+        if ((hc == NULL) || (hc->set_irq == NULL))
+            continue;
+
+        for (int i = 0; i < UHCI_PORTS; i++) {
+            usb_dev_t *hub = hc->port[i].usb;
+
+            if ((hub != NULL) && (hub->ops->attach != NULL) && hub->ops->attach(hub, udev))
+                return 1;
+        }
+    }
+
     snprintf(msg, sizeof(msg), plat_get_string(wired ? STRING_USB_NO_PORT : STRING_USB_NO_CONTROLLER), udev->name);
     pclog("USB: %s\n", msg);
     ui_msgbox_header(MBX_WARNING, NULL, msg);
@@ -1086,6 +1107,11 @@ usb_attach(usb_dev_t *udev)
 void
 usb_detach(usb_dev_t *udev)
 {
+    if (udev->parent != NULL) {
+        udev->parent->ops->detach(udev->parent, udev);
+        return;
+    }
+
     for (int h = 0; h < USB_MAX_HC; h++) {
         uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
 

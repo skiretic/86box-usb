@@ -38,6 +38,15 @@ extern const device_t usb_device;
 extern const device_t usb_msd_device;
 /* A USB speaker, listed with the sound cards. */
 extern const device_t usb_speaker_device;
+/* USB hubs, listed on the Ports page; usb_hub_type 0 is none. */
+extern const device_t usb_hub_4port_device;
+extern int            usb_hub_type;
+
+extern int             usb_hub_get_ndev(void);
+extern const device_t *usb_hub_get_device(int hub);
+extern const char     *usb_hub_get_internal_name(int hub);
+extern int             usb_hub_get_from_internal_name(const char *s);
+extern void            usb_hub_reset(void);
 
 /* Functions. */
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);

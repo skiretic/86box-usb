@@ -94,6 +94,7 @@
 #include <86box/thread.h>
 #include <86box/network.h>
 #include <86box/sound.h>
+#include <86box/usb.h>
 #include <86box/midi.h>
 #include <86box/video.h>
 #include <86box/ui.h>
@@ -1821,6 +1822,9 @@ pc_reset_hard_init(void)
      * For now, we will call their reset functions here, but
      * that will be a call to device_reset_all() later !
      */
+
+    /* A USB hub goes on before any other USB device attaches. */
+    usb_hub_reset();
 
     /* Reset and reconfigure the Sound Card layer. */
     sound_card_reset();

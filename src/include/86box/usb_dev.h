@@ -65,6 +65,12 @@ typedef struct usb_dev_ops_t {
     void (*configured)(usb_dev_t *dev, int config);
     /* SET_INTERFACE selected alternate setting alt of interface intf. */
     void (*set_interface)(usb_dev_t *dev, int intf, int alt);
+    /* Hubs only. route: the device behind the hub that a token for addr at
+       this speed reaches, or NULL. attach: take udev on a free downstream
+       port, 1 if it did. detach: udev leaves its port on this hub. */
+    usb_dev_t *(*route)(usb_dev_t *dev, int addr, int low_speed);
+    int (*attach)(usb_dev_t *dev, usb_dev_t *udev);
+    void (*detach)(usb_dev_t *dev, usb_dev_t *udev);
 } usb_dev_ops_t;
 
 #define USB_DEV_INTERFACES 16
@@ -113,8 +119,10 @@ struct usb_dev_t {
     int                   ctl_zlp;
     uint64_t              ctl_urb; /* debug pcap: open control URB id, 0 = none */
 
-    /* Root hub port the device sits on and its bus number, set by the host controller. */
+    /* Port the device sits on and its bus number, set by the host controller
+       or the hub; parent is that hub, NULL on a root hub port. */
     void                 *port;
+    usb_dev_t            *parent;
     int                   bus;
 };
 
@@ -122,7 +130,8 @@ extern void usb_dev_init(usb_dev_t *dev);
 extern void usb_dev_bus_reset(usb_dev_t *dev);
 extern int  usb_dev_packet(usb_dev_t *dev, usb_packet_t *p);
 
-/* Attach to the first free root-hub port of any USB host controller. */
+/* Attach to the first free root-hub port of any USB host controller, else
+   to the first free port of a hub on one. */
 extern int  usb_attach(usb_dev_t *dev);
 extern void usb_detach(usb_dev_t *dev);
 

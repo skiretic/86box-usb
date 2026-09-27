@@ -29,6 +29,8 @@ extern "C" {
 #include <86box/scsi_tape.h>
 #include <86box/serial.h>
 #include <86box/char.h>
+#include <86box/mem.h>
+#include <86box/usb.h>
 }
 
 #include "qt_deviceconfig.hpp"
@@ -95,6 +97,7 @@ SettingsPorts::changed()
     int soft_changed = 0;
 
     has_changed |= (jumpered_internal_ecp_dma != ui->comboBoxLptECPDMA->currentData().toInt());
+    has_changed |= (usb_hub_type != ui->comboBoxUsbHub->currentData().toInt());
 
     for (int i = 0; i < PARALLEL_MAX; i++) {
         auto *checkBox = findChild<QCheckBox *>(QString("checkBoxParallel%1").arg(i + 1));
@@ -168,6 +171,7 @@ SettingsPorts::save(int soft)
         return;
 
     jumpered_internal_ecp_dma = ui->comboBoxLptECPDMA->currentData().toInt();
+    usb_hub_type              = ui->comboBoxUsbHub->currentData().toInt();
 }
 
 /* The character devices, for the parallel and serial port lists alike. */
@@ -331,6 +335,28 @@ SettingsPorts::onCurrentMachineChanged(int machineId)
             }
         }
     }
+
+    // USB hub
+    auto *usbHubModel   = ui->comboBoxUsbHub->model();
+    auto  removeRowsHub = usbHubModel->rowCount();
+
+    selectedRow = 0;
+    Models::Batch usbHubRows(usbHubModel);
+    for (int i = 0; i < usb_hub_get_ndev(); ++i) {
+        const device_t *dev = usb_hub_get_device(i);
+
+        if (device_is_valid(dev, machineId) == 0)
+            continue;
+
+        int row = usbHubRows.add(DeviceConfig::DeviceName(dev, usb_hub_get_internal_name(i), 0), i);
+        if (i == usb_hub_type)
+            selectedRow = row - removeRowsHub;
+    }
+    usbHubRows.commit();
+    usbHubModel->removeRows(0, removeRowsHub);
+    ui->comboBoxUsbHub->setEnabled(usbHubModel->rowCount() > 1);
+    ui->comboBoxUsbHub->setCurrentIndex(-1);
+    ui->comboBoxUsbHub->setCurrentIndex(selectedRow);
 }
 
 void

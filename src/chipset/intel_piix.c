@@ -611,6 +611,19 @@ piix_usb_irq(void *priv, int level)
     piix_usb_update_irq(dev);
 }
 
+/* The SLC90E66's OHCI interrupts on nPIRQD (SMSC p24), with no enable of
+   its own. */
+static void
+slc90e66_usb_irq(void *priv, int level)
+{
+    piix_t *dev = (piix_t *) priv;
+
+    if (level)
+        pci_set_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+    else
+        pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+}
+
 static void
 piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 {
@@ -1117,6 +1130,8 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 if (dev->type > 4) {
                     fregs[0x04] = (val & 7);
                     ohci_update_mem_mapping(dev->usb, fregs[0x11], fregs[0x12], fregs[0x13], fregs[PCI_REG_COMMAND] & PCI_COMMAND_MEM);
+                    /* Bus Master Enable is bit 2 (SMSC p98). */
+                    ohci_set_bus_master(dev->usb, fregs[PCI_REG_COMMAND] & PCI_COMMAND_L_BM);
                 } else {
                     fregs[0x04] = (val & 5);
                     uhci_update_io_mapping(dev->usb, fregs[0x20] & ~0x1f, fregs[0x21], fregs[PCI_REG_COMMAND] & PCI_COMMAND_IO);
@@ -1148,14 +1163,14 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             case 0x11:
                 if (dev->type > 4) {
                     fregs[addr] = val & 0xf0;
-                    ohci_update_mem_mapping(dev->usb, fregs[0x11], fregs[0x12], fregs[0x13], 1 /*fregs[PCI_REG_COMMAND] & PCI_COMMAND_MEM*/);
+                    ohci_update_mem_mapping(dev->usb, fregs[0x11], fregs[0x12], fregs[0x13], fregs[PCI_REG_COMMAND] & PCI_COMMAND_MEM);
                 }
                 break;
             case 0x12:
             case 0x13:
                 if (dev->type > 4) {
                     fregs[addr] = val;
-                    ohci_update_mem_mapping(dev->usb, fregs[0x11], fregs[0x12], fregs[0x13], 1 /*fregs[PCI_REG_COMMAND] & PCI_COMMAND_MEM*/);
+                    ohci_update_mem_mapping(dev->usb, fregs[0x11], fregs[0x12], fregs[0x13], fregs[PCI_REG_COMMAND] & PCI_COMMAND_MEM);
                 }
                 break;
             case 0x20:
@@ -1764,6 +1779,8 @@ piix_init(const device_t *info)
         dev->usb   = device_add(&usb_device);
         if (dev->type <= 4)
             uhci_set_irq_handler(dev->usb, piix_usb_irq, dev);
+        else
+            ohci_set_irq_handler(dev->usb, slc90e66_usb_irq, dev);
     }
 
     if (dev->type > 3) {

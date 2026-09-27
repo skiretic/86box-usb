@@ -164,6 +164,27 @@ uhci_reg_name(uint16_t off)
             return "reserved";
     }
 }
+
+static const char *
+ohci_reg_name(uint32_t off)
+{
+    static const char *const names[] = {
+        "HcRevision", "HcControl", "HcCommandStatus", "HcInterruptStatus",
+        "HcInterruptEnable", "HcInterruptDisable", "HcHCCA", "HcPeriodCurrentED",
+        "HcControlHeadED", "HcControlCurrentED", "HcBulkHeadED", "HcBulkCurrentED",
+        "HcDoneHead", "HcFmInterval", "HcFmRemaining", "HcFmNumber",
+        "HcPeriodicStart", "HcLSThreshold", "HcRhDescriptorA", "HcRhDescriptorB",
+        "HcRhStatus", "HcRhPortStatus1", "HcRhPortStatus2", "HcRhPortStatus3"
+    };
+    static const char *const legacy[] = { "HceControl", "HceInput", "HceOutput", "HceStatus" };
+
+    off &= 0xffc;
+    if (off < (sizeof(names) / sizeof(names[0])) * 4)
+        return names[off >> 2];
+    if ((off >= 0x100) && (off < 0x110))
+        return legacy[(off - 0x100) >> 2];
+    return "reserved";
+}
 #endif
 
 static void
@@ -1179,6 +1200,9 @@ ohci_mmio_write(uint32_t addr, uint8_t val, void *priv)
                 dev->ohci_mmio[0x0f] = 0x40;
                 if ((dev->ohci_mmio[0x13] & 0xc0) == 0xc0)
                     smi_raise();
+                usb_trace(USB_LOG_IRQ, -1, "OHCI OwnershipChangeRequest: HcInterruptStatus.OC set, SMI %s (HcInterruptEnable %08x)",
+                          ((dev->ohci_mmio[0x13] & 0xc0) == 0xc0) ? "raised" : "not raised (MIE and OCE not both set)",
+                          dev->ohci_mmio[0x10] | (dev->ohci_mmio[0x11] << 8) | (dev->ohci_mmio[0x12] << 16) | ((uint32_t) dev->ohci_mmio[0x13] << 24));
             }
 
             /* bit HostControllerReset must be cleared for the controller to be seen as initialized */
@@ -1188,6 +1212,7 @@ ohci_mmio_write(uint32_t addr, uint8_t val, void *priv)
                 dev->ohci_mmio[0x01] = 0x01;
                 dev->ohci_mmio[0x48] = 0x02;
                 val &= ~0x01;
+                usb_trace(USB_LOG_REG, -1, "OHCI HostControllerReset: every register back to its stub default");
             }
             break;
         case 0x0c:
@@ -1361,6 +1386,67 @@ ohci_mmio_write(uint32_t addr, uint8_t val, void *priv)
     dev->ohci_mmio[addr] = val;
 }
 
+/* Wider accesses make the byte calls in the order the mem.c fallback did,
+   so the stub behaves as before; they exist to log each access once. */
+static uint8_t
+ohci_mmio_readb(uint32_t addr, void *priv)
+{
+    uint8_t ret = ohci_mmio_read(addr, priv);
+
+    usb_trace(USB_LOG_REG, -1, "R8  +%03x %-18s = %02x", addr & 0xfff, ohci_reg_name(addr), ret);
+
+    return ret;
+}
+
+static uint16_t
+ohci_mmio_readw(uint32_t addr, void *priv)
+{
+    uint16_t ret = ohci_mmio_read(addr, priv);
+
+    ret |= ohci_mmio_read(addr + 1, priv) << 8;
+    usb_trace(USB_LOG_REG, -1, "R16 +%03x %-18s = %04x", addr & 0xfff, ohci_reg_name(addr), ret);
+
+    return ret;
+}
+
+static uint32_t
+ohci_mmio_readl(uint32_t addr, void *priv)
+{
+    uint32_t ret = ohci_mmio_read(addr, priv);
+
+    ret |= ohci_mmio_read(addr + 1, priv) << 8;
+    ret |= ohci_mmio_read(addr + 2, priv) << 16;
+    ret |= (uint32_t) ohci_mmio_read(addr + 3, priv) << 24;
+    usb_trace(USB_LOG_REG, -1, "R32 +%03x %-18s = %08x", addr & 0xfff, ohci_reg_name(addr), ret);
+
+    return ret;
+}
+
+static void
+ohci_mmio_writeb(uint32_t addr, uint8_t val, void *priv)
+{
+    usb_trace(USB_LOG_REG, -1, "W8  +%03x %-18s <- %02x", addr & 0xfff, ohci_reg_name(addr), val);
+    ohci_mmio_write(addr, val, priv);
+}
+
+static void
+ohci_mmio_writew(uint32_t addr, uint16_t val, void *priv)
+{
+    usb_trace(USB_LOG_REG, -1, "W16 +%03x %-18s <- %04x", addr & 0xfff, ohci_reg_name(addr), val);
+    ohci_mmio_write(addr, val, priv);
+    ohci_mmio_write(addr + 1, val >> 8, priv);
+}
+
+static void
+ohci_mmio_writel(uint32_t addr, uint32_t val, void *priv)
+{
+    usb_trace(USB_LOG_REG, -1, "W32 +%03x %-18s <- %08x", addr & 0xfff, ohci_reg_name(addr), val);
+    ohci_mmio_write(addr, val, priv);
+    ohci_mmio_write(addr + 1, val >> 8, priv);
+    ohci_mmio_write(addr + 2, val >> 16, priv);
+    ohci_mmio_write(addr + 3, val >> 24, priv);
+}
+
 void
 ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3, int enable)
 {
@@ -1372,6 +1458,8 @@ ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3,
 
     if (dev->ohci_enable && (dev->ohci_mem_base != 0x00000000))
         mem_mapping_set_addr(&dev->ohci_mmio_mapping, dev->ohci_mem_base, 0x1000);
+
+    usb_trace(USB_LOG_REG, -1, "OHCI MMIO %08x %s", dev->ohci_mem_base, dev->ohci_enable ? "enabled" : "disabled");
 }
 
 static void
@@ -1450,8 +1538,8 @@ usb_init(UNUSED(const device_t *info))
     dev->ohci_mmio[0x48] = 0x02;
 
     mem_mapping_add(&dev->ohci_mmio_mapping, 0, 0,
-                    ohci_mmio_read, NULL, NULL,
-                    ohci_mmio_write, NULL, NULL,
+                    ohci_mmio_readb, ohci_mmio_readw, ohci_mmio_readl,
+                    ohci_mmio_writeb, ohci_mmio_writew, ohci_mmio_writel,
                     NULL, MEM_MAPPING_EXTERNAL, dev);
     usb_reset(dev);
 

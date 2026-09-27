@@ -105,9 +105,11 @@ struct usb_dev_t {
     int                   ctl_len;
     int                   ctl_pos;
     int                   ctl_zlp;
+    uint64_t              ctl_urb; /* debug pcap: open control URB id, 0 = none */
 
-    /* Root hub port the device sits on, set by the host controller. */
+    /* Root hub port the device sits on and its bus number, set by the host controller. */
     void                 *port;
+    int                   bus;
 };
 
 extern void usb_dev_init(usb_dev_t *dev);

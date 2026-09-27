@@ -148,7 +148,7 @@ usb_log_line(int layer, int frame, const char *fmt, ...)
    header, then the data, all in host byte order like the global header. */
 void
 usb_log_pcap(uint64_t id, char type, int xfer, int ep_in, int ep, int bus, int addr,
-             int status, const uint8_t *setup, const uint8_t *data, int len)
+             int status, int length, const uint8_t *setup, const uint8_t *data, int len)
 {
     uint64_t us = (uint64_t) ((double) tsc * 4294967296.0 / (double) TIMER_USEC);
     struct {
@@ -177,12 +177,14 @@ usb_log_pcap(uint64_t id, char type, int xfer, int ep_in, int ep, int bus, int a
     hdr.epnum      = (ep & 0x0f) | (ep_in ? 0x80 : 0x00);
     hdr.devnum     = addr;
     hdr.busnum     = bus;
+    if (data == NULL)
+        len = 0;
     hdr.flag_setup = (setup != NULL) ? 0 : '-';
-    hdr.flag_data  = (len > 0) ? 0 : (ep_in ? '<' : '>');
+    hdr.flag_data  = (data != NULL) ? 0 : (ep_in ? '<' : '>');
     hdr.ts_sec     = us / 1000000;
     hdr.ts_usec    = us % 1000000;
     hdr.status     = status;
-    hdr.length     = len;
+    hdr.length     = length;
     hdr.len_cap    = len;
     if (setup != NULL)
         memcpy(hdr.setup, setup, 8);

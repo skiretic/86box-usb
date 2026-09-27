@@ -24,6 +24,7 @@
 #define HAVE_STDARG_H
 #include <86box/86box.h>
 #include <86box/usb_dev.h>
+#include <86box/usb_log.h>
 
 enum {
     CTL_IDLE = 0,
@@ -45,6 +46,65 @@ enum {
 
 #define FEAT_ENDPOINT_HALT        0
 #define FEAT_DEVICE_REMOTE_WAKEUP 1
+
+#ifdef ENABLE_USB_LOG
+/* usbmon status codes: -EINPROGRESS, -EPIPE, -EOVERFLOW, -ECONNRESET. */
+#    define URB_PENDING  (-115)
+#    define URB_STALL    (-32)
+#    define URB_OVERFLOW (-75)
+#    define URB_UNLINKED (-104)
+
+static const uint8_t usbmon_xfer[4] = { 2, 0, 3, 1 };
+static uint64_t      usb_dev_urb_id;
+
+/* usbmon pairs 'S' and 'C' by URB id. A control transfer is one URB: 'S'
+   carries the setup packet (and a control write's data, so that 'S' waits
+   for the Data stage), 'C' the data read and the final status. */
+static void
+usb_dev_pcap_ctl_open(usb_dev_t *dev)
+{
+    uint16_t wlength = dev->ctl_setup[6] | (dev->ctl_setup[7] << 8);
+
+    dev->ctl_urb = ++usb_dev_urb_id;
+    if ((dev->ctl_setup[0] & 0x80) || (wlength == 0))
+        usb_log_pcap(dev->ctl_urb, 'S', 2, dev->ctl_setup[0] >> 7, 0, dev->bus, dev->addr, URB_PENDING,
+                     wlength, dev->ctl_setup, NULL, 0);
+}
+
+static void
+usb_dev_pcap_ctl_close(usb_dev_t *dev, int status)
+{
+    uint16_t wlength = dev->ctl_setup[6] | (dev->ctl_setup[7] << 8);
+    int      in      = dev->ctl_setup[0] >> 7;
+
+    if (dev->ctl_urb == 0)
+        return;
+    if (!in && (wlength != 0))
+        usb_log_pcap(dev->ctl_urb, 'S', 2, 0, 0, dev->bus, dev->addr, URB_PENDING,
+                     wlength, dev->ctl_setup, dev->ctl_buf, dev->ctl_pos);
+    usb_log_pcap(dev->ctl_urb, 'C', 2, in, 0, dev->bus, dev->addr, status,
+                 dev->ctl_pos, NULL, in ? dev->ctl_buf : NULL, dev->ctl_pos);
+    dev->ctl_urb = 0;
+}
+
+/* Any other transaction is one URB of its own. */
+static void
+usb_dev_pcap_xfer(usb_dev_t *dev, const usb_packet_t *p, int status)
+{
+    int      in   = (p->pid == USB_PID_IN);
+    int      xfer = usbmon_xfer[(in ? dev->ep_in[p->ep].type : dev->ep_out[p->ep].type) & 3];
+    uint64_t id   = ++usb_dev_urb_id;
+
+    usb_log_pcap(id, 'S', xfer, in, p->ep, dev->bus, dev->addr, URB_PENDING,
+                 p->len, NULL, in ? NULL : p->data, p->len);
+    usb_log_pcap(id, 'C', xfer, in, p->ep, dev->bus, dev->addr, status,
+                 in ? p->actual : ((status == 0) ? p->len : 0), NULL, in ? p->data : NULL, p->actual);
+}
+#else
+#    define usb_dev_pcap_ctl_open(dev)
+#    define usb_dev_pcap_ctl_close(dev, status)
+#    define usb_dev_pcap_xfer(dev, p, status)
+#endif
 
 static void
 usb_dev_reset_endpoints(usb_dev_t *dev, int with_ep0)
@@ -98,6 +158,7 @@ usb_dev_init(usb_dev_t *dev)
 void
 usb_dev_bus_reset(usb_dev_t *dev)
 {
+    usb_dev_pcap_ctl_close(dev, URB_UNLINKED);
     dev->powered_reset = 1;
     dev->addr          = 0;
     dev->set_addr      = 0;
@@ -388,6 +449,7 @@ usb_dev_ctl_in_acked(usb_dev_t *dev, int len)
         else
             dev->ctl_zlp = 0;
     } else if (dev->ctl_stage == CTL_STATUS_IN) {
+        usb_dev_pcap_ctl_close(dev, 0);
         if (dev->set_addr)
             dev->addr = dev->new_addr;
         dev->set_addr  = 0;
@@ -419,6 +481,7 @@ usb_dev_ctl_out(usb_dev_t *dev, const usb_packet_t *p)
                 return USB_RET_ACK;
             ep->toggle ^= 1;
             dev->ctl_stage = CTL_IDLE;
+            usb_dev_pcap_ctl_close(dev, 0);
             return USB_RET_ACK;
 
         default:
@@ -427,8 +490,8 @@ usb_dev_ctl_out(usb_dev_t *dev, const usb_packet_t *p)
     }
 }
 
-int
-usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
+static int
+usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
 {
     int       n  = p->ep & 0x0f;
     usb_ep_t *ep;
@@ -526,4 +589,32 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
         default:
             return USB_RET_NO_RESPONSE;
     }
+}
+
+int
+usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
+{
+    int n = p->ep & 0x0f;
+    int ret;
+
+    /* A SETUP abandons whatever control transfer was still open. */
+    if ((p->pid == USB_PID_SETUP) && (n == 0) && dev->powered_reset)
+        usb_dev_pcap_ctl_close(dev, URB_UNLINKED);
+
+    ret = usb_dev_transact(dev, p);
+
+    if (p->pid == USB_PID_SETUP) {
+        if ((ret == USB_RET_ACK) && (p->len == 8))
+            usb_dev_pcap_ctl_open(dev);
+    } else if (n == 0) {
+        if (ret == USB_RET_STALL)
+            usb_dev_pcap_ctl_close(dev, URB_STALL);
+    } else if (ret == USB_RET_ACK)
+        usb_dev_pcap_xfer(dev, p, 0);
+    else if (ret == USB_RET_STALL)
+        usb_dev_pcap_xfer(dev, p, URB_STALL);
+    else if (ret == USB_RET_BABBLE)
+        usb_dev_pcap_xfer(dev, p, URB_OVERFLOW);
+
+    return ret;
 }

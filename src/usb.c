@@ -341,7 +341,6 @@ enum {
 
 #ifdef ENABLE_USB_LOG
 static const char *const uhci_ret_names[] = { "ACK", "NAK", "STALL", "timeout", "babble", "toggle mismatch" };
-static const uint8_t     usbmon_xfer[4]   = { 2, 0, 3, 1 };
 #endif
 
 static int
@@ -491,20 +490,6 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
               addr, (pid == USB_PID_IN) ? "IN" : ((pid == USB_PID_OUT) ? "OUT" : "SETUP"),
               (td[2] >> 8) & 0x7f, p.ep, p.toggle, p.len, ls ? " LS" : "",
               uhci_ret_names[ret], ctrl);
-
-#ifdef ENABLE_USB_LOG
-    if ((usb != NULL) && (ret != USB_RET_NAK)) {
-        int xfer = usbmon_xfer[((pid == USB_PID_IN) ? usb->ep_in[p.ep].type : usb->ep_out[p.ep].type) & 3];
-
-        if (pid == USB_PID_SETUP)
-            usb_log_pcap(addr, 'S', xfer, buf[0] >> 7, p.ep, dev->bus, usb->addr, -115, buf, NULL, 0);
-        else if (pid == USB_PID_OUT)
-            usb_log_pcap(addr, 'S', xfer, 0, p.ep, dev->bus, usb->addr, -115, NULL, buf, len);
-        else
-            usb_log_pcap(addr, 'C', xfer, 1, p.ep, dev->bus, usb->addr,
-                         (ret == USB_RET_STALL) ? -32 : 0, NULL, buf, (ret == USB_RET_ACK) ? p.actual : 0);
-    }
-#endif
 
     return result;
 }
@@ -1067,6 +1052,7 @@ usb_attach(usb_dev_t *udev)
             if (hc->port[i].usb == NULL) {
                 hc->port[i].usb = udev;
                 udev->port      = &hc->port[i];
+                udev->bus       = hc->bus;
                 usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s attached", i + 1, udev->name);
                 uhci_schedule_detect(hc);
                 return 1;

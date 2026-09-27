@@ -557,7 +557,9 @@ piix_usb_update_irq(piix_t *dev)
         if (smi && !dev->usb_smi_level) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX4 legacy USB SMI event, GLBEN %04x GLBCTL %08x",
                       dev->acpi->regs.glben, dev->acpi->regs.glbctl);
-            if (dev->acpi->regs.glben & 0x0001)
+            /* With EOS (GLBCTL bit 16) clear only the status is set; setting
+               EOS asserts SMI# for it then (PIIX4 11.5.1). */
+            if ((dev->acpi->regs.glben & 0x0001) && (dev->acpi->regs.glbctl & 0x00010000))
                 acpi_raise_smi(dev->acpi, 1);
         }
     }

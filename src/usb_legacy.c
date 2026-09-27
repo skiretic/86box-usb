@@ -108,8 +108,9 @@ uhci_legsup_event(const uint8_t *legsup, int irq)
 void
 uhci_legsup_write_c0(uint8_t *legsup, uint8_t val)
 {
-    /* PSS is read-only; A20PTEN written 0 ends a running sequence at once. */
+    /* PSS is read-only; A20PTEN written 0 ends a running sequence at once,
+       an end like any other (A20PTS). */
     legsup[0] = (legsup[0] & LEGSUP_PSS) | (val & ~LEGSUP_PSS);
-    if (!(val & LEGSUP_A20PTEN))
-        legsup[0] &= ~LEGSUP_PSS;
+    if (!(val & LEGSUP_A20PTEN) && (legsup[0] & LEGSUP_PSS))
+        uhci_legsup_a20_end(legsup);
 }

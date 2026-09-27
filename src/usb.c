@@ -416,8 +416,9 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     /* OUT data is on the bus whatever the handshake; IN data only if sent. */
     *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.actual : len);
 
-    /* Each execution rewrites the status field (s3.2.2 bits 23:16). */
-    ctrl &= ~(UHCI_TD_STATUS & ~UHCI_TD_ACTIVE);
+    /* Each execution rewrites the status field (s3.2.2 bits 23:16) and ActLen,
+       7FFh (no bytes) unless data moved. */
+    ctrl = (ctrl & ~((UHCI_TD_STATUS & ~UHCI_TD_ACTIVE) | UHCI_TD_ACTLEN)) | 0x7ff;
     result = TD_RETRY;
 
     switch (ret) {

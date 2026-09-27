@@ -208,6 +208,14 @@ pipc_io_trap_glb(UNUSED(const uint16_t size), UNUSED(const uint16_t port), const
     }
 }
 
+/* Function 0 Rx48 bit 2 disables USB function 2 and Rx85 bit 4 function 3;
+   a disabled function decodes no I/O, masters nothing and drives no IRQ. */
+static int
+pipc_usb_disabled(const pipc_t *dev, int n)
+{
+    return n ? !!(dev->pci_isa_regs[0x85] & 0x10) : !!(dev->pci_isa_regs[0x48] & 0x04);
+}
+
 /* The UHCI interrupt goes straight to the ISA IRQ in Interrupt Line Rx3C
    bits 3-0 (Function 2/3 Offset 3C); 0 is off and 2 reserved, and Fh is
    IRQ15 on the 586A/B but off on the later parts. */
@@ -216,7 +224,7 @@ pipc_usb_update_irq(pipc_t *dev, int n)
 {
     uint8_t irq = dev->usb_regs[n][0x3c] & 0x0f;
 
-    if (!dev->usb_irq_level[n] || (irq == 0x00) || (irq == 0x02) || ((irq == 0x0f) && (dev->local > VIA_PIPC_586B)))
+    if (!dev->usb_irq_level[n] || pipc_usb_disabled(dev, n) || (irq == 0x00) || (irq == 0x02) || ((irq == 0x0f) && (dev->local > VIA_PIPC_586B)))
         irq = 0xff;
 
     if (irq == dev->usb_irq_line[n])
@@ -234,7 +242,7 @@ pipc_usb_update_irq(pipc_t *dev, int n)
 static void
 pipc_usb_update_legacy(pipc_t *dev, int n)
 {
-    uint8_t event = dev->usb_irq_level[n] && (dev->usb_regs[n][0xc0] & 0x10);
+    uint8_t event = dev->usb_irq_level[n] && !pipc_usb_disabled(dev, n) && (dev->usb_regs[n][0xc0] & 0x10);
 
     if (dev->usb_irq_level[n])
         dev->usb_regs[n][0xc1] |= 0x10;
@@ -1084,8 +1092,21 @@ nvr_update_io_mapping(pipc_t *dev)
 static void
 usb_update_io_mapping(pipc_t *dev, int func)
 {
-    uhci_update_io_mapping(dev->usb[func - 2], dev->usb_regs[func - 2][0x20] & ~0x1f, dev->usb_regs[func - 2][0x21], dev->usb_regs[func - 2][PCI_REG_COMMAND] & PCI_COMMAND_IO);
-    uhci_set_bus_master(dev->usb[func - 2], dev->usb_regs[func - 2][PCI_REG_COMMAND] & PCI_COMMAND_L_BM);
+    int on = !pipc_usb_disabled(dev, func - 2);
+
+    uhci_update_io_mapping(dev->usb[func - 2], dev->usb_regs[func - 2][0x20] & ~0x1f, dev->usb_regs[func - 2][0x21], on && (dev->usb_regs[func - 2][PCI_REG_COMMAND] & PCI_COMMAND_IO));
+    uhci_set_bus_master(dev->usb[func - 2], on && (dev->usb_regs[func - 2][PCI_REG_COMMAND] & PCI_COMMAND_L_BM));
+}
+
+/* A USB function disable bit changed in function 0. */
+static void
+pipc_usb_update_enable(pipc_t *dev, int n)
+{
+    if (dev->usb[n] == NULL)
+        return;
+    usb_update_io_mapping(dev, n + 2);
+    pipc_usb_update_irq(dev, n);
+    pipc_usb_update_legacy(dev, n);
 }
 
 static void
@@ -1190,18 +1211,24 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 dev->pci_isa_regs[0x47] = val & 0xfe;
                 break;
             case 0x48:
+                c                       = (dev->pci_isa_regs[0x48] ^ val) & 0x04;
                 dev->pci_isa_regs[0x48] = val;
                 nvr_update_io_mapping(dev);
+                if (c)
+                    pipc_usb_update_enable(dev, 0);
                 break;
 
             case 0x50:
             case 0x51:
             case 0x52:
             case 0x85:
+                c                       = (addr == 0x85) && ((dev->pci_isa_regs[0x85] ^ val) & 0x10);
                 dev->pci_isa_regs[addr] = val;
                 /* Forward Super I/O-related registers to sio_vt82c686.c */
                 if (dev->sio)
                     vt82c686_sio_write(addr, val, dev->sio);
+                if (c)
+                    pipc_usb_update_enable(dev, 1);
                 break;
 
             case 0x54:

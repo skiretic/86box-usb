@@ -204,6 +204,9 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
                 if ((ep == NULL) || !ep->present)
                     return USB_DATA_STALL;
                 ep->halt = (setup[1] == REQ_SET_FEATURE);
+                /* EP0 IN and OUT are one control pipe with one Halt feature. */
+                if ((windex & 0x0f) == 0)
+                    dev->ep_in[0].halt = dev->ep_out[0].halt = ep->halt;
                 /* Clearing halt restarts a data toggle at DATA0 (9.4.5). The
                    control pipe's toggles belong to SETUP: this request's own
                    Status stage is still DATA1 (8.5.2). */
@@ -304,6 +307,15 @@ usb_dev_setup(usb_dev_t *dev)
     dev->ctl_len  = 0;
     dev->ctl_zlp  = 0;
     dev->set_addr = 0;
+
+    /* A halted control pipe stalls the Data and Status stages of standard
+       requests other than GET_STATUS, CLEAR_FEATURE and SET_FEATURE (9.4.5). */
+    if (dev->ep_in[0].halt && ((dev->ctl_setup[0] & 0x60) == 0x00) &&
+        (dev->ctl_setup[1] != REQ_GET_STATUS) && (dev->ctl_setup[1] != REQ_CLEAR_FEATURE) &&
+        (dev->ctl_setup[1] != REQ_SET_FEATURE)) {
+        dev->ctl_stage = CTL_STALL;
+        return;
+    }
 
     /* wLength 0 means no Data stage whatever the direction bit says (9.3.1). */
     if ((dev->ctl_setup[0] & 0x80) && (wlength != 0)) {
@@ -432,8 +444,6 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
             if (n != 0)
                 return USB_RET_NO_RESPONSE;
             dev->ep_in[0].pending = 0;
-            dev->ep_in[0].halt    = 0;
-            dev->ep_out[0].halt   = 0;
             if (p->len != 8) {
                 dev->ctl_stage = CTL_STALL;
                 return USB_RET_ACK;
@@ -449,10 +459,10 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
             ep = &dev->ep_out[n];
             if (!ep->present || ((n != 0) && !dev->config))
                 return USB_RET_NO_RESPONSE;
-            if (ep->halt)
-                return USB_RET_STALL;
             if (n == 0)
                 return usb_dev_ctl_out(dev, p);
+            if (ep->halt)
+                return USB_RET_STALL;
             if (p->toggle != ep->toggle)
                 return USB_RET_ACK;
             ret = (dev->ops->data_out != NULL) ? dev->ops->data_out(dev, n, p->data, p->len) : USB_DATA_STALL;
@@ -469,7 +479,8 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
             ep = &dev->ep_in[n];
             if (!ep->present || ((n != 0) && !dev->config))
                 return USB_RET_NO_RESPONSE;
-            if (ep->halt)
+            /* EP0's Halt acts per request, through the control stage. */
+            if (ep->halt && (n != 0))
                 return USB_RET_STALL;
 
             /* An unacknowledged packet is resent unchanged (8.6.4). */

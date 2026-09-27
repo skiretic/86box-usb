@@ -135,6 +135,9 @@ typedef struct _pipc_ {
     ddma_t        *ddma;
     smbus_piix4_t *smbus;
     usb_t         *usb[2];
+    uint8_t        usb_irq_level[2];
+    uint8_t        usb_irq_state[2];
+    uint8_t        usb_irq_line[2]; /* IRQ driven now, 0xff = none */
 
     acpi_t        *acpi;
     pipc_io_trap_t io_traps[TRAP_MAX];
@@ -201,6 +204,45 @@ pipc_io_trap_glb(UNUSED(const uint16_t size), UNUSED(const uint16_t port), const
         }
         acpi_raise_smi(trap->dev->acpi, 1);
     }
+}
+
+/* The UHCI interrupt goes straight to the ISA IRQ in Interrupt Line Rx3C
+   bits 3-0 (Function 2/3 Offset 3C); 0 is off and 2 reserved, and Fh is
+   IRQ15 on the 586A/B but off on the later parts. */
+static void
+pipc_usb_update_irq(pipc_t *dev, int n)
+{
+    uint8_t irq = dev->usb_regs[n][0x3c] & 0x0f;
+
+    if (!dev->usb_irq_level[n] || (irq == 0x00) || (irq == 0x02) || ((irq == 0x0f) && (dev->local > VIA_PIPC_586B)))
+        irq = 0xff;
+
+    if (irq == dev->usb_irq_line[n])
+        return;
+    if (dev->usb_irq_line[n] != 0xff)
+        pci_clear_dirq(dev->usb_irq_line[n], &dev->usb_irq_state[n]);
+    if (irq != 0xff)
+        pci_set_dirq(irq, &dev->usb_irq_state[n]);
+    dev->usb_irq_line[n] = irq;
+}
+
+static void
+pipc_usb_irq(pipc_t *dev, int n, int level)
+{
+    dev->usb_irq_level[n] = !!level;
+    pipc_usb_update_irq(dev, n);
+}
+
+static void
+pipc_usb0_irq(void *priv, int level)
+{
+    pipc_usb_irq((pipc_t *) priv, 0, level);
+}
+
+static void
+pipc_usb1_irq(void *priv, int level)
+{
+    pipc_usb_irq((pipc_t *) priv, 1, level);
 }
 
 static void
@@ -363,6 +405,7 @@ pipc_reset_hard(void *priv)
             dev->usb_regs[i][0x82] = 0x02;
         }
         dev->usb_regs[i][0xc1] = 0x20;
+        pipc_usb_update_irq(dev, i);
     }
 
     /* Power management registers. */
@@ -1420,6 +1463,11 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 usb_update_io_mapping(dev, func);
                 break;
 
+            case 0x3c:
+                dev->usb_regs[func - 2][0x3c] = val & 0x0f;
+                pipc_usb_update_irq(dev, func - 2);
+                break;
+
             default:
                 dev->usb_regs[func - 2][addr] = val;
                 break;
@@ -1736,9 +1784,12 @@ pipc_init(const device_t *info)
         acpi_set_trap_update(dev->acpi, pipc_trap_update_586, dev);
     }
 
+    dev->usb_irq_line[0] = dev->usb_irq_line[1] = 0xff;
     dev->usb[0] = device_add_inst(&usb_device, 1);
+    uhci_set_irq_handler(dev->usb[0], pipc_usb0_irq, dev);
     if (dev->local >= VIA_PIPC_686A) {
         dev->usb[1] = device_add_inst(&usb_device, 2);
+        uhci_set_irq_handler(dev->usb[1], pipc_usb1_irq, dev);
 
         dev->ac97 = device_add(&ac97_via_device);
 

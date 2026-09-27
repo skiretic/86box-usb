@@ -62,6 +62,9 @@ extern void ohci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int lev
 extern void ohci_set_smi_handler(usb_t *dev, void (*set_smi)(void *priv, int level), void *priv);
 /* PCICMD Bus Master Enable: with it clear the OHCI makes no memory accesses. */
 extern void ohci_set_bus_master(usb_t *dev, int enable);
+/* For a chipset whose Bus Master bit is hardwired to 1: on now and after
+   every reset. */
+extern void ohci_hardwire_bus_master(usb_t *dev);
 
 /* UHCI legacy keyboard support (UHCI 1.1 s5.2) on a function's LEGSUP
    bytes, legsup[0] = C0h and legsup[1] = C1h. */

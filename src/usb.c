@@ -308,6 +308,7 @@ struct ohci_t {
     ohci_port_t port[OHCI_MAX_PORTS];
     int         bus; /* pcap bus number */
     uint8_t     bus_master; /* PCI COMMAND Bus Master Enable from the chipset */
+    uint8_t     bus_master_hardwired; /* ... or 1 through every reset */
     /* The frame in progress: FrameRemaining counts down from fr_load, and
        FrameNumber bit 15 as of the last HCCA update. */
     uint32_t    fr_load;
@@ -2825,6 +2826,13 @@ ohci_set_bus_master(usb_t *dev, int enable)
     dev->ohci->bus_master = !!enable;
 }
 
+void
+ohci_hardwire_bus_master(usb_t *dev)
+{
+    dev->ohci->bus_master_hardwired = 1;
+    dev->ohci->bus_master           = 1;
+}
+
 static void
 usb_reset(void *priv)
 {
@@ -2837,7 +2845,7 @@ usb_reset(void *priv)
     uhci_schedule_detect(dev->uhci);
 
     ohci_hard_reset(dev->ohci);
-    dev->ohci->bus_master = 0;
+    dev->ohci->bus_master = dev->ohci->bus_master_hardwired;
     ohci_update_irq(dev->ohci);
 
     if (dev->uhci_enable && (dev->uhci_io_base != 0x0000))

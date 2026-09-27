@@ -524,6 +524,19 @@ stpc_isab_read(int func, int addr, int len, void *priv)
     return ret;
 }
 
+/* The USB controller uses PCI Interrupt A, routed by index 52h (STPC Atlas
+   PM 22.3.1, 9.5.3). */
+static void
+stpc_usb_irq(void *priv, int level)
+{
+    stpc_t *dev = (stpc_t *) priv;
+
+    if (level)
+        pci_set_irq(dev->usb_slot, PCI_INTA, &dev->usb_irq_state);
+    else
+        pci_clear_irq(dev->usb_slot, PCI_INTA, &dev->usb_irq_state);
+}
+
 static void
 stpc_usb_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 {
@@ -888,6 +901,9 @@ stpc_setup(stpc_t *dev)
         dev->pci_conf[3][0x02] = 0x30;
         dev->pci_conf[3][0x03] = 0x02;
 
+        /* Bus Master and Memory Enable are hardwired to 1 (PM 8.9.3). */
+        dev->pci_conf[3][0x04] = 0x06;
+
         dev->pci_conf[3][0x06] = 0x80;
         dev->pci_conf[3][0x07] = 0x02;
 
@@ -936,6 +952,8 @@ stpc_init(const device_t *info)
 
         dev->usb = device_add(&usb_device);
         pci_add_card(PCI_ADD_SOUTHBRIDGE_USB, stpc_usb_read, stpc_usb_write, dev, &dev->usb_slot);
+        ohci_set_irq_handler(dev->usb, stpc_usb_irq, dev);
+        ohci_hardwire_bus_master(dev->usb);
     }
 
     dev->bm[0] = device_add_inst(&sff8038i_device, 1);

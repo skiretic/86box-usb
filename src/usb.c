@@ -6,8 +6,8 @@
  *
  *          This file is part of the 86Box distribution.
  *
- *          Universal Serial Bus emulation (UHCI registers and root
- *          hub, dummy OHCI).
+ *          Universal Serial Bus emulation (UHCI host controller, OHCI
+ *          registers).
  *
  * Authors: Miran Grca, <mgrca8@gmail.com>
  *          skiretic, <skiretic@proton.me>
@@ -138,6 +138,116 @@ struct uhci_t {
     void       *irq_priv;
 };
 
+/* OHCI, written from the OpenHCI 1.0a specification (PDF page numbers) and
+   the ALi M1543C (M5237), SiS 5595 and SMSC SLC90E66 datasheets. */
+#define OHCI_HCREVISION         0x000
+#define OHCI_HCCONTROL          0x004
+#define OHCI_HCCOMMANDSTATUS    0x008
+#define OHCI_HCINTERRUPTSTATUS  0x00c
+#define OHCI_HCINTERRUPTENABLE  0x010
+#define OHCI_HCINTERRUPTDISABLE 0x014
+#define OHCI_HCHCCA             0x018
+#define OHCI_HCPERIODCURRENTED  0x01c
+#define OHCI_HCCONTROLHEADED    0x020
+#define OHCI_HCCONTROLCURRENTED 0x024
+#define OHCI_HCBULKHEADED       0x028
+#define OHCI_HCBULKCURRENTED    0x02c
+#define OHCI_HCDONEHEAD         0x030
+#define OHCI_HCFMINTERVAL       0x034
+#define OHCI_HCFMREMAINING      0x038
+#define OHCI_HCFMNUMBER         0x03c
+#define OHCI_HCPERIODICSTART    0x040
+#define OHCI_HCLSTHRESHOLD      0x044
+#define OHCI_HCRHDESCRIPTORA    0x048
+#define OHCI_HCRHDESCRIPTORB    0x04c
+#define OHCI_HCRHSTATUS         0x050
+#define OHCI_HCRHPORTSTATUS1    0x054
+#define OHCI_HCECONTROL         0x100
+#define OHCI_HCEINPUT           0x104
+#define OHCI_HCEOUTPUT          0x108
+#define OHCI_HCESTATUS          0x10c
+
+#define OHCI_CTL_CBSR 0x00000003
+#define OHCI_CTL_PLE  0x00000004
+#define OHCI_CTL_IE   0x00000008
+#define OHCI_CTL_CLE  0x00000010
+#define OHCI_CTL_BLE  0x00000020
+#define OHCI_CTL_HCFS 0x000000c0
+#define OHCI_CTL_IR   0x00000100
+#define OHCI_CTL_RWC  0x00000200
+#define OHCI_CTL_RWE  0x00000400
+
+#define OHCI_HCFS_RESET       0x00000000
+#define OHCI_HCFS_RESUME      0x00000040
+#define OHCI_HCFS_OPERATIONAL 0x00000080
+#define OHCI_HCFS_SUSPEND     0x000000c0
+
+#define OHCI_CS_HCR 0x00000001
+#define OHCI_CS_CLF 0x00000002
+#define OHCI_CS_BLF 0x00000004
+#define OHCI_CS_OCR 0x00000008
+#define OHCI_CS_SOC 0x00030000
+
+#define OHCI_INT_SO   0x00000001
+#define OHCI_INT_WDH  0x00000002
+#define OHCI_INT_SF   0x00000004
+#define OHCI_INT_RD   0x00000008
+#define OHCI_INT_UE   0x00000010
+#define OHCI_INT_FNO  0x00000020
+#define OHCI_INT_RHSC 0x00000040
+#define OHCI_INT_OC   0x40000000
+#define OHCI_INT_MIE  0x80000000
+#define OHCI_INT_ALL  0x4000007f
+
+/* 12,000 bit times per frame (p135). */
+#define OHCI_FI_NOMINAL 0x00002edf
+
+/* HceControl and HceStatus (Appendix B, p158-159). */
+#define OHCI_HCE_EE        0x00000001
+#define OHCI_HCE_EI        0x00000002
+#define OHCI_HCE_CP        0x00000004
+#define OHCI_HCE_EXTIRQEN  0x00000010
+#define OHCI_HCE_IRQ1ACT   0x00000040
+#define OHCI_HCE_IRQ12ACT  0x00000080
+#define OHCI_HCES_OUTFULL  0x01
+#define OHCI_HCES_INFULL   0x02
+
+/* The M5237 with its third port enabled (ALi-C p185). */
+#define OHCI_MAX_PORTS 3
+
+typedef struct ohci_port_t {
+    uint32_t sts; /* HcRhPortStatus: status bits 15:0, change bits 31:16 */
+} ohci_port_t;
+
+struct ohci_t {
+    uint32_t    control;
+    uint32_t    cmdsts;
+    uint32_t    intsts;
+    uint32_t    inten;
+    uint32_t    hcca;
+    uint32_t    period_cur;
+    uint32_t    ctrl_head;
+    uint32_t    ctrl_cur;
+    uint32_t    bulk_head;
+    uint32_t    bulk_cur;
+    uint32_t    done_head;
+    uint32_t    fm_interval;
+    uint32_t    fm_remaining;
+    uint32_t    fm_number;
+    uint32_t    periodic_start;
+    uint32_t    ls_threshold;
+    uint32_t    rh_desc_a;
+    uint32_t    rh_desc_b;
+    uint32_t    rh_status;
+    int         ndp;
+    ohci_port_t port[OHCI_MAX_PORTS];
+    /* Legacy support (Appendix B): the registers only, no 60h/64h decode. */
+    uint32_t    hce_control;
+    uint8_t     hce_input;
+    uint8_t     hce_output;
+    uint8_t     hce_status;
+};
+
 #ifdef ENABLE_USB_LOG
 static const char *
 uhci_reg_name(uint16_t off)
@@ -184,6 +294,14 @@ ohci_reg_name(uint32_t off)
     if ((off >= 0x100) && (off < 0x110))
         return legacy[(off - 0x100) >> 2];
     return "reserved";
+}
+
+static const char *
+ohci_hcfs_name(uint32_t control)
+{
+    static const char *const names[] = { "USBRESET", "USBRESUME", "USBOPERATIONAL", "USBSUSPEND" };
+
+    return names[(control & OHCI_CTL_HCFS) >> 6];
 }
 #endif
 
@@ -1163,237 +1281,278 @@ usb_detach(usb_dev_t *udev)
     udev->port = NULL;
 }
 
-static uint8_t
-ohci_mmio_read(uint32_t addr, void *priv)
+/* The root hub's reset: the USBRESET state and a hardware reset (p57,
+   ALi-C p187-188). Its descriptors are reset by hardware reset only. */
+static void
+ohci_root_hub_reset(ohci_t *dev)
 {
-    const usb_t  *dev = (usb_t *) priv;
-    uint8_t       ret = 0x00;
+    dev->rh_status = 0x00000000;
+    for (int i = 0; i < OHCI_MAX_PORTS; i++)
+        dev->port[i].sts = 0x00000000;
+}
 
-    addr &= 0x00000fff;
-
-    ret = dev->ohci_mmio[addr];
-
-    if (addr == 0x101)
-        ret = (ret & 0xfe) | (!!mem_a20_key);
-
-    return ret;
+/* HCR (p126): the operational registers go to their reset values, FI to
+   nominal (p135), except InterruptRouting (p125). The root hub (p146) and
+   the legacy support registers keep their contents. */
+static void
+ohci_soft_reset(ohci_t *dev)
+{
+    dev->control        = (dev->control & OHCI_CTL_IR) | OHCI_HCFS_SUSPEND;
+    dev->cmdsts         = 0x00000000;
+    dev->intsts         = 0x00000000;
+    dev->inten          = 0x00000000;
+    dev->hcca           = 0x00000000;
+    dev->period_cur     = 0x00000000;
+    dev->ctrl_head      = 0x00000000;
+    dev->ctrl_cur       = 0x00000000;
+    dev->bulk_head      = 0x00000000;
+    dev->bulk_cur       = 0x00000000;
+    dev->done_head      = 0x00000000;
+    dev->fm_interval    = OHCI_FI_NOMINAL;
+    dev->fm_remaining   = 0x00000000;
+    dev->fm_number      = 0x00000000;
+    dev->periodic_start = 0x00000000;
+    /* 0628h in the spec (p137); ALi and SiS reset it to 0. */
+    dev->ls_threshold = 0x00000000;
 }
 
 static void
-ohci_mmio_write(uint32_t addr, uint8_t val, void *priv)
+ohci_hard_reset(ohci_t *dev)
 {
-    usb_t  *dev = (usb_t *) priv;
-    uint8_t old;
-
-    addr &= 0x00000fff;
-
-    switch (addr) {
-        case 0x04:
-            if ((val & 0xc0) == 0x00) {
-                /* UsbReset */
-                dev->ohci_mmio[0x56] = dev->ohci_mmio[0x5a] = 0x16;
-            }
-            break;
-        case 0x08: /* HCCOMMANDSTATUS */
-            /* bit OwnershipChangeRequest triggers an ownership change (SMM <-> OS) */
-            if (val & 0x08) {
-                dev->ohci_mmio[0x0f] = 0x40;
-                if ((dev->ohci_mmio[0x13] & 0xc0) == 0xc0)
-                    smi_raise();
-                usb_trace(USB_LOG_IRQ, -1, "OHCI OwnershipChangeRequest: HcInterruptStatus.OC set, SMI %s (HcInterruptEnable %08x)",
-                          ((dev->ohci_mmio[0x13] & 0xc0) == 0xc0) ? "raised" : "not raised (MIE and OCE not both set)",
-                          dev->ohci_mmio[0x10] | (dev->ohci_mmio[0x11] << 8) | (dev->ohci_mmio[0x12] << 16) | ((uint32_t) dev->ohci_mmio[0x13] << 24));
-            }
-
-            /* bit HostControllerReset must be cleared for the controller to be seen as initialized */
-            if (val & 0x01) {
-                memset(dev->ohci_mmio, 0x00, 4096);
-                dev->ohci_mmio[0x00] = 0x10;
-                dev->ohci_mmio[0x01] = 0x01;
-                dev->ohci_mmio[0x48] = 0x02;
-                val &= ~0x01;
-                usb_trace(USB_LOG_REG, -1, "OHCI HostControllerReset: every register back to its stub default");
-            }
-            break;
-        case 0x0c:
-            dev->ohci_mmio[addr] &= ~(val & 0x7f);
-            return;
-        case 0x0d:
-        case 0x0e:
-            return;
-        case 0x0f:
-            dev->ohci_mmio[addr] &= ~(val & 0x40);
-            return;
-        case 0x3b:
-            dev->ohci_mmio[addr] = (val & 0x80);
-            return;
-        case 0x39:
-        case 0x41:
-            dev->ohci_mmio[addr] = (val & 0x3f);
-            return;
-        case 0x45:
-            dev->ohci_mmio[addr] = (val & 0x0f);
-            return;
-        case 0x3a:
-        case 0x3e:
-        case 0x3f:
-        case 0x42:
-        case 0x43:
-        case 0x46:
-        case 0x47:
-        case 0x48:
-        case 0x4a:
-            return;
-        case 0x49:
-            dev->ohci_mmio[addr] = (val & 0x1b);
-            if (val & 0x02) {
-                dev->ohci_mmio[0x55] |= 0x01;
-                dev->ohci_mmio[0x59] |= 0x01;
-            }
-            return;
-        case 0x4b:
-            dev->ohci_mmio[addr] = (val & 0x03);
-            return;
-        case 0x4c:
-        case 0x4e:
-            dev->ohci_mmio[addr] = (val & 0x06);
-            if ((addr == 0x4c) && !(val & 0x04)) {
-                if (!(dev->ohci_mmio[0x58] & 0x01))
-                    dev->ohci_mmio[0x5a] |= 0x01;
-                dev->ohci_mmio[0x58] |= 0x01;
-            }
-            if ((addr == 0x4c) && !(val & 0x02)) {
-                if (!(dev->ohci_mmio[0x54] & 0x01))
-                    dev->ohci_mmio[0x56] |= 0x01;
-                dev->ohci_mmio[0x54] |= 0x01;
-            }
-            return;
-        case 0x4d:
-        case 0x4f:
-            return;
-        case 0x50:
-            if (val & 0x01) {
-                if ((dev->ohci_mmio[0x49] & 0x03) == 0x00) {
-                    dev->ohci_mmio[0x55] &= ~0x01;
-                    dev->ohci_mmio[0x54] &= ~0x17;
-                    dev->ohci_mmio[0x56] &= ~0x17;
-                    dev->ohci_mmio[0x59] &= ~0x01;
-                    dev->ohci_mmio[0x58] &= ~0x17;
-                    dev->ohci_mmio[0x5a] &= ~0x17;
-                } else if ((dev->ohci_mmio[0x49] & 0x03) == 0x01) {
-                    if (!(dev->ohci_mmio[0x4e] & 0x02)) {
-                        dev->ohci_mmio[0x55] &= ~0x01;
-                        dev->ohci_mmio[0x54] &= ~0x17;
-                        dev->ohci_mmio[0x56] &= ~0x17;
-                    }
-                    if (!(dev->ohci_mmio[0x4e] & 0x04)) {
-                        dev->ohci_mmio[0x59] &= ~0x01;
-                        dev->ohci_mmio[0x58] &= ~0x17;
-                        dev->ohci_mmio[0x5a] &= ~0x17;
-                    }
-                }
-            }
-            return;
-        case 0x51:
-            if (val & 0x80)
-                dev->ohci_mmio[addr] |= 0x80;
-            return;
-        case 0x52:
-            dev->ohci_mmio[addr] &= ~(val & 0x02);
-            if (val & 0x01) {
-                if ((dev->ohci_mmio[0x49] & 0x03) == 0x00) {
-                    dev->ohci_mmio[0x55] |= 0x01;
-                    dev->ohci_mmio[0x59] |= 0x01;
-                } else if ((dev->ohci_mmio[0x49] & 0x03) == 0x01) {
-                    if (!(dev->ohci_mmio[0x4e] & 0x02))
-                        dev->ohci_mmio[0x55] |= 0x01;
-                    if (!(dev->ohci_mmio[0x4e] & 0x04))
-                        dev->ohci_mmio[0x59] |= 0x01;
-                }
-            }
-            return;
-        case 0x53:
-            if (val & 0x80)
-                dev->ohci_mmio[0x51] &= ~0x80;
-            return;
-        case 0x54:
-        case 0x58:
-            old = dev->ohci_mmio[addr];
-
-            if (val & 0x10) {
-                if (old & 0x01) {
-                    dev->ohci_mmio[addr] |= 0x10;
-                    /* TODO: The clear should be on a 10 ms timer. */
-                    dev->ohci_mmio[addr] &= ~0x10;
-                    dev->ohci_mmio[addr + 2] |= 0x10;
-                } else
-                    dev->ohci_mmio[addr + 2] |= 0x01;
-            }
-            if (val & 0x08)
-                dev->ohci_mmio[addr] &= ~0x04;
-            if (val & 0x04)
-                dev->ohci_mmio[addr] |= 0x04;
-            if (val & 0x02) {
-                if (old & 0x01)
-                    dev->ohci_mmio[addr] |= 0x02;
-                else
-                    dev->ohci_mmio[addr + 2] |= 0x01;
-            }
-            if (val & 0x01) {
-                if (old & 0x01)
-                    dev->ohci_mmio[addr] &= ~0x02;
-                else
-                    dev->ohci_mmio[addr + 2] |= 0x01;
-            }
-
-            if (!(dev->ohci_mmio[addr] & 0x04) && (old & 0x04))
-                dev->ohci_mmio[addr + 2] |= 0x04;
-#if 0
-            if (!(dev->ohci_mmio[addr] & 0x02))
-                 dev->ohci_mmio[addr + 2] |= 0x02;
-#endif
-            return;
-        case 0x55:
-            if ((val & 0x02) && ((dev->ohci_mmio[0x49] & 0x03) == 0x00) && (dev->ohci_mmio[0x4e] & 0x02)) {
-                dev->ohci_mmio[addr] &= ~0x01;
-                dev->ohci_mmio[0x54] &= ~0x17;
-                dev->ohci_mmio[0x56] &= ~0x17;
-            }
-            if ((val & 0x01) && ((dev->ohci_mmio[0x49] & 0x03) == 0x00) && (dev->ohci_mmio[0x4e] & 0x02)) {
-                dev->ohci_mmio[addr] |= 0x01;
-                dev->ohci_mmio[0x58] &= ~0x17;
-                dev->ohci_mmio[0x5a] &= ~0x17;
-            }
-            return;
-        case 0x59:
-            if ((val & 0x02) && ((dev->ohci_mmio[0x49] & 0x03) == 0x00) && (dev->ohci_mmio[0x4e] & 0x04))
-                dev->ohci_mmio[addr] &= ~0x01;
-            if ((val & 0x01) && ((dev->ohci_mmio[0x49] & 0x03) == 0x00) && (dev->ohci_mmio[0x4e] & 0x04))
-                dev->ohci_mmio[addr] |= 0x01;
-            return;
-        case 0x56:
-        case 0x5a:
-            dev->ohci_mmio[addr] &= ~(val & 0x1f);
-            return;
-        case 0x57:
-        case 0x5b:
-            return;
-
-        default:
-            break;
-    }
-
-    dev->ohci_mmio[addr] = val;
+    ohci_soft_reset(dev);
+    dev->control   = OHCI_HCFS_RESET;
+    dev->rh_desc_a = 0x01000000 | dev->ndp;
+    dev->rh_desc_b = 0x00000000;
+    ohci_root_hub_reset(dev);
+    dev->hce_control = 0x00000000;
+    dev->hce_input   = 0x00;
+    dev->hce_output  = 0x00;
+    dev->hce_status  = 0x00;
 }
 
-/* Wider accesses make the byte calls in the order the mem.c fallback did,
-   so the stub behaves as before; they exist to log each access once. */
+static void
+ohci_control_write(ohci_t *dev, uint32_t val)
+{
+    uint32_t old = dev->control;
+
+    /* RemoteWakeupConnected is hard 0 on ALi, SiS and SMSC. */
+    dev->control = val & (OHCI_CTL_CBSR | OHCI_CTL_PLE | OHCI_CTL_IE | OHCI_CTL_CLE | OHCI_CTL_BLE | OHCI_CTL_HCFS | OHCI_CTL_IR | OHCI_CTL_RWE);
+
+    if ((dev->control ^ old) & OHCI_CTL_HCFS) {
+        usb_trace(USB_LOG_REG, -1, "OHCI HCFS %s -> %s", ohci_hcfs_name(old), ohci_hcfs_name(dev->control));
+        /* Entering USBRESET resets the root hub (p57). */
+        if ((dev->control & OHCI_CTL_HCFS) == OHCI_HCFS_RESET)
+            ohci_root_hub_reset(dev);
+    }
+}
+
+/* EmulationInterrupt, a static decode of the emulation interrupt condition
+   (p160). */
+static int
+ohci_emulation_interrupt(const ohci_t *dev)
+{
+    uint32_t ctl = dev->hce_control;
+
+    if ((ctl & OHCI_HCE_EE) && (ctl & OHCI_HCE_CP) && !(dev->hce_status & OHCI_HCES_OUTFULL))
+        return 1;
+    if ((ctl & OHCI_HCE_EE) && (dev->hce_status & OHCI_HCES_INFULL))
+        return 1;
+    return (ctl & OHCI_HCE_EXTIRQEN) && (ctl & (OHCI_HCE_IRQ1ACT | OHCI_HCE_IRQ12ACT));
+}
+
+static uint32_t
+ohci_reg_read(const ohci_t *dev, uint32_t off)
+{
+    uint32_t n;
+
+    switch (off) {
+        case OHCI_HCREVISION:
+            /* Revision 1.0, legacy support registers present (p123). */
+            return 0x00000110;
+        case OHCI_HCCONTROL:
+            return dev->control;
+        case OHCI_HCCOMMANDSTATUS:
+            return dev->cmdsts;
+        case OHCI_HCINTERRUPTSTATUS:
+            return dev->intsts;
+        case OHCI_HCINTERRUPTENABLE:
+        case OHCI_HCINTERRUPTDISABLE:
+            return dev->inten;
+        case OHCI_HCHCCA:
+            return dev->hcca;
+        case OHCI_HCPERIODCURRENTED:
+            return dev->period_cur;
+        case OHCI_HCCONTROLHEADED:
+            return dev->ctrl_head;
+        case OHCI_HCCONTROLCURRENTED:
+            return dev->ctrl_cur;
+        case OHCI_HCBULKHEADED:
+            return dev->bulk_head;
+        case OHCI_HCBULKCURRENTED:
+            return dev->bulk_cur;
+        case OHCI_HCDONEHEAD:
+            return dev->done_head;
+        case OHCI_HCFMINTERVAL:
+            return dev->fm_interval;
+        case OHCI_HCFMREMAINING:
+            return dev->fm_remaining;
+        case OHCI_HCFMNUMBER:
+            return dev->fm_number;
+        case OHCI_HCPERIODICSTART:
+            return dev->periodic_start;
+        case OHCI_HCLSTHRESHOLD:
+            return dev->ls_threshold;
+        case OHCI_HCRHDESCRIPTORA:
+            return dev->rh_desc_a;
+        case OHCI_HCRHDESCRIPTORB:
+            return dev->rh_desc_b;
+        case OHCI_HCRHSTATUS:
+            return dev->rh_status;
+        case OHCI_HCECONTROL:
+            return dev->hce_control | (ohci_emulation_interrupt(dev) ? OHCI_HCE_EI : 0);
+        case OHCI_HCEINPUT:
+            return dev->hce_input;
+        case OHCI_HCEOUTPUT:
+            return dev->hce_output;
+        case OHCI_HCESTATUS:
+            return dev->hce_status;
+        default:
+            n = (off - OHCI_HCRHPORTSTATUS1) >> 2;
+            if ((off >= OHCI_HCRHPORTSTATUS1) && (n < (uint32_t) dev->ndp))
+                return dev->port[n].sts;
+            /* The rest of the window need not respond (p149). */
+            return 0x00000000;
+    }
+}
+
+static uint32_t
+ohci_merge(uint32_t cur, uint32_t val, uint32_t lanes)
+{
+    return (cur & ~lanes) | (val & lanes);
+}
+
+/* lanes selects the bytes the guest wrote (PCI byte enables): R/W bits in
+   them merge, and unwritten bytes write 0 to the write-1 command bits. */
+static void
+ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
+{
+    uint32_t cmd = val & lanes;
+    uint32_t ports;
+
+    switch (off) {
+        case OHCI_HCCONTROL:
+            ohci_control_write(dev, ohci_merge(dev->control, val, lanes));
+            break;
+
+        case OHCI_HCCOMMANDSTATUS:
+            if (cmd & OHCI_CS_HCR) {
+                /* Completes at once, so the self-clearing bit already reads 0. */
+                usb_trace(USB_LOG_REG, -1, "OHCI HostControllerReset: %s -> USBSUSPEND, InterruptRouting %i kept",
+                          ohci_hcfs_name(dev->control), !!(dev->control & OHCI_CTL_IR));
+                ohci_soft_reset(dev);
+                break;
+            }
+            dev->cmdsts |= cmd & (OHCI_CS_CLF | OHCI_CS_BLF | OHCI_CS_OCR);
+            if (cmd & OHCI_CS_OCR) {
+                dev->intsts |= OHCI_INT_OC;
+                usb_trace(USB_LOG_IRQ, -1, "OHCI OwnershipChangeRequest: HcInterruptStatus.OC set");
+            }
+            break;
+
+        case OHCI_HCINTERRUPTSTATUS:
+            cmd &= OHCI_INT_ALL;
+            if (cmd & dev->intsts) {
+                usb_trace(USB_LOG_IRQ, -1, "OHCI HcInterruptStatus %08x -> %08x (guest clear %08x)",
+                          dev->intsts, dev->intsts & ~cmd, cmd);
+                dev->intsts &= ~cmd;
+            }
+            break;
+
+        /* UnrecoverableError is not implemented, its enable ignores writes
+           (ALi-C p180, SMSC p106). */
+        case OHCI_HCINTERRUPTENABLE:
+            dev->inten |= cmd & ((OHCI_INT_ALL | OHCI_INT_MIE) & ~OHCI_INT_UE);
+            break;
+        case OHCI_HCINTERRUPTDISABLE:
+            dev->inten &= ~(cmd & ((OHCI_INT_ALL | OHCI_INT_MIE) & ~OHCI_INT_UE));
+            break;
+
+        case OHCI_HCHCCA:
+            dev->hcca = ohci_merge(dev->hcca, val, lanes) & 0xffffff00;
+            break;
+        /* The current and done pointers are R/W on ALi, SiS and SMSC. */
+        case OHCI_HCPERIODCURRENTED:
+            dev->period_cur = ohci_merge(dev->period_cur, val, lanes) & 0xfffffff0;
+            break;
+        case OHCI_HCCONTROLHEADED:
+            dev->ctrl_head = ohci_merge(dev->ctrl_head, val, lanes) & 0xfffffff0;
+            break;
+        case OHCI_HCCONTROLCURRENTED:
+            dev->ctrl_cur = ohci_merge(dev->ctrl_cur, val, lanes) & 0xfffffff0;
+            break;
+        case OHCI_HCBULKHEADED:
+            dev->bulk_head = ohci_merge(dev->bulk_head, val, lanes) & 0xfffffff0;
+            break;
+        case OHCI_HCBULKCURRENTED:
+            dev->bulk_cur = ohci_merge(dev->bulk_cur, val, lanes) & 0xfffffff0;
+            break;
+        case OHCI_HCDONEHEAD:
+            dev->done_head = ohci_merge(dev->done_head, val, lanes) & 0xfffffff0;
+            break;
+
+        case OHCI_HCFMINTERVAL:
+            dev->fm_interval = ohci_merge(dev->fm_interval, val, lanes) & 0xffff3fff;
+            break;
+        case OHCI_HCPERIODICSTART:
+            dev->periodic_start = ohci_merge(dev->periodic_start, val, lanes) & 0x00003fff;
+            break;
+        case OHCI_HCLSTHRESHOLD:
+            dev->ls_threshold = ohci_merge(dev->ls_threshold, val, lanes) & 0x00000fff;
+            break;
+
+        case OHCI_HCRHDESCRIPTORA:
+            /* PSM, NPS, OCPM, NOCP; POTPGT bits 25:24 only (ALi-C p185,
+               SMSC p111). */
+            dev->rh_desc_a = (ohci_merge(dev->rh_desc_a, val, lanes) & 0x03001b00) | dev->ndp;
+            break;
+        case OHCI_HCRHDESCRIPTORB:
+            /* Bit 0 of each field is reserved, and so are ports past NDP. */
+            ports          = ((1u << dev->ndp) - 1) << 1;
+            dev->rh_desc_b = ohci_merge(dev->rh_desc_b, val, lanes) & (ports | (ports << 16));
+            break;
+
+        case OHCI_HCECONTROL:
+            /* IRQ1Active and IRQ12Active are write-1-to-clear. */
+            dev->hce_control = (ohci_merge(dev->hce_control, val, lanes) & 0x0000013d) |
+                               (dev->hce_control & ~cmd & (OHCI_HCE_IRQ1ACT | OHCI_HCE_IRQ12ACT));
+            break;
+        case OHCI_HCEINPUT:
+            if (lanes & 0xff)
+                dev->hce_input = val;
+            break;
+        case OHCI_HCEOUTPUT:
+            if (lanes & 0xff)
+                dev->hce_output = val;
+            break;
+        case OHCI_HCESTATUS:
+            if (lanes & 0xff)
+                dev->hce_status = val;
+            break;
+
+        default:
+            /* Read-only registers and the rest of the window. */
+            break;
+    }
+}
+
 static uint8_t
 ohci_mmio_readb(uint32_t addr, void *priv)
 {
-    uint8_t ret = ohci_mmio_read(addr, priv);
+    const ohci_t *dev = (ohci_t *) priv;
+    uint32_t      off = addr & 0xfff;
+    uint8_t       ret = ohci_reg_read(dev, off & 0xffc) >> ((off & 3) << 3);
 
-    usb_trace(USB_LOG_REG, -1, "R8  +%03x %-18s = %02x", addr & 0xfff, ohci_reg_name(addr), ret);
+    usb_trace(USB_LOG_REG, -1, "R8  +%03x %-18s = %02x", off, ohci_reg_name(off), ret);
 
     return ret;
 }
@@ -1401,10 +1560,16 @@ ohci_mmio_readb(uint32_t addr, void *priv)
 static uint16_t
 ohci_mmio_readw(uint32_t addr, void *priv)
 {
-    uint16_t ret = ohci_mmio_read(addr, priv);
+    const ohci_t *dev = (ohci_t *) priv;
+    uint32_t      off = addr & 0xfff;
+    uint16_t      ret;
 
-    ret |= ohci_mmio_read(addr + 1, priv) << 8;
-    usb_trace(USB_LOG_REG, -1, "R16 +%03x %-18s = %04x", addr & 0xfff, ohci_reg_name(addr), ret);
+    if ((off & 3) == 3)
+        ret = (ohci_reg_read(dev, off & 0xffc) >> 24) | (ohci_reg_read(dev, (off + 1) & 0xffc) << 8);
+    else
+        ret = ohci_reg_read(dev, off & 0xffc) >> ((off & 3) << 3);
+
+    usb_trace(USB_LOG_REG, -1, "R16 +%03x %-18s = %04x", off, ohci_reg_name(off), ret);
 
     return ret;
 }
@@ -1412,12 +1577,11 @@ ohci_mmio_readw(uint32_t addr, void *priv)
 static uint32_t
 ohci_mmio_readl(uint32_t addr, void *priv)
 {
-    uint32_t ret = ohci_mmio_read(addr, priv);
+    const ohci_t *dev = (ohci_t *) priv;
+    uint32_t      off = addr & 0xffc;
+    uint32_t      ret = ohci_reg_read(dev, off);
 
-    ret |= ohci_mmio_read(addr + 1, priv) << 8;
-    ret |= ohci_mmio_read(addr + 2, priv) << 16;
-    ret |= (uint32_t) ohci_mmio_read(addr + 3, priv) << 24;
-    usb_trace(USB_LOG_REG, -1, "R32 +%03x %-18s = %08x", addr & 0xfff, ohci_reg_name(addr), ret);
+    usb_trace(USB_LOG_REG, -1, "R32 +%03x %-18s = %08x", off, ohci_reg_name(off), ret);
 
     return ret;
 }
@@ -1425,26 +1589,40 @@ ohci_mmio_readl(uint32_t addr, void *priv)
 static void
 ohci_mmio_writeb(uint32_t addr, uint8_t val, void *priv)
 {
-    usb_trace(USB_LOG_REG, -1, "W8  +%03x %-18s <- %02x", addr & 0xfff, ohci_reg_name(addr), val);
-    ohci_mmio_write(addr, val, priv);
+    ohci_t  *dev = (ohci_t *) priv;
+    uint32_t off = addr & 0xfff;
+    int      sh  = (off & 3) << 3;
+
+    usb_trace(USB_LOG_REG, -1, "W8  +%03x %-18s <- %02x", off, ohci_reg_name(off), val);
+
+    ohci_reg_write(dev, off & 0xffc, (uint32_t) val << sh, 0xffu << sh);
 }
 
 static void
 ohci_mmio_writew(uint32_t addr, uint16_t val, void *priv)
 {
-    usb_trace(USB_LOG_REG, -1, "W16 +%03x %-18s <- %04x", addr & 0xfff, ohci_reg_name(addr), val);
-    ohci_mmio_write(addr, val, priv);
-    ohci_mmio_write(addr + 1, val >> 8, priv);
+    ohci_t  *dev = (ohci_t *) priv;
+    uint32_t off = addr & 0xfff;
+    int      sh  = (off & 3) << 3;
+
+    usb_trace(USB_LOG_REG, -1, "W16 +%03x %-18s <- %04x", off, ohci_reg_name(off), val);
+
+    if ((off & 3) == 3) {
+        ohci_reg_write(dev, off & 0xffc, (uint32_t) val << 24, 0xff000000);
+        ohci_reg_write(dev, (off + 1) & 0xffc, val >> 8, 0x000000ff);
+    } else
+        ohci_reg_write(dev, off & 0xffc, (uint32_t) val << sh, 0xffffu << sh);
 }
 
 static void
 ohci_mmio_writel(uint32_t addr, uint32_t val, void *priv)
 {
-    usb_trace(USB_LOG_REG, -1, "W32 +%03x %-18s <- %08x", addr & 0xfff, ohci_reg_name(addr), val);
-    ohci_mmio_write(addr, val, priv);
-    ohci_mmio_write(addr + 1, val >> 8, priv);
-    ohci_mmio_write(addr + 2, val >> 16, priv);
-    ohci_mmio_write(addr + 3, val >> 24, priv);
+    ohci_t  *dev = (ohci_t *) priv;
+    uint32_t off = addr & 0xffc;
+
+    usb_trace(USB_LOG_REG, -1, "W32 +%03x %-18s <- %08x", off, ohci_reg_name(off), val);
+
+    ohci_reg_write(dev, off, val, 0xffffffff);
 }
 
 void
@@ -1473,10 +1651,7 @@ usb_reset(void *priv)
     /* Devices stay on the wire through a chip reset and connect again (s2.1.7). */
     uhci_schedule_detect(dev->uhci);
 
-    memset(dev->ohci_mmio, 0x00, 4096);
-    dev->ohci_mmio[0x00] = 0x10;
-    dev->ohci_mmio[0x01] = 0x01;
-    dev->ohci_mmio[0x48] = 0x02;
+    ohci_hard_reset(dev->ohci);
 
     if (dev->uhci_enable && (dev->uhci_io_base != 0x0000))
         io_removehandler(dev->uhci_io_base, 0x20, uhci_inb, uhci_inw, uhci_inl, uhci_outb, uhci_outw, uhci_outl, dev->uhci);
@@ -1503,6 +1678,7 @@ usb_close(void *priv)
     timer_disable(&dev->uhci->frame_timer);
     timer_disable(&dev->uhci->detect_timer);
     free(dev->uhci);
+    free(dev->ohci);
     free(dev);
 
     usb_log_close();
@@ -1532,15 +1708,13 @@ usb_init(UNUSED(const device_t *info))
         }
     }
 
-    memset(dev->ohci_mmio, 0x00, 4096);
-    dev->ohci_mmio[0x00] = 0x10;
-    dev->ohci_mmio[0x01] = 0x01;
-    dev->ohci_mmio[0x48] = 0x02;
+    dev->ohci      = (ohci_t *) calloc(1, sizeof(ohci_t));
+    dev->ohci->ndp = 2;
 
     mem_mapping_add(&dev->ohci_mmio_mapping, 0, 0,
                     ohci_mmio_readb, ohci_mmio_readw, ohci_mmio_readl,
                     ohci_mmio_writeb, ohci_mmio_writew, ohci_mmio_writel,
-                    NULL, MEM_MAPPING_EXTERNAL, dev);
+                    NULL, MEM_MAPPING_EXTERNAL, dev->ohci);
     usb_reset(dev);
 
     return dev;

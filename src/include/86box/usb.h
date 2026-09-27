@@ -21,10 +21,11 @@ extern "C" {
 #endif
 
 typedef struct uhci_t uhci_t;
+typedef struct ohci_t ohci_t;
 
 typedef struct usb_t {
     uhci_t       *uhci;
-    uint8_t       ohci_mmio[4096];
+    ohci_t       *ohci;
     uint16_t      uhci_io_base;
     int           uhci_enable;
     int           ohci_enable;

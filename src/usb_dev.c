@@ -410,6 +410,7 @@ usb_dev_ctl_out(usb_dev_t *dev, const usb_packet_t *p)
             return USB_RET_ACK;
 
         default:
+            dev->ctl_stage = CTL_STALL;
             return USB_RET_STALL;
     }
 }
@@ -483,8 +484,11 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
                 if (ret == USB_DATA_NAK)
                     return USB_RET_NAK;
                 if (ret == USB_DATA_STALL) {
+                    /* A control STALL holds until the next SETUP (8.5.2). */
                     if (n != 0)
                         ep->halt = 1;
+                    else
+                        dev->ctl_stage = CTL_STALL;
                     return USB_RET_STALL;
                 }
                 ep->pend_len = ret;

@@ -1329,6 +1329,8 @@ usb_reset(void *priv)
     uhci_power_on_reset(dev->uhci);
     /* PCICMD resets to 0; GRESET leaves PCI configuration alone. */
     dev->uhci->bus_master = 0;
+    /* Devices stay on the wire through a chip reset and connect again (s2.1.7). */
+    uhci_schedule_detect(dev->uhci);
 
     memset(dev->ohci_mmio, 0x00, 4096);
     dev->ohci_mmio[0x00] = 0x10;

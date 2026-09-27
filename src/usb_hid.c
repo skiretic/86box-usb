@@ -531,6 +531,12 @@ static const uint8_t hid_kbd_usage[0x200] = {
 /* A host that polled the interrupt pipe this recently is using the keyboard. */
 #define HID_KBD_IN_USE_US 100000ULL
 
+enum {
+    KBD_OWNER_NONE = 0,
+    KBD_OWNER_USB,
+    KBD_OWNER_PS2
+};
+
 typedef struct hid_kbd_t {
     usb_dev_t  usb;
     uint8_t    protocol; /* 0 boot, 1 report; both send the B.1 report */
@@ -546,7 +552,7 @@ typedef struct hid_kbd_t {
     int        polled;
     uint64_t   polled_us;
     int        configured;
-    uint8_t    owner[0x200]; /* host key pressed through this keyboard */
+    uint8_t    owner[0x200]; /* which keyboard took each held host key */
     int        attached;
     /* Host keys arrive on the GUI thread, polls on the emulation thread. */
     mutex_t   *lock;
@@ -624,19 +630,24 @@ hid_kbd_key_locked(hid_kbd_t *dev, uint16_t scan, int down)
 
     scan &= 0x1ff;
 
+    /* Host key repeats stay with the keyboard that took the press. */
     if (down) {
-        if (dev->owner[scan])
-            return 1; /* host key repeat: the key is already held */
-        if ((usage == 0) || !hid_kbd_in_use(dev))
+        if (dev->owner[scan] == KBD_OWNER_USB)
+            return 1;
+        if ((dev->owner[scan] == KBD_OWNER_PS2) || (usage == 0) || !hid_kbd_in_use(dev)) {
+            dev->owner[scan] = KBD_OWNER_PS2;
             return 0;
-        dev->owner[scan] = 1;
+        }
+        dev->owner[scan] = KBD_OWNER_USB;
         hid_kbd_press(dev, usage, 1);
         return 1;
     }
 
-    if (!dev->owner[scan])
+    if (dev->owner[scan] != KBD_OWNER_USB) {
+        dev->owner[scan] = KBD_OWNER_NONE;
         return 0;
-    dev->owner[scan] = 0;
+    }
+    dev->owner[scan] = KBD_OWNER_NONE;
     hid_kbd_press(dev, usage, 0);
     return 1;
 }

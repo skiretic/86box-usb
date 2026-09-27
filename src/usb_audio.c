@@ -56,6 +56,7 @@
 #define AUD_VOL_MIN (-60 * 256)
 #define AUD_VOL_MAX 0
 #define AUD_VOL_RES 256
+#define AUD_VOL_SILENCE (-32768) /* 8000h: -infinity dB */
 
 /* Queue in source frames; playback starts once 30 ms is in, and at most
    200 ms is kept. */
@@ -210,10 +211,13 @@ usb_audio_fu_request(usb_audio_t *dev, const uint8_t *setup, uint8_t *data)
                 case AUD_SET_CUR:
                     if (wlength < 2)
                         return USB_DATA_STALL;
-                    /* Rounded to the closest available setting (5.2.2.4.3.2). */
+                    /* 8000h is silence and stays CUR; anything else is rounded to
+                       the closest available setting (5.2.2.4.3.2). */
                     v = (int16_t) (data[0] | (data[1] << 8));
-                    if (v == -32768)
-                        v = AUD_VOL_MIN;
+                    if (v == AUD_VOL_SILENCE) {
+                        dev->volume = v;
+                        return 0;
+                    }
                     v = ((v + ((v < 0) ? -(AUD_VOL_RES / 2) : (AUD_VOL_RES / 2))) / AUD_VOL_RES) * AUD_VOL_RES;
                     if (v < AUD_VOL_MIN)
                         v = AUD_VOL_MIN;
@@ -304,7 +308,7 @@ usb_audio_get_buffer(int32_t *buffer, uint16_t len, void *priv)
 {
     usb_audio_t *dev  = (usb_audio_t *) priv;
     double       step = (double) dev->rate / (double) SOUND_FREQ;
-    double       gain = dev->mute ? 0.0 : pow(10.0, (double) dev->volume / (256.0 * 20.0));
+    double       gain = (dev->mute || (dev->volume == AUD_VOL_SILENCE)) ? 0.0 : pow(10.0, (double) dev->volume / (256.0 * 20.0));
 
     if (!dev->playing)
         return;

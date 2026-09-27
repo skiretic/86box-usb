@@ -106,6 +106,21 @@ sis_5572_usb_unk_read(uint16_t addr, void *priv)
     return ret;
 }
 
+/* USBIRQ reaches the 8259 through the bridge's USBIRQ remapping register,
+   emulated as MIRQ3 (SiS71 p61, SiS82 p150, SiS95 p105); it is a
+   shareable level request (SiS95 p66). */
+static void
+sis_5572_usb_irq(void *priv, int level)
+{
+    sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
+
+    dev->sis->usb_irq_level = !!level;
+    if (level)
+        pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+    else
+        pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+}
+
 void
 sis_5572_usb_write(int addr, uint8_t val, void *priv)
 {
@@ -134,6 +149,8 @@ sis_5572_usb_write(int addr, uint8_t val, void *priv)
             ohci_update_mem_mapping(dev->usb,
                                     dev->pci_conf[0x11], dev->pci_conf[0x12],
                                     dev->pci_conf[0x13], dev->pci_conf[0x04] & 0x02);
+            /* Bus Master is bit 2 (SiS71 p70, SiS82 p191). */
+            ohci_set_bus_master(dev->usb, dev->pci_conf[0x04] & 0x04);
             break;
 
         case 0x05: /* Command - High Byte */
@@ -238,6 +255,8 @@ sis_5572_usb_reset(void *priv)
     dev->pci_conf[0x3e] = 0x00;
     dev->pci_conf[0x3f] = 0x00;
 
+    ohci_set_bus_master(dev->usb, 0);
+
     if (dev->rev == 0xb0) {
         ohci_update_mem_mapping(dev->usb,
                                 dev->pci_conf[0x11], dev->pci_conf[0x12],
@@ -274,6 +293,7 @@ sis_5572_usb_init(UNUSED(const device_t *info))
 
     /* USB */
     dev->usb = device_add(&usb_device);
+    ohci_set_irq_handler(dev->usb, sis_5572_usb_irq, dev);
 
     sis_5572_usb_reset(dev);
 

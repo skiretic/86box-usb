@@ -305,6 +305,21 @@ sis_5595_ddma_recalc(sis_5513_pci_to_isa_t *dev)
     }
 }
 
+/* USBIRQ remapping (SiS71 p61, SiS82 p150, SiS95 p105): bit 7 clear routes
+   the OHCI's USBIRQ to bits 3:0. A line held high moves to the new route. */
+static void
+sis_5513_usbirq_remap(sis_5513_pci_to_isa_t *dev, uint8_t val)
+{
+    if (dev->sis->usb_irq_level)
+        pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+    if (val & 0x80)
+        pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
+    else
+        pci_set_mirq_routing(PCI_MIRQ3, val & 0xf);
+    if (dev->sis->usb_irq_level)
+        pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+}
+
 static void
 sis_5513_00_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
 {
@@ -402,10 +417,7 @@ sis_5513_01_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
         case 0x68: /* USBIRQ Remapping Control Register */
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val & 0xcf;
-            if (val & 0x80)
-                 pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
-            else
-                pci_set_mirq_routing(PCI_MIRQ3, val & 0xf);
+            sis_5513_usbirq_remap(dev, val);
             break;
 
         case 0x69:
@@ -485,10 +497,7 @@ sis_5513_11_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val;
             dev->sis->usb_enabled = !!(val & 0x40);
-            if (val & 0x80)
-                 pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
-            else
-                pci_set_mirq_routing(PCI_MIRQ3, val & 0xf);
+            sis_5513_usbirq_remap(dev, val);
             break;
 
         case 0x63: /* GPCS0 Control Register */
@@ -616,10 +625,7 @@ sis_5513_b0_pci_to_isa_write(int addr, uint8_t val, sis_5513_pci_to_isa_t *dev)
             sis_5513_pci_to_isa_log("Set MIRQ routing: USBIRQ -> %02X\n", val);
             dev->pci_conf[addr] = val;
             dev->sis->usb_enabled = !!(val & 0x40);
-            if (val & 0x80)
-                 pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
-            else
-                 pci_set_mirq_routing(PCI_MIRQ3, val & 0xf);
+            sis_5513_usbirq_remap(dev, val);
             break;
 
         case 0x63: /* PCI OutputBuffer Current Strength Register */ {
@@ -1294,6 +1300,9 @@ sis_5513_pci_to_isa_init(UNUSED(const device_t *info))
         case 0x01:
             /* MIRQ */
             pci_enable_mirq(1);
+
+            /* USBIRQ, remapped by 68h (SiS71 p61) */
+            pci_enable_mirq(3);
             break;
         case 0x11:
         case 0x81:

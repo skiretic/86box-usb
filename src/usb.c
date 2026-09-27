@@ -245,7 +245,11 @@ enum {
 #define OHCI_TD_EC    0x0c000000
 #define OHCI_TD_CC    0xf0000000
 
-#define OHCI_CC_NOERROR 0x0
+#define OHCI_CC_NOERROR             0x0
+#define OHCI_CC_STALL               0x4
+#define OHCI_CC_DEVICENOTRESPONDING 0x5
+#define OHCI_CC_DATAOVERRUN         0x8
+#define OHCI_CC_DATAUNDERRUN        0x9
 
 #define OHCI_LIST_CONTROL 0
 #define OHCI_LIST_BULK    1
@@ -315,6 +319,7 @@ struct ohci_t {
     int         np_list;
     int         ratio_left;
     uint8_t     np_first[2];
+    uint8_t     so_pending; /* the periodic list overran: SO at the next HCCA update */
     void      (*set_irq)(void *priv, int level);
     void       *irq_priv;
     /* Legacy support (Appendix B): the registers only, no 60h/64h decode. */
@@ -1880,7 +1885,7 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
             if ((dir == 2) && (bytes < size) && !(td[0] & OHCI_TD_R))
                 break;
 
-            td[0] = (td[0] & ~(OHCI_TD_T | OHCI_TD_EC | OHCI_TD_CC)) | 0x02000000 | ((toggle ^ 1) << 24) | (OHCI_CC_NOERROR << 28);
+            td[0] = (td[0] & ~(OHCI_TD_T | OHCI_TD_EC | OHCI_TD_CC)) | 0x02000000 | ((toggle ^ 1) << 24) | ((uint32_t) OHCI_CC_NOERROR << 28);
             if (bytes == remaining) {
                 td[1]    = 0x00000000;
                 complete = 1;
@@ -1986,7 +1991,192 @@ ohci_run_nonperiodic(ohci_t *dev, double stop)
     }
 }
 
-/* The frame's schedule, run at its boundary against its bit time. With Bus
+/* An isochronous TD retires without touching toggleCarry (p31). */
+static void
+ohci_itd_retire(ohci_t *dev, uint32_t ed_addr, uint32_t *ed, uint32_t td_addr, const uint32_t *td)
+{
+    ed[2] = (td[2] & 0xfffffff0) | (ed[2] & OHCI_ED_C);
+    ohci_write_dword(td_addr + 8, dev->done_head);
+    dev->done_head = td_addr;
+    ohci_write_dword(ed_addr + 8, ed[2]);
+}
+
+/* The Isochronous TD at the ED's head (p39-45): packet R = FrameNumber -
+   StartingFrame of FrameCount + 1, once, in its own frame. */
+static int
+ohci_service_itd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
+{
+    uint32_t     td_addr;
+    uint32_t     td[8];
+    uint32_t     start;
+    uint32_t     end;
+    uint32_t     s13;
+    uint32_t     e13;
+    uint32_t     off;
+    uint8_t      buf[2048];
+    uint8_t      psw[2];
+    usb_packet_t p;
+    usb_dev_t   *usb;
+    double       ldpc;
+    int          dir = (ed[0] >> 11) & 3;
+    int          mps = (ed[0] >> 16) & 0x7ff;
+    int          r;
+    int          fc;
+    int          size;
+    int          ret;
+    int          cc;
+    int          len = 0;
+
+    /* An isochronous TD has no direction of its own (p31, p39). */
+    if ((dir != 1) && (dir != 2))
+        return OHCI_ED_NONE;
+
+    for (;;) {
+        td_addr = ed[2] & 0xfffffff0;
+        if (td_addr == (ed[1] & 0xfffffff0))
+            return OHCI_ED_NONE;
+
+        ohci_read_dwords(td_addr, td, 8);
+        dev->bits_left -= OHCI_FETCH_BITS;
+
+        r  = (int16_t) (dev->fm_number - (td[0] & 0xffff));
+        fc = (td[0] >> 24) & 7;
+        if (r < 0)
+            return OHCI_ED_NONE;
+        if (r <= fc)
+            break;
+
+        /* Expired: retired with DATAOVERRUN, the ED not halted, and the next
+           TD of the ED is processed (p43). */
+        td[0] = (td[0] & ~OHCI_TD_CC) | ((uint32_t) OHCI_CC_DATAOVERRUN << 28);
+        ohci_write_dword(td_addr, td[0]);
+        ohci_itd_retire(dev, ed_addr, ed, td_addr, td);
+        usb_trace(USB_LOG_SCHED, dev->fm_number, "ED %08x ITD %08x expired (R %i > FC %i), retired DATAOVERRUN", ed_addr, td_addr, r, fc);
+    }
+
+    /* The packet's buffer: Offset[R] to Offset[R+1] - 1, or to BE for the
+       last one; bit 12 of an offset picks BP0's page or BE's (p41). */
+    off   = (td[4 + (r >> 1)] >> ((r & 1) << 4)) & 0x1fff;
+    s13   = off;
+    start = ((off & 0x1000) ? (td[3] & 0xfffff000) : (td[1] & 0xfffff000)) | (off & 0xfff);
+    if (r < fc) {
+        e13 = (((td[4 + ((r + 1) >> 1)] >> (((r + 1) & 1) << 4)) & 0x1fff) - 1) & 0x1fff;
+        end = ((e13 & 0x1000) ? (td[3] & 0xfffff000) : (td[1] & 0xfffff000)) | (e13 & 0xfff);
+    } else {
+        e13 = (((td[3] ^ td[1]) & 0xfffff000) ? 0x1000 : 0) | (td[3] & 0xfff);
+        end = td[3];
+    }
+    size = (e13 + 1 - s13) & 0x1fff;
+    if (size > (int) sizeof(buf))
+        size = sizeof(buf);
+
+    if (dev->bits_left < 1.0)
+        return OHCI_ED_NO_TIME;
+    ldpc = (double) ((dev->fm_interval >> 16) & 0x7fff) - (((double) dev->fr_load + 1.0 - dev->bits_left) * 6.0 / 7.0);
+    if ((double) (((dir == 2) ? mps : size) * 8) > ldpc)
+        return OHCI_ED_NO_TIME;
+
+    p.pid    = (dir == 1) ? USB_PID_OUT : USB_PID_IN;
+    p.ep     = (ed[0] >> 7) & 0x0f;
+    p.toggle = 0;
+    p.data   = buf;
+    p.len    = (dir == 1) ? size : ((mps > size) ? mps : size);
+    p.actual = 0;
+    if (p.len > (int) sizeof(buf))
+        p.len = sizeof(buf);
+
+    if (dir == 1)
+        ohci_td_data(start, end, buf, size, 0);
+
+    usb = ohci_find_device(dev, ed[0] & 0x7f, 0);
+    ret = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
+    dev->bits_left -= uhci_bus_ns(0, 1, dir == 2, (dir == 2) ? p.actual : size) * 12.0 / 1000.0;
+
+    /* The PSW (p42-45): an OUT has no handshake, so it ends without error;
+       an IN reports what arrived, up to the buffer. */
+    if (dir == 1)
+        cc = OHCI_CC_NOERROR;
+    else if ((ret == USB_RET_ACK) || (ret == USB_RET_BABBLE)) {
+        len = p.actual;
+        if (len > size) {
+            len = size;
+            cc  = OHCI_CC_DATAOVERRUN;
+        } else
+            cc = (len < size) ? OHCI_CC_DATAUNDERRUN : OHCI_CC_NOERROR;
+        ohci_td_data(start, end, buf, len, 1);
+    } else if ((ret == USB_RET_NAK) || (ret == USB_RET_STALL))
+        cc = OHCI_CC_STALL;
+    else
+        cc = OHCI_CC_DEVICENOTRESPONDING;
+
+    psw[0] = len & 0xff;
+    psw[1] = (cc << 4) | ((len >> 8) & 0x07);
+    dma_bm_write(td_addr + 16 + (r << 1), psw, 2, 2);
+
+    usb_trace(USB_LOG_SCHED, dev->fm_number, "ED %08x ITD %08x %s dev %i ep %i packet %i/%i len %i -> %s, PSW %02x%02x%s",
+              ed_addr, td_addr, (dir == 1) ? "OUT" : "IN", ed[0] & 0x7f, p.ep, r, fc, size, uhci_ret_names[ret],
+              psw[1], psw[0], (r == fc) ? ", retired" : "");
+
+    /* The last packet completes the TD with NOERROR (p42). */
+    if (r == fc) {
+        td[0] = (td[0] & ~OHCI_TD_CC) | ((uint32_t) OHCI_CC_NOERROR << 28);
+        ohci_write_dword(td_addr, td[0]);
+        ohci_itd_retire(dev, ed_addr, ed, td_addr, td);
+    }
+
+    return OHCI_ED_SENT;
+}
+
+/* The periodic list (p110-111): the interrupt list of this frame from the
+   HCCA, isochronous EDs at its tail, followed to its end in one pass. If
+   it cannot finish in the frame, that is a scheduling overrun (p119). */
+static void
+ohci_run_periodic(ohci_t *dev)
+{
+    uint32_t ed_addr;
+    uint32_t ed[4];
+    int      r;
+
+    if (!(dev->control & OHCI_CTL_PLE))
+        return;
+
+    ohci_read_dwords(dev->hcca + ((dev->fm_number & 0x1f) << 2), &ed_addr, 1);
+    dev->bits_left -= OHCI_FETCH_BITS;
+    ed_addr &= 0xfffffff0;
+    dev->period_cur = ed_addr;
+
+    while (ed_addr != 0) {
+        if (dev->bits_left < 1.0) {
+            dev->so_pending = 1;
+            break;
+        }
+
+        ohci_read_dwords(ed_addr, ed, 4);
+        dev->bits_left -= OHCI_FETCH_BITS;
+
+        /* IsochronousEnable clear ends the list at its first isochronous ED (p109). */
+        if ((ed[0] & OHCI_ED_F) && !(dev->control & OHCI_CTL_IE))
+            break;
+
+        if (!(ed[0] & OHCI_ED_K) && !(ed[2] & OHCI_ED_H) && ((ed[1] & 0xfffffff0) != (ed[2] & 0xfffffff0))) {
+            r = (ed[0] & OHCI_ED_F) ? ohci_service_itd(dev, ed_addr, ed) : ohci_service_gtd(dev, ed_addr, ed);
+            if (r == OHCI_ED_NO_TIME) {
+                dev->so_pending = 1;
+                break;
+            }
+        }
+
+        ed_addr         = ed[3] & 0xfffffff0;
+        dev->period_cur = ed_addr;
+    }
+
+    if (dev->so_pending)
+        usb_trace(USB_LOG_SCHED, dev->fm_number, "periodic list overran the frame at ED %08x", ed_addr);
+}
+
+/* The frame's schedule, run at its boundary against its bit time: the
+   nonperiodic lists while FrameRemaining > PeriodicStart, the periodic list
+   to completion, then the nonperiodic lists again (p106-107). With Bus
    Master Enable clear no descriptor is read (p148). */
 static void
 ohci_run_frame(ohci_t *dev)
@@ -1995,6 +2185,8 @@ ohci_run_frame(ohci_t *dev)
         return;
 
     dev->bits_left = (double) dev->fr_load + 1.0;
+    ohci_run_nonperiodic(dev, (double) dev->periodic_start + 1.0);
+    ohci_run_periodic(dev);
     ohci_run_nonperiodic(dev, 0.0);
 }
 
@@ -2081,6 +2273,12 @@ ohci_frame_boundary(void *priv)
         dev->fn_msb = dev->fm_number & 0x8000;
         dev->intsts |= OHCI_INT_FNO;
     }
+    /* SchedulingOverrun of the last frame, with its count (p119, p127). */
+    if (dev->so_pending) {
+        dev->so_pending = 0;
+        dev->intsts |= OHCI_INT_SO;
+        dev->cmdsts = (dev->cmdsts & ~OHCI_CS_SOC) | ((dev->cmdsts + 0x00010000) & OHCI_CS_SOC);
+    }
     dev->intsts |= OHCI_INT_SF;
 
     ohci_run_frame(dev);
@@ -2093,6 +2291,7 @@ static void
 ohci_soft_reset(ohci_t *dev)
 {
     timer_stop(&dev->frame_timer);
+    dev->so_pending     = 0;
     dev->fn_msb         = 0x0000;
     dev->fr_load        = 0x0000;
     dev->control        = (dev->control & OHCI_CTL_IR) | OHCI_HCFS_SUSPEND;

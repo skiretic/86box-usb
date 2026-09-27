@@ -50,6 +50,7 @@ add_executable(86Box
     usb_hid.c
     usb_legacy.c
     usb_log.c
+    usb_msd.c
     device.c
     nvr.c
     nvr_at.c

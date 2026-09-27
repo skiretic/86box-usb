@@ -43,6 +43,8 @@
 #include <86box/scsi_pcscsi.h>
 #include <86box/scsi_qlogic.h>
 #include <86box/scsi_spock.h>
+#include <86box/mem.h>
+#include <86box/usb.h>
 
 int scsi_card_current[SCSI_CARD_MAX] = { 0, 0, 0, 0 };
 double scsi_bus_speed[SCSI_BUS_MAX] = { 0.0, 0.0, 0.0, 0.0 };
@@ -111,6 +113,8 @@ static SCSI_CARD scsi_cards[] = {
     { &qla1280_device,           },
     { &qla12160a_device,         },
     { &dc390_pci_device,         },
+    /* USB */
+    { &usb_msd_device,           },
     { NULL,                      },
     // clang-format on
 };

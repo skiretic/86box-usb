@@ -34,6 +34,8 @@ typedef struct usb_t {
 
 /* Global variables. */
 extern const device_t usb_device;
+/* A USB mass storage bridge to a SCSI bus, listed with the SCSI controllers. */
+extern const device_t usb_msd_device;
 
 /* Functions. */
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);

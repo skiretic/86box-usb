@@ -36,6 +36,8 @@ typedef struct usb_t {
 extern const device_t usb_device;
 /* A USB mass storage bridge to a SCSI bus, listed with the SCSI controllers. */
 extern const device_t usb_msd_device;
+/* A USB speaker, listed with the sound cards. */
+extern const device_t usb_speaker_device;
 
 /* Functions. */
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);

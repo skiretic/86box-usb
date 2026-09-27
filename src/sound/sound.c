@@ -36,6 +36,8 @@
 #include <86box/sound.h>
 #include <86box/fdd_audio.h>
 #include <86box/hdd_audio.h>
+#include <86box/mem.h>
+#include <86box/usb.h>
 
 typedef struct {
     const device_t *device;
@@ -272,6 +274,8 @@ static const SOUND_CARD sound_cards[] = {
 #ifdef USE_SOFTMODEM
     { &si3036_device                },
 #endif
+    /* USB */
+    { &usb_speaker_device           },
     { NULL                          }
     // clang-format on
 };

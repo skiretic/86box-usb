@@ -204,8 +204,10 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
                 if ((ep == NULL) || !ep->present)
                     return USB_DATA_STALL;
                 ep->halt = (setup[1] == REQ_SET_FEATURE);
-                /* Clearing halt always restarts the toggle at DATA0 (9.4.5). */
-                if (!ep->halt) {
+                /* Clearing halt restarts a data toggle at DATA0 (9.4.5). The
+                   control pipe's toggles belong to SETUP: this request's own
+                   Status stage is still DATA1 (8.5.2). */
+                if (!ep->halt && ((windex & 0x0f) != 0)) {
                     ep->toggle  = 0;
                     ep->pending = 0;
                 }

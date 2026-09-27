@@ -814,6 +814,9 @@ uhci_portsc_write(uhci_t *dev, int n, uint16_t val)
         port->sc &= ~UHCI_PORT_PR;
         if (port->sc & UHCI_PORT_CCS)
             port->sc |= UHCI_PORT_CSC;
+        /* Connect detection skips a port in reset; one not yet seen is seen now. */
+        else if (port->usb != NULL)
+            uhci_schedule_detect(dev);
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i reset end", n + 1);
     }
 

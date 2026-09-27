@@ -129,7 +129,8 @@ ali5237_irq(void *priv, int level)
     ali1543_t *dev = (ali1543_t *) priv;
 
     dev->usb_irq_level = !!level;
-    ali5237_drive_irq(dev, dev->usb_irq_level);
+    if (dev->usb_dev_enable)
+        ali5237_drive_irq(dev, dev->usb_irq_level);
 }
 
 /* The OHCI's SMI output sets M7101 USB Bus SMI Status, 4Ah bit 5 (ALi-C
@@ -139,11 +140,27 @@ ali5237_smi(void *priv, int level)
 {
     ali1543_t *dev = (ali1543_t *) priv;
 
-    if (!level)
+    if (!level || !dev->usb_dev_enable)
         return;
     dev->pmu_conf[0x4a] |= 0x20;
     if (dev->pmu_conf[0x77] & 0x08)
         smi_raise();
+}
+
+/* 53h bit 6 makes the M5237 invisible (ALi-C p64): no window, no bus
+   master, no interrupt. Its registers are kept for when it comes back. */
+static void
+ali5237_set_enable(ali1543_t *dev, int enable)
+{
+    if (enable == dev->usb_dev_enable)
+        return;
+
+    dev->usb_dev_enable = enable;
+    ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13],
+                            enable && (dev->usb_conf[0x04] & 2));
+    ohci_set_bus_master(dev->usb, enable && (dev->usb_conf[0x04] & 4));
+    if (dev->usb_irq_level)
+        ali5237_drive_irq(dev, enable);
 }
 
 static void
@@ -292,7 +309,7 @@ ali1533_write(int func, int addr, int len, uint8_t val, void *priv)
             else
                 dev->pci_conf[addr] = val & 0xcf;
             /* This actually enables/disables the USB *device* rather than the interface itself. */
-            dev->usb_dev_enable = !(val & 0x40);
+            ali5237_set_enable(dev, !(val & 0x40));
             if (dev->type == 1) {
                 nvr_at_index_read_handler(0, 0x0070, dev->nvr);
                 nvr_at_index_read_handler(0, 0x0072, dev->nvr);
@@ -440,12 +457,12 @@ ali1533_write(int func, int addr, int len, uint8_t val, void *priv)
 
         case 0x74: /* USB IRQ Routing - we cheat and use MIRQ4 */
             /* A line held high moves to the new route and trigger mode. */
-            if (dev->usb_irq_level)
+            if (dev->usb_irq_level && dev->usb_dev_enable)
                 ali5237_drive_irq(dev, 0);
             dev->pci_conf[addr] = val & 0xdf;
             pci_set_mirq_level(PCI_MIRQ4, !(val & 0x10));
             pci_set_mirq_routing(PCI_MIRQ4, ali1533_irq_routing[val & 0x0f]);
-            if (dev->usb_irq_level)
+            if (dev->usb_irq_level && dev->usb_dev_enable)
                 ali5237_drive_irq(dev, 1);
             break;
 

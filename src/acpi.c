@@ -1144,7 +1144,6 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
     acpi_t  *dev = (acpi_t *) priv;
     int      shift16;
     int      shift32;
-    uint32_t old_glben;
 
     addr &= 0x3f;
 #ifdef ENABLE_ACPI_LOG
@@ -1191,12 +1190,7 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x20:
         case 0x21:
             /* GLBEN - Global Enable Register (IO) */
-            old_glben       = dev->regs.glben;
             dev->regs.glben = ((dev->regs.glben & ~(0xff << shift16)) | (val << shift16)) & 0x8d1f;
-            /* Enabling legacy USB with its status already set asserts SMI#. */
-            if (((dev->regs.glbctl & 0x00010001) == 0x00010001) && !(old_glben & 0x01) &&
-                (dev->regs.glben & 0x01) && (dev->regs.glbsts & 0x02))
-                acpi_raise_smi(dev, 1);
             break;
         case 0x28:
         case 0x29:
@@ -1208,7 +1202,7 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
             if (((dev->regs.glbctl & 0x00010001) == 0x00010001) &&
                 (((dev->regs.glbsts & 0x20) && dev->apm->do_smi) ||
                  ((dev->regs.glbsts & 0x01) && (dev->regs.glben & 0x02)) ||
-                 ((dev->regs.glbsts & 0x02) && (dev->regs.glben & 0x01))))
+                 (dev->regs.glbsts & 0x02)))
                 acpi_raise_smi(dev, 1);
             /* Setting BIOS_RLS also sets GBL_STS and generates SMI. */
             if (dev->regs.glbctl & 0x00000002) {

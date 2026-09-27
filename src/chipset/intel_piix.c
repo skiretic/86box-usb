@@ -539,9 +539,10 @@ piix_usb_update_irq(piix_t *dev)
 
     /* A legacy USB event (the IRQ with USBSMIEN, an enabled keyboard trap, or
        A20PTS with SMIEPTE), gated by SMIEN bit 8 into SMIREQ bit 8 on the
-       PIIX3 (2.2.19, 2.2.22) and by GLBEN LEGACY_USB_EN on the PIIX4, whose
-       LEGACY_USB_STS it sets. None is raised while an A20GATE pass-through
-       sequence runs (UHCI 1.1 s5.2.1 bit 5). */
+       PIIX3 (2.2.19, 2.2.22). On the PIIX4 it sets LEGACY_USB_STS and asserts
+       SMI# without GLBEN LEGACY_USB_EN: shipped PIIX4 BIOSes never set that
+       bit and still rely on the SMI. None is raised while an A20GATE
+       pass-through sequence runs (UHCI 1.1 s5.2.1 bit 5). */
     sources = uhci_legsup_event(&fregs[0xc0], dev->usb_irq_level);
     smi     = (sources & ~dev->usb_smi_level) && !(fregs[0xc0] & 0x40);
     if (dev->type == 3) {
@@ -567,7 +568,7 @@ piix_usb_update_irq(piix_t *dev)
                       dev->acpi->regs.glben, dev->acpi->regs.glbctl);
             /* With EOS (GLBCTL bit 16) clear only the status is set; setting
                EOS asserts SMI# for it then (PIIX4 11.5.1). */
-            if ((dev->acpi->regs.glben & 0x0001) && (dev->acpi->regs.glbctl & 0x00010000))
+            if (dev->acpi->regs.glbctl & 0x00010000)
                 acpi_raise_smi(dev->acpi, 1);
         }
     }

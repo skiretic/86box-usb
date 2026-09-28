@@ -1472,15 +1472,20 @@ usb_detach(usb_dev_t *udev)
                 continue;
 
             port->usb = NULL;
-            if (port->sc & UHCI_PORT_CCS)
+            if (port->sc & UHCI_PORT_CCS) {
                 port->sc |= UHCI_PORT_CSC;
+                /* The disconnect is a resume event in global suspend (Table 6). A
+                   device not yet connect-detected, or under GRESET (which holds
+                   PORTSC at 0), leaves no line change behind. */
+                if (hc->cmd & UHCI_CMD_EGSM) {
+                    hc->cmd |= UHCI_CMD_FGR;
+                    hc->sts |= UHCI_STS_RD;
+                    usb_trace(USB_LOG_IRQ, hc->frnum, "UHCI USBSTS RD set (disconnect in global suspend)");
+                }
+            }
             if (port->sc & UHCI_PORT_PE)
                 port->sc |= UHCI_PORT_PEDC;
             port->sc &= ~(UHCI_PORT_CCS | UHCI_PORT_PE | UHCI_PORT_LSDA | UHCI_PORT_SUSP | UHCI_PORT_RD);
-            if (hc->cmd & UHCI_CMD_EGSM) {
-                hc->cmd |= UHCI_CMD_FGR;
-                hc->sts |= UHCI_STS_RD;
-            }
             usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s detached, PORTSC %04x", i + 1, udev->name, port->sc);
             uhci_update_irq(hc);
         }

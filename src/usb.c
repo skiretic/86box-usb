@@ -1331,9 +1331,11 @@ uhci_outw(uint16_t addr, uint16_t val, void *priv)
 
     usb_trace(USB_LOG_REG, dev->frnum, "W16 +%02x %-9s <- %04x", off, uhci_reg_name(off), val);
 
+    /* At 1Fh the high byte is 20h, past this block: dropped, as in uhci_outl. */
     if (off & 1) {
         uhci_write16(dev, off, val << 8, 0xff00);
-        uhci_write16(dev, off + 1, val >> 8, 0x00ff);
+        if (off < 0x1f)
+            uhci_write16(dev, off + 1, val >> 8, 0x00ff);
     } else
         uhci_write16(dev, off, val, 0xffff);
 }

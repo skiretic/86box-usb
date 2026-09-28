@@ -644,17 +644,23 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
                 ep->pending  = 1;
             }
 
-            if (ep->pend_len > p->len) {
+            /* Data the host cannot accept gets no handshake (8.4.5.2), so a
+               babbled packet is resent; an OHCI ACKs an overrun instead. */
+            if ((ep->pend_len > p->len) && !p->ack_overrun) {
                 memcpy(p->data, ep->pend_buf, p->len);
                 p->actual = p->len;
                 return USB_RET_BABBLE;
             }
 
-            memcpy(p->data, ep->pend_buf, ep->pend_len);
-            p->actual = ep->pend_len;
+            p->actual = (ep->pend_len > p->len) ? p->len : ep->pend_len;
+            memcpy(p->data, ep->pend_buf, p->actual);
 
-            /* The host ACKs both a good packet and a toggle mismatch (8.6.4). */
-            ret         = (ep->toggle == p->toggle) ? USB_RET_ACK : USB_RET_TOGGLE_MISMATCH;
+            /* The host ACKs both a good packet and a toggle mismatch (8.6.4);
+               a mismatch is reported ahead of an overrun (OHCI 4.3.1.3.6.2). */
+            if (ep->toggle != p->toggle)
+                ret = USB_RET_TOGGLE_MISMATCH;
+            else
+                ret = (ep->pend_len > p->len) ? USB_RET_OVERRUN : USB_RET_ACK;
             ep->pending = 0;
             ep->toggle ^= 1;
             if (n == 0)
@@ -688,7 +694,7 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
         usb_dev_pcap_xfer(dev, p, 0);
     else if (ret == USB_RET_STALL)
         usb_dev_pcap_xfer(dev, p, URB_STALL);
-    else if (ret == USB_RET_BABBLE)
+    else if ((ret == USB_RET_BABBLE) || (ret == USB_RET_OVERRUN))
         usb_dev_pcap_xfer(dev, p, URB_OVERFLOW);
 
     return ret;

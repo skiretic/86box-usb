@@ -33,7 +33,8 @@ enum {
     USB_RET_STALL,
     USB_RET_NO_RESPONSE,     /* no device answered: the host times out */
     USB_RET_BABBLE,          /* IN data longer than the host allowed; not ACKed */
-    USB_RET_TOGGLE_MISMATCH  /* IN data with the wrong DATA PID: ACKed, discarded */
+    USB_RET_TOGGLE_MISMATCH, /* IN data with the wrong DATA PID: ACKed, discarded */
+    USB_RET_OVERRUN          /* IN data longer than the host allowed, ACKed: the excess is lost */
 };
 
 /* Class hooks return this for "NAK the IN" or "STALL". */
@@ -51,6 +52,9 @@ typedef struct usb_packet_t {
     uint8_t *data;
     int      len;    /* OUT/SETUP: bytes sent; IN: bytes the host accepts */
     int      actual; /* IN: bytes received */
+    /* IN: the host ACKs data past len (OVERRUN) instead of leaving it
+       unanswered (BABBLE). OHCI does, UHCI does not. */
+    uint8_t  ack_overrun;
 } usb_packet_t;
 
 typedef struct usb_dev_ops_t {

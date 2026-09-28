@@ -577,7 +577,7 @@ enum {
 };
 
 #ifdef ENABLE_USB_LOG
-static const char *const uhci_ret_names[] = { "ACK", "NAK", "STALL", "timeout", "babble", "toggle mismatch" };
+static const char *const uhci_ret_names[] = { "ACK", "NAK", "STALL", "timeout", "babble", "toggle mismatch", "overrun" };
 #endif
 
 static int
@@ -638,6 +638,9 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     p.data   = buf;
     p.len    = len;
     p.actual = 0;
+    /* The UHCI accepts no more than MaxLen (s3.2.3); a babbled packet gets
+       no handshake (USB 1.1 s8.4.5.2), so the device keeps it. */
+    p.ack_overrun = 0;
 
     if ((pid != USB_PID_IN) && (len > 0))
         dma_bm_read(td[3], buf, len, 1);
@@ -1924,6 +1927,8 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     p.data   = buf;
     p.len    = size;
     p.actual = 0;
+    /* An overrun is ACKed: the toggle advances (p37, p38). */
+    p.ack_overrun = 1;
 
     if (dir != 2)
         ohci_td_data(td[1], td[3], buf, size, 0);
@@ -1949,7 +1954,7 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
             break;
 
         case USB_RET_ACK:
-        case USB_RET_BABBLE:
+        case USB_RET_OVERRUN:
             /* The toggle advances and EC goes to 0 (p36, p116). IN data past
                the buffer is a data overrun: kept up to the buffer, CBP left
                at the packet's start (p38). */
@@ -1960,7 +1965,7 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
             }
             ec    = 0;
             td[0] = (td[0] & ~OHCI_TD_T) | 0x02000000 | ((toggle ^ 1) << 24);
-            if (ret == USB_RET_BABBLE) {
+            if (ret == USB_RET_OVERRUN) {
                 cc       = OHCI_CC_DATAOVERRUN;
                 complete = 1;
             } else if (bytes == remaining) {
@@ -2175,6 +2180,7 @@ ohci_service_itd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     p.data   = buf;
     p.len    = (dir == 1) ? size : ((mps > size) ? mps : size);
     p.actual = 0;
+    p.ack_overrun = 1;
     if (p.len > (int) sizeof(buf))
         p.len = sizeof(buf);
 
@@ -2189,7 +2195,7 @@ ohci_service_itd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
        an IN reports what arrived, up to the buffer. */
     if (dir == 1)
         cc = OHCI_CC_NOERROR;
-    else if ((ret == USB_RET_ACK) || (ret == USB_RET_BABBLE)) {
+    else if ((ret == USB_RET_ACK) || (ret == USB_RET_OVERRUN)) {
         len = p.actual;
         if (len > size) {
             len = size;

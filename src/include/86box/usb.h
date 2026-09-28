@@ -65,6 +65,12 @@ extern void ohci_set_bus_master(usb_t *dev, int enable);
 /* For a chipset whose Bus Master bit is hardwired to 1: on now and after
    every reset. */
 extern void ohci_hardwire_bus_master(usb_t *dev);
+/* Where an OHCI differs from the ALi M5237, SiS 7001 and SMSC SLC90E66,
+   whose behavior is flags 0. Set once at init; kept through every reset. */
+#define OHCI_CHIP_LST_0628H 0x01 /* HcLSThreshold resets to 0628h, not 0 */
+#define OHCI_CHIP_RWC       0x02 /* RemoteWakeupConnected is R/W, not hard 0 */
+#define OHCI_CHIP_NO_SMI    0x04 /* no SMI pin: OwnershipChange is tied to 0 */
+extern void ohci_set_chip_flags(usb_t *dev, uint32_t flags);
 
 /* UHCI legacy keyboard support (UHCI 1.1 s5.2) on a function's LEGSUP
    bytes, legsup[0] = C0h and legsup[1] = C1h. */

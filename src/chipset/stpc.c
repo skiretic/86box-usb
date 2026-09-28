@@ -568,7 +568,9 @@ stpc_usb_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             break;
 
         case 0x11:
-            dev->pci_conf[3][addr] = val & 0xf0;
+            /* BAR bits 11-8 read 0: a 4 KB window (PM 8.10.3). */
+            val &= 0xf0;
+            dev->pci_conf[3][addr] = val;
             ohci_update_mem_mapping(dev->usb, dev->pci_conf[3][0x11], dev->pci_conf[3][0x12], dev->pci_conf[3][0x13], 1);
             break;
 
@@ -958,6 +960,9 @@ stpc_init(const device_t *info)
         pci_add_card(PCI_ADD_SOUTHBRIDGE_USB, stpc_usb_read, stpc_usb_write, dev, &dev->usb_slot);
         ohci_set_irq_handler(dev->usb, stpc_usb_irq, dev);
         ohci_hardwire_bus_master(dev->usb);
+        /* The PM defers the operational registers to the OHCI spec (22.2);
+           no USB SMI source (25.2.14-16). */
+        ohci_set_chip_flags(dev->usb, OHCI_CHIP_LST_0628H | OHCI_CHIP_RWC | OHCI_CHIP_NO_SMI);
     }
 
     dev->bm[0] = device_add_inst(&sff8038i_device, 1);

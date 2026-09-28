@@ -309,6 +309,7 @@ struct ohci_t {
     int         bus; /* pcap bus number */
     uint8_t     bus_master; /* PCI COMMAND Bus Master Enable from the chipset */
     uint8_t     bus_master_hardwired; /* ... or 1 through every reset */
+    uint32_t    chip_flags;           /* OHCI_CHIP_* */
     /* The frame in progress: FrameRemaining counts down from fr_load, and
        FrameNumber bit 15 as of the last HCCA update. */
     uint32_t    fr_load;
@@ -2412,8 +2413,8 @@ ohci_frame_boundary(void *priv)
 }
 
 /* HCR (p126): the operational registers go to their reset values, FI to
-   nominal (p135), except InterruptRouting (p125). The root hub (p146) and
-   the legacy support registers keep their contents. */
+   nominal (p135), except InterruptRouting and RemoteWakeupConnected (p125).
+   The root hub (p146) and the legacy support registers keep their contents. */
 static void
 ohci_soft_reset(ohci_t *dev)
 {
@@ -2422,7 +2423,7 @@ ohci_soft_reset(ohci_t *dev)
     dev->di_count       = 7;
     dev->fn_msb         = 0x0000;
     dev->fr_load        = 0x0000;
-    dev->control        = (dev->control & OHCI_CTL_IR) | OHCI_HCFS_SUSPEND;
+    dev->control        = (dev->control & (OHCI_CTL_IR | OHCI_CTL_RWC)) | OHCI_HCFS_SUSPEND;
     dev->cmdsts         = 0x00000000;
     dev->intsts         = 0x00000000;
     dev->inten          = 0x00000000;
@@ -2438,7 +2439,7 @@ ohci_soft_reset(ohci_t *dev)
     dev->fm_number      = 0x00000000;
     dev->periodic_start = 0x00000000;
     /* 0628h in the spec (p137); ALi and SiS reset it to 0. */
-    dev->ls_threshold = 0x00000000;
+    dev->ls_threshold = (dev->chip_flags & OHCI_CHIP_LST_0628H) ? 0x00000628 : 0x00000000;
 }
 
 static void
@@ -2458,10 +2459,13 @@ ohci_hard_reset(ohci_t *dev)
 static void
 ohci_control_write(ohci_t *dev, uint32_t val)
 {
-    uint32_t old = dev->control;
+    uint32_t old  = dev->control;
+    uint32_t mask = OHCI_CTL_CBSR | OHCI_CTL_PLE | OHCI_CTL_IE | OHCI_CTL_CLE | OHCI_CTL_BLE | OHCI_CTL_HCFS | OHCI_CTL_IR | OHCI_CTL_RWE;
 
     /* RemoteWakeupConnected is hard 0 on ALi, SiS and SMSC. */
-    dev->control = val & (OHCI_CTL_CBSR | OHCI_CTL_PLE | OHCI_CTL_IE | OHCI_CTL_CLE | OHCI_CTL_BLE | OHCI_CTL_HCFS | OHCI_CTL_IR | OHCI_CTL_RWE);
+    if (dev->chip_flags & OHCI_CHIP_RWC)
+        mask |= OHCI_CTL_RWC;
+    dev->control = val & mask;
 
     if ((dev->control ^ old) & OHCI_CTL_HCFS) {
         usb_trace(USB_LOG_REG, -1, "OHCI HCFS %s -> %s", ohci_hcfs_name(old), ohci_hcfs_name(dev->control));
@@ -2601,7 +2605,8 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
                 break;
             }
             dev->cmdsts |= cmd & (OHCI_CS_CLF | OHCI_CS_BLF | OHCI_CS_OCR);
-            if (cmd & OHCI_CS_OCR) {
+            /* OC is tied to 0 without an SMI pin (p127). */
+            if ((cmd & OHCI_CS_OCR) && !(dev->chip_flags & OHCI_CHIP_NO_SMI)) {
                 dev->intsts |= OHCI_INT_OC;
                 usb_trace(USB_LOG_IRQ, -1, "OHCI OwnershipChangeRequest: HcInterruptStatus.OC set");
             }
@@ -2831,6 +2836,15 @@ ohci_hardwire_bus_master(usb_t *dev)
 {
     dev->ohci->bus_master_hardwired = 1;
     dev->ohci->bus_master           = 1;
+}
+
+void
+ohci_set_chip_flags(usb_t *dev, uint32_t flags)
+{
+    dev->ohci->chip_flags = flags;
+    /* After usb_init's reset: LST takes its reset value now; RWC and OC
+       reset to 0 on every chip. */
+    dev->ohci->ls_threshold = (flags & OHCI_CHIP_LST_0628H) ? 0x00000628 : 0x00000000;
 }
 
 static void

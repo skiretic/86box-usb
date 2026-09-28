@@ -624,6 +624,24 @@ slc90e66_usb_irq(void *priv, int level)
         pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
 }
 
+/* The OHCI's SMI pin is the SLC90E66's legacy USB event: it sets USB_STS
+   (GLBSTS bit 1), an nSMI with USB_EN (GLBEN bit 0) and EOS set; with EOS
+   clear, setting EOS raises it (SMSC p143-144, 11.4.1). */
+static void
+slc90e66_usb_smi(void *priv, int level)
+{
+    piix_t *dev = (piix_t *) priv;
+
+    if (level && !dev->usb_smi_level && (dev->acpi != NULL)) {
+        dev->acpi->regs.glbsts |= 0x0002;
+        usb_trace(USB_LOG_IRQ, -1, "SLC90E66 legacy USB SMI event, GLBEN %04x GLBCTL %08x",
+                  dev->acpi->regs.glben, dev->acpi->regs.glbctl);
+        if ((dev->acpi->regs.glben & 0x0001) && (dev->acpi->regs.glbctl & 0x00010000))
+            acpi_raise_smi(dev->acpi, 1);
+    }
+    dev->usb_smi_level = !!level;
+}
+
 static void
 piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 {
@@ -1779,8 +1797,10 @@ piix_init(const device_t *info)
         dev->usb   = device_add(&usb_device);
         if (dev->type <= 4)
             uhci_set_irq_handler(dev->usb, piix_usb_irq, dev);
-        else
+        else {
             ohci_set_irq_handler(dev->usb, slc90e66_usb_irq, dev);
+            ohci_set_smi_handler(dev->usb, slc90e66_usb_smi, dev);
+        }
     }
 
     if (dev->type > 3) {
@@ -1806,6 +1826,8 @@ piix_init(const device_t *info)
         else
             acpi_set_gpireg2_default(dev->acpi, (dev->type > 4) ? 0xf1 : 0xdd);
         acpi_set_trap_update(dev->acpi, piix_trap_update, dev);
+        if (dev->type > 4)
+            acpi_set_usb_sts_w1c(dev->acpi, 1);
 
         dev->ddma = device_add(&ddma_device);
     } else

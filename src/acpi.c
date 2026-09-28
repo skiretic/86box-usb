@@ -1177,8 +1177,9 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x18:
         case 0x19:
             /* GLBSTS - Global Status Register (IO) */
-            /* LEGACY_USB_STS (bit 1) clears only through its child status bits. */
-            dev->regs.glbsts &= ~((val << shift16) & 0x0d25);
+            /* LEGACY_USB_STS (bit 1) clears only through its child status bits,
+               except on the SLC90E66, where it is R/WC (SMSC p143). */
+            dev->regs.glbsts &= ~((val << shift16) & (dev->usb_sts_w1c ? 0x0d27 : 0x0d25));
             break;
         case 0x1c:
         case 0x1d:
@@ -1202,7 +1203,7 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
             if (((dev->regs.glbctl & 0x00010001) == 0x00010001) &&
                 (((dev->regs.glbsts & 0x20) && dev->apm->do_smi) ||
                  ((dev->regs.glbsts & 0x01) && (dev->regs.glben & 0x02)) ||
-                 (dev->regs.glbsts & 0x02)))
+                 ((dev->regs.glbsts & 0x02) && (!dev->usb_sts_w1c || (dev->regs.glben & 0x01)))))
                 acpi_raise_smi(dev, 1);
             /* Setting BIOS_RLS also sets GBL_STS and generates SMI. */
             if (dev->regs.glbctl & 0x00000002) {
@@ -2291,6 +2292,12 @@ void
 acpi_set_mirq_is_level(acpi_t *dev, int mirq_is_level)
 {
     dev->mirq_is_level = mirq_is_level;
+}
+
+void
+acpi_set_usb_sts_w1c(acpi_t *dev, int w1c)
+{
+    dev->usb_sts_w1c = w1c;
 }
 
 void

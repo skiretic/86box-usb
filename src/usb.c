@@ -831,7 +831,8 @@ uhci_run_frame(uhci_t *dev)
     int      work   = 0;
     int      steps  = 0;
     int      r;
-    double   left = uhci_frame_us(dev) * 1000.0;
+    double   left   = uhci_frame_us(dev) * 1000.0;
+    double   presof = uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
 
     /* With Bus Master Enable clear the UHCI may not touch memory at all
        (PIIX4 6.1.3); the frame counter needs no memory and keeps counting. */
@@ -850,6 +851,11 @@ uhci_run_frame(uhci_t *dev)
     }
 
     while (!(link & UHCI_LP_T) && (steps++ < 4096)) {
+        /* Past preSOF nothing more is fetched this frame (s1.3.1 cases A, C),
+           so a TD that found no time (case B) also ends the walk, and an
+           inactive IOC TD behind it is first seen in a later frame. */
+        if (left < presof)
+            break;
         left -= UHCI_FETCH_NS;
 
         if (link & UHCI_LP_Q) {

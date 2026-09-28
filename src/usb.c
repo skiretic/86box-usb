@@ -262,6 +262,10 @@ enum {
 /* One descriptor fetch, about one PCI burst read (250 ns, as the UHCI). */
 #define OHCI_FETCH_BITS 3.0
 
+/* The SOF token: SYNC, PID, frame number and CRC5, 32 bits, then the
+   3-bit EOP (USB 1.1 s8.2, s8.4.2, Table 7-1), unstuffed. */
+#define OHCI_SOF_BITS 35.0
+
 /* 12,000 bit times per frame (p135). */
 #define OHCI_FI_NOMINAL 0x00002edf
 
@@ -2531,7 +2535,10 @@ ohci_run_frame(ohci_t *dev)
     if (!dev->bus_master)
         return;
 
-    dev->bits_left = (double) dev->fr_load + 1.0;
+    /* The frame opens with its SOF, FR counting from its first SYNC bit
+       (p104-105). The frame entered with USBOPERATIONAL has no SOF (p102)
+       and runs no lists. */
+    dev->bits_left = (double) dev->fr_load + 1.0 - OHCI_SOF_BITS;
     ohci_run_nonperiodic(dev, (double) dev->periodic_start + 1.0);
     ohci_run_periodic(dev);
     ohci_run_nonperiodic(dev, 0.0);

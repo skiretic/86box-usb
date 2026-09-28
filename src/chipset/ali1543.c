@@ -998,8 +998,11 @@ ali5237_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->usb_conf[addr] = val & 0x10;
             break;
         case 0x43:
-            if (dev->type == 1)
+            /* M1543C 40h bit 26: the third USB port, NDP 3 (ALi-C p122, p185). */
+            if (dev->type == 1) {
                 dev->usb_conf[addr] = val & 0x04;
+                ohci_set_ndp(dev->usb, (val & 0x04) ? 3 : 2, 3);
+            }
             break;
 
         /* USB Base I/O */
@@ -1603,6 +1606,7 @@ ali1543_reset(void *priv)
     ali5237_write(0, 0x11, 1, 0x00, dev);
     ali5237_write(0, 0x12, 1, 0x00, dev);
     ali5237_write(0, 0x13, 1, 0x00, dev);
+    ali5237_write(0, 0x43, 1, 0x00, dev);
 
     /* M7101 */
     memset(dev->pmu_conf, 0x00, sizeof(dev->pmu_conf));

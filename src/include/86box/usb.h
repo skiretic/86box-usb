@@ -71,6 +71,10 @@ extern void ohci_hardwire_bus_master(usb_t *dev);
 #define OHCI_CHIP_RWC       0x02 /* RemoteWakeupConnected is R/W, not hard 0 */
 #define OHCI_CHIP_NO_SMI    0x04 /* no SMI pin: OwnershipChange is tied to 0 */
 extern void ohci_set_chip_flags(usb_t *dev, uint32_t flags);
+/* The root hub has a connector for each of its ports (2 by default); the
+   first ndp are implemented (NumberDownstreamPorts). A chipset strap may
+   change ndp at any time. */
+extern void ohci_set_ndp(usb_t *dev, int ndp, int ports);
 
 /* UHCI legacy keyboard support (UHCI 1.1 s5.2) on a function's LEGSUP
    bytes, legsup[0] = C0h and legsup[1] = C1h. */

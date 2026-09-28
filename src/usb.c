@@ -305,6 +305,7 @@ struct ohci_t {
     uint32_t    rh_desc_b;
     uint32_t    rh_status;
     int         ndp;
+    int         ports; /* ports with a connector; devices can sit past ndp */
     ohci_port_t port[OHCI_MAX_PORTS];
     int         bus; /* pcap bus number */
     uint8_t     bus_master; /* PCI COMMAND Bus Master Enable from the chipset */
@@ -1318,7 +1319,7 @@ usb_attach(usb_dev_t *udev)
         /* An OHCI is in use once its chipset routes its interrupt. */
         if ((oc != NULL) && (oc->set_irq != NULL)) {
             wired = 1;
-            for (int i = 0; i < oc->ndp; i++) {
+            for (int i = 0; i < oc->ports; i++) {
                 if (oc->port[i].usb == NULL) {
                     ohci_port_attach(&oc->port[i], udev);
                     return 1;
@@ -1339,7 +1340,7 @@ usb_attach(usb_dev_t *udev)
                 return 1;
         }
 
-        for (int i = 0; (oc != NULL) && (oc->set_irq != NULL) && (i < oc->ndp); i++) {
+        for (int i = 0; (oc != NULL) && (oc->set_irq != NULL) && (i < oc->ports); i++) {
             usb_dev_t *hub = oc->port[i].usb;
 
             if ((hub != NULL) && (hub->ops->attach != NULL) && hub->ops->attach(hub, udev))
@@ -1521,11 +1522,11 @@ ohci_port_connect_change(ohci_port_t *p)
         ohci_resume_detected(p->hc);
 }
 
-/* Connect detection: a device on a powered port, outside USBRESET. */
+/* Connect detection: a device on a powered port within NDP, outside USBRESET. */
 static void
 ohci_port_detect(ohci_port_t *p)
 {
-    if ((p->usb == NULL) || (p->sts & OHCI_PS_CCS) || !ohci_port_powered(p) || ohci_rh_in_reset(p->hc))
+    if ((p->usb == NULL) || (p->num > p->hc->ndp) || (p->sts & OHCI_PS_CCS) || !ohci_port_powered(p) || ohci_rh_in_reset(p->hc))
         return;
 
     p->sts |= OHCI_PS_CCS | (p->usb->low_speed ? OHCI_PS_LSDA : 0);
@@ -2853,6 +2854,48 @@ ohci_set_chip_flags(usb_t *dev, uint32_t flags)
     dev->ohci->ls_threshold = (flags & OHCI_CHIP_LST_0628H) ? 0x00000628 : 0x00000000;
 }
 
+/* A port past NDP is not implemented (p143): it drops to its reset value
+   with no change reported, its device unpowered but still plugged in. A
+   port brought in starts from reset under the global power switch (p139). */
+void
+ohci_set_ndp(usb_t *dev, int ndp, int ports)
+{
+    ohci_t  *oc  = dev->ohci;
+    int      old = oc->ndp;
+    uint32_t pps = 0;
+    uint32_t mask;
+
+    oc->ports = ports;
+    if (ndp == old)
+        return;
+
+    usb_trace(USB_LOG_REG, -1, "OHCI NumberDownstreamPorts %i -> %i", old, ndp);
+    for (int i = 0; i < old; i++) {
+        if (!(oc->rh_desc_a & OHCI_DA_PSM) || !(oc->rh_desc_b & (0x10000 << (i + 1)))) {
+            pps = oc->port[i].sts & OHCI_PS_PPS;
+            break;
+        }
+    }
+    for (int i = ndp; i < old; i++) {
+        ohci_port_timer_stop(&oc->port[i]);
+        oc->port[i].sts = 0x00000000;
+        if (oc->port[i].usb != NULL) {
+            usb_dev_bus_reset(oc->port[i].usb);
+            oc->port[i].usb->powered_reset = 0;
+        }
+    }
+
+    oc->ndp       = ndp;
+    mask          = ((1u << ndp) - 1) << 1;
+    oc->rh_desc_a = (oc->rh_desc_a & ~0xffu) | ndp;
+    oc->rh_desc_b &= mask | (mask << 16);
+    for (int i = old; i < ndp; i++) {
+        oc->port[i].sts = pps;
+        ohci_port_detect(&oc->port[i]);
+    }
+    ohci_update_irq(oc);
+}
+
 static void
 usb_reset(void *priv)
 {
@@ -2921,8 +2964,9 @@ usb_init(UNUSED(const device_t *info))
     timer_add(&dev->uhci->frame_timer, uhci_frame_end, dev->uhci, 0);
     timer_add(&dev->uhci->detect_timer, uhci_detect, dev->uhci, 0);
 
-    dev->ohci      = (ohci_t *) calloc(1, sizeof(ohci_t));
-    dev->ohci->ndp = 2;
+    dev->ohci        = (ohci_t *) calloc(1, sizeof(ohci_t));
+    dev->ohci->ndp   = 2;
+    dev->ohci->ports = 2;
     timer_add(&dev->ohci->frame_timer, ohci_frame_boundary, dev->ohci, 0);
     for (int i = 0; i < OHCI_MAX_PORTS; i++) {
         dev->ohci->port[i].num = i + 1;

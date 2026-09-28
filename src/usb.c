@@ -1292,6 +1292,46 @@ uhci_portsc_write(uhci_t *dev, int n, uint16_t val)
     }
 }
 
+/* No SOFs, traffic, reset or K reach the device on this port: a disabled or
+   suspended port, or an HC that is stopped or globally suspended (USB 1.1
+   s7.1.7.4, s9.1.1.6). K is driven as uhci_portsc_read shows it. */
+static int
+uhci_port_idle(const uhci_t *dev, const uhci_port_t *port)
+{
+    if (!(port->sc & UHCI_PORT_CCS) || uhci_port_in_reset(dev, port))
+        return 0;
+    if (!(port->sc & UHCI_PORT_PE))
+        return 1;
+    if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) || (dev->cmd & UHCI_CMD_FGR))
+        return 0;
+    return (port->sc & UHCI_PORT_SUSP) || !uhci_running(dev);
+}
+
+/* Resume signaling from the device on a suspended bus (Tables 5 and 6): a
+   suspended port reflects it in PORTSC RD; in global suspend it sets USBSTS
+   RD and FGR (s2.1.1 bit 4). A disabled port, or an enabled one outside
+   global suspend, ignores it. */
+static void
+uhci_port_resume(uhci_t *dev, int n)
+{
+    uhci_port_t *port = &dev->port[n];
+
+    if (!uhci_port_idle(dev, port) || !(port->sc & UHCI_PORT_PE))
+        return;
+
+    if (port->sc & UHCI_PORT_SUSP) {
+        port->sc |= UHCI_PORT_RD;
+        usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i resume detected, PORTSC %04x", n + 1, port->sc);
+    }
+    if (dev->cmd & UHCI_CMD_EGSM) {
+        dev->cmd |= UHCI_CMD_FGR;
+        dev->sts |= UHCI_STS_RD;
+        usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS RD set (resume signaling on port %i in global suspend)", n + 1);
+    }
+
+    uhci_update_irq(dev);
+}
+
 static uint16_t
 uhci_read16(const uhci_t *dev, uint16_t off)
 {
@@ -1868,6 +1908,15 @@ ohci_port_timer(void *priv)
     ohci_update_irq(p->hc);
 }
 
+/* PSS stays set through the resume; PSSC ends it (p143, p145). */
+static void
+ohci_port_resume_start(ohci_port_t *p)
+{
+    p->timer_op = OHCI_PORT_TIMER_RESUME;
+    timer_on_auto(&p->timer, OHCI_PORT_RESUME_US);
+    ohci_port_trace(p, "resume start");
+}
+
 static void
 ohci_port_write(ohci_port_t *p, uint32_t val)
 {
@@ -1905,11 +1954,8 @@ ohci_port_write(ohci_port_t *p, uint32_t val)
     }
 
     /* ClearSuspendStatus starts a resume only on a suspended port. */
-    if ((val & OHCI_PS_POCI) && (p->sts & OHCI_PS_PSS) && (p->timer_op == OHCI_PORT_TIMER_NONE)) {
-        p->timer_op = OHCI_PORT_TIMER_RESUME;
-        timer_on_auto(&p->timer, OHCI_PORT_RESUME_US);
-        ohci_port_trace(p, "resume start");
-    }
+    if ((val & OHCI_PS_POCI) && (p->sts & OHCI_PS_PSS) && (p->timer_op == OHCI_PORT_TIMER_NONE))
+        ohci_port_resume_start(p);
 
     /* Per-port power commands reach a port only in per-port mode with its
        PortPowerControlMask bit set (p144). */
@@ -2018,6 +2064,87 @@ ohci_port_detach(ohci_port_t *p)
     usb_trace(USB_LOG_REG, -1, "OHCI port %i: %s detached, HcRhPortStatus %08x", p->num, p->usb->name, p->sts);
     p->usb = NULL;
     ohci_update_irq(p->hc);
+}
+
+/* No SOFs, traffic, reset or resume reach the device on this port: a
+   disabled or suspended port, or an HC in USBSUSPEND (p57-58, p103). */
+static int
+ohci_port_idle(const ohci_port_t *p)
+{
+    uint32_t hcfs = p->hc->control & OHCI_CTL_HCFS;
+
+    if (!(p->sts & OHCI_PS_CCS) || (p->sts & OHCI_PS_PRS) || (hcfs == OHCI_HCFS_RESET))
+        return 0;
+    if (!(p->sts & OHCI_PS_PES))
+        return 1;
+    if ((hcfs == OHCI_HCFS_RESUME) || (p->timer_op == OHCI_PORT_TIMER_RESUME))
+        return 0;
+    return (hcfs == OHCI_HCFS_SUSPEND) || (p->sts & OHCI_PS_PSS);
+}
+
+/* Resume signaling from the device: in USBSUSPEND a resume event for the HC
+   (p120, p125), which neither RWE nor DRWE gates (p125, p141); on a
+   suspended port in USBOPERATIONAL the port resumes (USB 1.1 s11.5.1.9). A
+   disabled port ignores it. */
+static void
+ohci_port_resume(ohci_port_t *p)
+{
+    if (!ohci_port_idle(p) || !(p->sts & OHCI_PS_PES))
+        return;
+
+    ohci_port_trace(p, "resume signaling from the device");
+    if ((p->hc->control & OHCI_CTL_HCFS) == OHCI_HCFS_SUSPEND)
+        ohci_resume_detected(p->hc);
+    else
+        ohci_port_resume_start(p);
+    ohci_update_irq(p->hc);
+}
+
+int
+usb_dev_suspended(const usb_dev_t *udev)
+{
+    if (udev->parent != NULL)
+        return (udev->parent->ops->port_idle != NULL) && udev->parent->ops->port_idle(udev->parent, udev);
+
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+        ohci_t *oc = (usb_hcs[h] != NULL) ? usb_hcs[h]->ohci : NULL;
+
+        for (int i = 0; (hc != NULL) && (i < UHCI_PORTS); i++) {
+            if (hc->port[i].usb == udev)
+                return uhci_port_idle(hc, &hc->port[i]);
+        }
+        for (int i = 0; (oc != NULL) && (i < OHCI_MAX_PORTS); i++) {
+            if (oc->port[i].usb == udev)
+                return ohci_port_idle(&oc->port[i]);
+        }
+    }
+
+    return 0;
+}
+
+void
+usb_resume_upstream(usb_dev_t *udev)
+{
+    if (udev->parent != NULL) {
+        if (udev->parent->ops->resume != NULL)
+            udev->parent->ops->resume(udev->parent, udev);
+        return;
+    }
+
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        uhci_t *hc = (usb_hcs[h] != NULL) ? usb_hcs[h]->uhci : NULL;
+        ohci_t *oc = (usb_hcs[h] != NULL) ? usb_hcs[h]->ohci : NULL;
+
+        for (int i = 0; (hc != NULL) && (i < UHCI_PORTS); i++) {
+            if (hc->port[i].usb == udev)
+                uhci_port_resume(hc, i);
+        }
+        for (int i = 0; (oc != NULL) && (i < OHCI_MAX_PORTS); i++) {
+            if (oc->port[i].usb == udev)
+                ohci_port_resume(&oc->port[i]);
+        }
+    }
 }
 
 enum {

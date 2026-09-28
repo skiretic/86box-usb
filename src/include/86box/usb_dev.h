@@ -87,6 +87,10 @@ typedef struct usb_dev_ops_t {
     void (*detach)(usb_dev_t *dev, usb_dev_t *udev);
     /* Hubs only: udev, on a port of this hub, was still sending at EOF2. */
     void (*eof_babble)(usb_dev_t *dev, usb_dev_t *udev);
+    /* Hubs only. port_idle: no traffic, reset or resume reaches udev's port,
+       so udev is suspended. resume: udev drives resume signaling (K). */
+    int (*port_idle)(const usb_dev_t *dev, const usb_dev_t *udev);
+    void (*resume)(usb_dev_t *dev, usb_dev_t *udev);
 } usb_dev_ops_t;
 
 #define USB_DEV_INTERFACES 16
@@ -145,11 +149,18 @@ struct usb_dev_t {
 extern void usb_dev_init(usb_dev_t *dev);
 extern void usb_dev_bus_reset(usb_dev_t *dev);
 extern int  usb_dev_packet(usb_dev_t *dev, usb_packet_t *p);
+/* Remote wakeup: a suspended device with DEVICE_REMOTE_WAKEUP set drives
+   resume signaling upstream. Returns 1 if it did. Emulation thread only. */
+extern int  usb_dev_remote_wakeup(usb_dev_t *dev);
 
 /* Attach to the first free root-hub port of any USB host controller, else
    to the first free port of a hub on one. */
 extern int  usb_attach(usb_dev_t *dev);
 extern void usb_detach(usb_dev_t *dev);
+/* Whether nothing reaches dev from upstream (idle bus), so it is suspended. */
+extern int  usb_dev_suspended(const usb_dev_t *dev);
+/* Resume signaling (K) from dev reaches the port it sits on. */
+extern void usb_resume_upstream(usb_dev_t *dev);
 
 #ifdef __cplusplus
 }

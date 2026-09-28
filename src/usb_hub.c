@@ -495,6 +495,46 @@ hub_eof_babble(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
     hub_port_trace(p, "disabled: babble at EOF2");
 }
 
+/* A disabled or suspended port blocks all traffic (11.5.1.4, 11.5.1.8); an
+   enabled one is idle when the hub itself is suspended. */
+static int
+hub_port_idle(const usb_dev_t *udev, const usb_dev_t *dev)
+{
+    const usb_hub_port_t *p = (const usb_hub_port_t *) dev->port;
+
+    if ((p == NULL) || !hub_port_power_good(p) || !(p->status & PS_CONNECTION) || (p->status & PS_RESET) ||
+        (p->timer_op == HUB_TIMER_RESUME))
+        return 0;
+    if ((p->status & (PS_ENABLE | PS_SUSPEND)) != PS_ENABLE)
+        return 1;
+    return usb_dev_suspended(udev);
+}
+
+/* Resume signaling from a device (11.5.1.6-11, 11.9). A suspended hub
+   repeats it upstream, Restart_S/E -> Transmit, and only Restart_S sets
+   C_PORT_SUSPEND (11.16.2.6.2.3); an awake hub resumes a suspended port for
+   20 ms itself. A disabled port ignores it (11.1.2.2). */
+static void
+hub_resume(usb_dev_t *udev, usb_dev_t *dev)
+{
+    usb_hub_port_t *p = (usb_hub_port_t *) dev->port;
+
+    if (!hub_port_idle(udev, dev) || !(p->status & PS_ENABLE))
+        return;
+
+    if (usb_dev_suspended(udev)) {
+        if (p->status & PS_SUSPEND) {
+            p->status &= ~PS_SUSPEND;
+            p->change |= PC_SUSPEND;
+        }
+        hub_port_trace(p, "resume signaling from the device, repeated upstream");
+        usb_resume_upstream(udev);
+    } else {
+        hub_port_timer_start(p, HUB_TIMER_RESUME, HUB_RESUME_US);
+        hub_port_trace(p, "resume signaling from the device, resume start");
+    }
+}
+
 static const usb_dev_ops_t hub_ops = {
     .control    = hub_control,
     .data_in    = hub_data_in,
@@ -504,7 +544,9 @@ static const usb_dev_ops_t hub_ops = {
     .route      = hub_route,
     .attach     = hub_attach,
     .detach     = hub_detach,
-    .eof_babble = hub_eof_babble
+    .eof_babble = hub_eof_babble,
+    .port_idle  = hub_port_idle,
+    .resume     = hub_resume
 };
 
 static void *

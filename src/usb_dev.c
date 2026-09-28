@@ -678,6 +678,20 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
     }
 }
 
+/* Only a suspended device armed by SET_FEATURE may drive resume (7.1.7.5,
+   9.2.5.2). Its 5 ms idle wait and the 1-15 ms K are not timed: the
+   receiving port or hub latches the resume at once. */
+int
+usb_dev_remote_wakeup(usb_dev_t *dev)
+{
+    if (!dev->remote_wakeup || !usb_dev_suspended(dev))
+        return 0;
+
+    usb_trace(USB_LOG_REG, -1, "USB %s: remote wakeup, resume signaling upstream", dev->name);
+    usb_resume_upstream(dev);
+    return 1;
+}
+
 int
 usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
 {

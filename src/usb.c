@@ -798,10 +798,17 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
                 in_ns = uhci_bus_ns(ls, iso, 1, p.bus_len);
             if ((ret != USB_RET_NO_RESPONSE) && (in_ns > to_eof)) {
                 babbler = usb;
-                ret     = USB_RET_BABBLE;
-                if (p.actual > room)
-                    p.actual = room;
-                eof = 1;
+                eof     = 1;
+                /* Behind a hub the hub's EOP at EOF1 ended it upstream: the
+                   host sees a truncated packet, a CRC error (USB 1.1 s8.7.3,
+                   s11.8.1), not the root port's EOF babble. */
+                if (usb->parent != NULL)
+                    ret = USB_RET_NO_RESPONSE;
+                else {
+                    ret = USB_RET_BABBLE;
+                    if (p.actual > room)
+                        p.actual = room;
+                }
             } else if ((ret != USB_RET_NO_RESPONSE) && (in_ns > to_end) && ((p.bus_len <= len) || (fit < len))) {
                 /* The hub's EOP at EOF1 cut it: a CRC error, or a handshake
                    that fails its PID check, is discarded (USB 1.1 s8.7.3,

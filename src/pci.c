@@ -14,6 +14,7 @@
  */
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <wchar.h>
@@ -85,9 +86,11 @@ static uint8_t     pci_irqs[PCI_IRQS_NUM];
 static uint8_t     pci_irq_level[PCI_IRQS_NUM];
 static uint64_t    pci_irq_hold[PCI_IRQS_NUM];
 /* Level sources held through each PIRQ, which a routing change moves to the
-   new IRQ as the router's steering does. */
+   new IRQ as the router's steering does. Nothing bounds how many devices
+   share one PIRQ, so each list grows in steps of PCI_PIRQ_SRCS. */
 #define PCI_PIRQ_SRCS 16
-static uint8_t    *pci_pirq_src[PCI_IRQS_NUM][PCI_PIRQ_SRCS];
+static uint8_t   **pci_pirq_src[PCI_IRQS_NUM];
+static int         pci_pirq_srcs[PCI_IRQS_NUM];
 static pci_mirq_t  pci_mirqs[PCI_MIRQS_NUM];
 static int         pci_index;
 static int         pci_func;
@@ -122,18 +125,28 @@ static void
 pci_pirq_track(int pirq, uint8_t *irq_state, int set)
 {
     uint8_t **src = pci_pirq_src[pirq];
+    int       num = pci_pirq_srcs[pirq];
     int       i;
 
-    for (i = 0; (i < PCI_PIRQ_SRCS) && (src[i] != irq_state); i++)
+    for (i = 0; (i < num) && (src[i] != irq_state); i++)
         ;
     if (!set) {
-        if (i < PCI_PIRQ_SRCS)
+        if (i < num)
             src[i] = NULL;
-    } else if (i == PCI_PIRQ_SRCS) {
-        for (i = 0; (i < PCI_PIRQ_SRCS) && (src[i] != NULL); i++)
+    } else if (i == num) {
+        for (i = 0; (i < num) && (src[i] != NULL); i++)
             ;
-        if (i < PCI_PIRQ_SRCS)
-            src[i] = irq_state;
+        if (i == num) {
+            src = (uint8_t **) realloc(src, (num + PCI_PIRQ_SRCS) * sizeof(uint8_t *));
+            if (src == NULL) {
+                fatal("PCI: Out of memory tracking the sources of PIRQ %i\n", pirq);
+                return;
+            }
+            memset(&src[num], 0x00, PCI_PIRQ_SRCS * sizeof(uint8_t *));
+            pci_pirq_src[pirq]  = src;
+            pci_pirq_srcs[pirq] = num + PCI_PIRQ_SRCS;
+        }
+        src[i] = irq_state;
     }
 }
 
@@ -149,7 +162,7 @@ pci_set_irq_routing(int pci_int, int irq)
         return;
 
     /* The PIRQ's held level moves from the old IRQ input to the new one. */
-    for (int i = 0; i < PCI_PIRQ_SRCS; i++) {
+    for (int i = 0; i < pci_pirq_srcs[pci_int - 1]; i++) {
         uint8_t *irq_state = pci_pirq_src[pci_int - 1][i];
 
         if (irq_state == NULL)
@@ -435,7 +448,10 @@ pci_reset_hard(void)
     }
 
     /* The PIC forgets its sources, so the router forgets its held ones. */
-    memset(pci_pirq_src, 0x00, sizeof(pci_pirq_src));
+    for (uint8_t i = 0; i < PCI_IRQS_NUM; i++) {
+        if (pci_pirq_src[i] != NULL)
+            memset(pci_pirq_src[i], 0x00, pci_pirq_srcs[i] * sizeof(uint8_t *));
+    }
 
     pci_pic_reset();
 }

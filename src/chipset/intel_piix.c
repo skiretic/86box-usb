@@ -518,8 +518,9 @@ piix_extsmi_raise(void)
         smi_raise();
 }
 
-/* The UHCI IRQ shows in LEGSUP bit 12 and reaches PIRQD (INTD) only while
-   USBPIRQDEN, LEGSUP bit 13, is set (PIIX4 datasheet 6.1.12). */
+/* The UHCI IRQ shows in LEGSUP bit 12 and reaches PIRQD only while
+   USBPIRQDEN, LEGSUP bit 13, is set (PIIX4 datasheet 6.1.12). It is the
+   chip's own PIRQD, not the board's slot entry for the south bridge. */
 static void
 piix_usb_update_irq(piix_t *dev)
 {
@@ -533,9 +534,9 @@ piix_usb_update_irq(piix_t *dev)
         fregs[0xc1] &= ~0x10;
 
     if (dev->usb_irq_level && (fregs[0xc1] & 0x20))
-        pci_set_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+        pci_set_iirq(PCI_INTD, &dev->usb_irq_state);
     else
-        pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+        pci_clear_iirq(PCI_INTD, &dev->usb_irq_state);
 
     /* A legacy USB event (the IRQ with USBSMIEN, an enabled keyboard trap, or
        A20PTS with SMIEPTE), gated by SMIEN bit 8 into SMIREQ bit 8 on the
@@ -611,17 +612,17 @@ piix_usb_irq(void *priv, int level)
     piix_usb_update_irq(dev);
 }
 
-/* The SLC90E66's OHCI interrupts on nPIRQD (SMSC p24), with no enable of
-   its own. */
+/* The SLC90E66's OHCI interrupts on the chip's own nPIRQD (SMSC p24), with
+   no enable of its own. */
 static void
 slc90e66_usb_irq(void *priv, int level)
 {
     piix_t *dev = (piix_t *) priv;
 
     if (level)
-        pci_set_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+        pci_set_iirq(PCI_INTD, &dev->usb_irq_state);
     else
-        pci_clear_irq(dev->pci_slot, PCI_INTD, &dev->usb_irq_state);
+        pci_clear_iirq(PCI_INTD, &dev->usb_irq_state);
 }
 
 /* The OHCI's SMI pin is the SLC90E66's legacy USB event: it sets USB_STS

@@ -555,6 +555,12 @@ uhci_bus_ns(int low_speed, int iso, int in, int bytes)
     return 9107.0 + (83.54 * bits);
 }
 
+/* EOF2, 10 full-speed bit times before the SOF (USB 1.1 Table 11-1): a
+   device still sending there is a babbler (s11.8.1), so a transaction a
+   device ends must end by it. An iso OUT, all the HC's own packet, only
+   has to end by the SOF (UHCI 1.1 s1.1.1). */
+#define UHCI_EOF2_NS (10.0 * 1000.0 / 12.0)
+
 /* The most data bytes, up to len, of a transaction that ends within left
    ns; -1 if not even an empty one does. */
 static int
@@ -698,6 +704,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     int          ret;
     int          result;
     double       in_ns = 0.0;
+    double       to_eof;
 
     dma_bm_read(addr, (uint8_t *) td, 16, 4);
     *link = td[0];
@@ -727,11 +734,12 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     iso = !!(ctrl & UHCI_TD_IOS);
 
     /* Nothing starts past preSOF, the window kept for a MAXP-sized packet
-       (s1.3.1 cases A and B); what starts before it runs on (case C), and
-       past EOF only as an EOF babble (s2.1.1 bit 7, s4.1.4). */
-    if (*left < uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32))
+       to end by EOF2 (s1.3.1 cases A and B); what starts before it runs on
+       (case C), and past EOF only as an EOF babble (s2.1.1 bit 7, s4.1.4). */
+    if (*left < (UHCI_EOF2_NS + uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32)))
         return TD_NO_TIME;
-    fit = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, *left);
+    to_eof = (iso && (pid == USB_PID_OUT)) ? *left : (*left - UHCI_EOF2_NS);
+    fit    = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, to_eof);
 
     p.pid     = pid;
     p.ep      = (td[2] >> 15) & 0x0f;
@@ -750,8 +758,9 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
 
     usb = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
     if ((pid != USB_PID_IN) && (fit < len)) {
-        /* The HC ends its own packet at EOF with a bit stuff error (s4.1.4),
-           so the device takes nothing. */
+        /* The HC ends its own packet with a bit stuff error (s4.1.4) rather
+           than draw a handshake past EOF2 (USB 1.1 s11.3), so the device
+           takes nothing. */
         ret = USB_RET_BABBLE;
         eof = 1;
     } else {
@@ -767,16 +776,16 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
         ret   = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
         p.len = len; /* a short packet is short of MaxLen */
 
-        /* An IN runs past EOF when the device's packet does, whatever MaxLen,
-           and the device is then still sending at EOF2. A NAK or STALL is
-           timed on the wire. With no answer only the token, which always
+        /* An IN babbles at EOF when the device's packet, whatever MaxLen,
+           runs past EOF2, the device still sending there. A NAK or STALL
+           is timed on the wire. With no answer only the token, which always
            ends before EOF past the preSOF gate, was sent: a timeout. */
         if (pid == USB_PID_IN) {
             if ((ret == USB_RET_NAK) || (ret == USB_RET_STALL) || (ret == USB_RET_NO_RESPONSE))
                 in_ns = uhci_in_nodata_ns(dev, ls, ret != USB_RET_NO_RESPONSE);
             else
                 in_ns = uhci_bus_ns(ls, iso, 1, p.bus_len);
-            if ((ret != USB_RET_NO_RESPONSE) && (in_ns > *left)) {
+            if ((ret != USB_RET_NO_RESPONSE) && (in_ns > to_eof)) {
                 babbler = usb;
                 ret     = USB_RET_BABBLE;
                 if (p.actual > room)
@@ -899,7 +908,7 @@ uhci_run_frame(uhci_t *dev)
     int      r;
     int      resume = dev->dbg_resume;
     double   left   = uhci_frame_us(dev) * 1000.0;
-    double   presof = uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
+    double   presof = UHCI_EOF2_NS + uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
 
     /* A frame not resumed has walked nothing yet. */
     dev->dbg_resume = 0;

@@ -63,6 +63,7 @@
 #define PS_LOW_SPEED  0x0200
 
 #define PC_CONNECTION 0x0001
+#define PC_ENABLE     0x0002
 #define PC_SUSPEND    0x0004
 #define PC_RESET      0x0010
 
@@ -478,6 +479,22 @@ hub_detach(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
     hub_port_trace(p, "device detached");
 }
 
+/* A device still sending at EOF2 is a Port Error: Enabled -> Disabled with
+   C_PORT_ENABLE (11.8.1, 11.16.2.6.2.2). The hub's own EOP at EOF1 keeps
+   its upstream port from being disabled (11.2.2). */
+static void
+hub_eof_babble(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
+{
+    usb_hub_port_t *p = (usb_hub_port_t *) dev->port;
+
+    if ((p == NULL) || ((p->status & (PS_ENABLE | PS_SUSPEND | PS_RESET)) != PS_ENABLE))
+        return;
+
+    hub_port_disable(p);
+    p->change |= PC_ENABLE;
+    hub_port_trace(p, "disabled: babble at EOF2");
+}
+
 static const usb_dev_ops_t hub_ops = {
     .control    = hub_control,
     .data_in    = hub_data_in,
@@ -486,7 +503,8 @@ static const usb_dev_ops_t hub_ops = {
     .configured = hub_configured,
     .route      = hub_route,
     .attach     = hub_attach,
-    .detach     = hub_detach
+    .detach     = hub_detach,
+    .eof_babble = hub_eof_babble
 };
 
 static void *

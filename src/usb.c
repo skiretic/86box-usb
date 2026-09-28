@@ -629,11 +629,18 @@ uhci_td_timeout(uhci_t *dev, uint32_t *ctrl)
 }
 
 /* A device still sending at EOF2 loses the port it sends through (USB 1.1
-   s11.2.2, s11.8.1). The chip may keep its root ports enabled; a device
-   behind a hub is on that hub's port, not a root port. */
+   s11.2.2, s11.8.1). Behind a hub that is the nearest hub's port (s8.7.4);
+   the hub's EOP at EOF1 leaves the root port alone, and the chip's keep
+   bit covers only its own root ports. */
 static void
 uhci_eof_babbler(uhci_t *dev, usb_dev_t *usb)
 {
+    if (usb->parent != NULL) {
+        if (usb->parent->ops->eof_babble != NULL)
+            usb->parent->ops->eof_babble(usb->parent, usb);
+        return;
+    }
+
     if (dev->babble_keep_port)
         return;
 

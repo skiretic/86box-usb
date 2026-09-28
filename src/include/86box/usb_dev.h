@@ -78,6 +78,8 @@ typedef struct usb_dev_ops_t {
     usb_dev_t *(*route)(usb_dev_t *dev, int addr, int low_speed);
     int (*attach)(usb_dev_t *dev, usb_dev_t *udev);
     void (*detach)(usb_dev_t *dev, usb_dev_t *udev);
+    /* Hubs only: udev, on a port of this hub, was still sending at EOF2. */
+    void (*eof_babble)(usb_dev_t *dev, usb_dev_t *udev);
 } usb_dev_ops_t;
 
 #define USB_DEV_INTERFACES 16

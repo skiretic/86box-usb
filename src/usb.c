@@ -1335,13 +1335,20 @@ uhci_outw(uint16_t addr, uint16_t val, void *priv)
 static void
 uhci_outl(uint16_t addr, uint32_t val, void *priv)
 {
-    uhci_t  *dev = (uhci_t *) priv;
-    uint16_t off = addr & 0x1c;
+    uhci_t  *dev   = (uhci_t *) priv;
+    uint16_t off   = addr & 0x1f;
+    uint64_t data  = (uint64_t) val << ((off & 1) << 3);
+    uint64_t lanes = 0xffffffffULL << ((off & 1) << 3);
 
     usb_trace(USB_LOG_REG, dev->frnum, "W32 +%02x %-9s <- %08x", off, uhci_reg_name(off), val);
 
-    uhci_write16(dev, off, val & 0xffff, 0xffff);
-    uhci_write16(dev, off + 2, val >> 16, 0xffff);
+    /* Each register word takes the bytes that fall on it, so an unaligned
+       dword keeps its offset. Bytes past 1Fh are not this block's: dropped. */
+    for (uint16_t w = off & 0x1e; (w < 0x20) && (lanes & 0xffff); w += 2) {
+        uhci_write16(dev, w, data & 0xffff, lanes & 0xffff);
+        data >>= 16;
+        lanes >>= 16;
+    }
 }
 
 void

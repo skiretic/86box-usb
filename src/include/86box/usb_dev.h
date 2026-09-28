@@ -61,6 +61,10 @@ typedef struct usb_packet_t {
     /* IN: the host answers nothing the device sends, even a packet within
        len (UHCI: cut off at EOF), so the device keeps it (BABBLE). */
     uint8_t  no_ack;
+    /* IN: len was cut short at a hub's EOF1, where the hub's EOP turns what
+       runs past it into a CRC error for the host, not a babble (UHCI behind
+       a hub). The device acts the same; only the debug capture differs. */
+    uint8_t  hub_cut;
 } usb_packet_t;
 
 typedef struct usb_dev_ops_t {

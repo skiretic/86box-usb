@@ -764,6 +764,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
        no handshake (USB 1.1 s8.4.5.2), so the device keeps it. */
     p.ack_overrun = 0;
     p.no_ack      = 0;
+    p.hub_cut     = 0;
 
     if ((pid != USB_PID_IN) && (len > 0))
         dma_bm_read(td[3], buf, len, 1);
@@ -781,8 +782,9 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
            even an empty packet when not even that ends in time; an
            isochronous IN is sent once, whatever the host can take. */
         if ((fit < len) && !iso) {
-            p.len    = room;
-            p.no_ack = (fit < 0);
+            p.len     = room;
+            p.no_ack  = (fit < 0);
+            p.hub_cut = (usb != NULL) && (usb->parent != NULL);
         }
         ret   = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
         p.len = len; /* a short packet is short of MaxLen */
@@ -2194,6 +2196,7 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     /* An overrun is ACKed: the toggle advances (p37, p38). */
     p.ack_overrun = 1;
     p.no_ack      = 0;
+    p.hub_cut     = 0;
 
     if (dir != 2)
         ohci_td_data(td[1], td[3], buf, size, 0);
@@ -2449,6 +2452,7 @@ ohci_service_itd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     p.actual = 0;
     p.ack_overrun = 1;
     p.no_ack      = 0;
+    p.hub_cut     = 0;
     if (p.len > (int) sizeof(buf))
         p.len = sizeof(buf);
 

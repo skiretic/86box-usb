@@ -48,11 +48,13 @@ enum {
 #define FEAT_DEVICE_REMOTE_WAKEUP 1
 
 #ifdef ENABLE_USB_LOG
-/* usbmon status codes: -EINPROGRESS, -EPIPE, -EOVERFLOW, -ECONNRESET. */
+/* usbmon status codes: -EINPROGRESS, -EPIPE, -EOVERFLOW, -ECONNRESET, and
+   -EILSEQ, Linux uhci-hcd's code for an IN CRC/Timeout TD. */
 #    define URB_PENDING  (-115)
 #    define URB_STALL    (-32)
 #    define URB_OVERFLOW (-75)
 #    define URB_UNLINKED (-104)
+#    define URB_CRC      (-84)
 
 static const uint8_t usbmon_xfer[4] = { 2, 0, 3, 1 };
 static uint64_t      usb_dev_urb_id;
@@ -698,6 +700,8 @@ usb_dev_packet(usb_dev_t *dev, usb_packet_t *p)
         usb_dev_pcap_xfer(dev, p, 0);
     else if (ret == USB_RET_STALL)
         usb_dev_pcap_xfer(dev, p, URB_STALL);
+    else if ((ret == USB_RET_BABBLE) && p->hub_cut)
+        usb_dev_pcap_xfer(dev, p, URB_CRC);
     else if ((ret == USB_RET_BABBLE) || (ret == USB_RET_OVERRUN))
         usb_dev_pcap_xfer(dev, p, URB_OVERFLOW);
 

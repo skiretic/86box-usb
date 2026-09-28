@@ -52,6 +52,9 @@ typedef struct usb_packet_t {
     uint8_t *data;
     int      len;    /* OUT/SETUP: bytes sent; IN: bytes the host accepts */
     int      actual; /* IN: bytes received */
+    /* IN: bytes the device put on the bus, the whole packet when it ran
+       past len (OVERRUN, BABBLE); 0 when it sent no data. */
+    int      bus_len;
     /* IN: the host ACKs data past len (OVERRUN) instead of leaving it
        unanswered (BABBLE). OHCI does, UHCI does not. */
     uint8_t  ack_overrun;

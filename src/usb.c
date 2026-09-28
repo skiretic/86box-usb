@@ -2056,12 +2056,13 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     /* The toggle comes from the TD when its MSb is set, else from ED.C (p35). */
     toggle = (td[0] & 0x02000000) ? ((td[0] >> 24) & 1) : !!(ed[2] & OHCI_ED_C);
 
-    p.pid    = (dir == 0) ? USB_PID_SETUP : ((dir == 1) ? USB_PID_OUT : USB_PID_IN);
-    p.ep     = (ed[0] >> 7) & 0x0f;
-    p.toggle = toggle;
-    p.data   = buf;
-    p.len    = size;
-    p.actual = 0;
+    p.pid     = (dir == 0) ? USB_PID_SETUP : ((dir == 1) ? USB_PID_OUT : USB_PID_IN);
+    p.ep      = (ed[0] >> 7) & 0x0f;
+    p.toggle  = toggle;
+    p.data    = buf;
+    p.len     = size;
+    p.actual  = 0;
+    p.bus_len = 0;
     /* An overrun is ACKed: the toggle advances (p37, p38). */
     p.ack_overrun = 1;
 
@@ -2071,8 +2072,10 @@ ohci_service_gtd(ohci_t *dev, uint32_t ed_addr, uint32_t *ed)
     usb = ohci_find_device(dev, ed[0] & 0x7f, ls);
     ret = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
 
-    /* The bus time of the USB 1.1 formulas the UHCI uses, in bit times. */
-    dev->bits_left -= uhci_bus_ns(ls, 0, dir == 2, (dir == 2) ? p.actual : size) * 12.0 / 1000.0;
+    /* The bus time of the USB 1.1 formulas the UHCI uses, in bit times. An
+       IN is charged for the packet the device sent, all of it on an
+       overrun (p38), not for what the buffer kept. */
+    dev->bits_left -= uhci_bus_ns(ls, 0, dir == 2, (dir == 2) ? p.bus_len : size) * 12.0 / 1000.0;
 
     ec = (td[0] & OHCI_TD_EC) >> 26;
     cc = OHCI_CC_NOERROR;

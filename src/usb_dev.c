@@ -605,7 +605,8 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
             return USB_RET_ACK;
 
         case USB_PID_IN:
-            ep = &dev->ep_in[n];
+            ep         = &dev->ep_in[n];
+            p->bus_len = 0;
             if (!ep->present || ((n != 0) && !dev->config))
                 return USB_RET_NO_RESPONSE;
             /* EP0's Halt acts per request, through the control stage. */
@@ -617,7 +618,8 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
                 ret = (dev->ops->data_in != NULL) ? dev->ops->data_in(dev, n, p->data, p->len) : USB_DATA_NAK;
                 if (ret < 0)
                     return USB_RET_NO_RESPONSE;
-                p->actual = ret;
+                p->actual  = ret;
+                p->bus_len = ret;
                 return USB_RET_ACK;
             }
 
@@ -643,6 +645,7 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
                 ep->pend_len = ret;
                 ep->pending  = 1;
             }
+            p->bus_len = ep->pend_len;
 
             /* Data the host cannot accept gets no handshake (8.4.5.2), so a
                babbled packet is resent; an OHCI ACKs an overrun instead. */

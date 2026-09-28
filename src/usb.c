@@ -561,6 +561,11 @@ uhci_bus_ns(int low_speed, int iso, int in, int bytes)
    has to end by the SOF (UHCI 1.1 s1.1.1). */
 #define UHCI_EOF2_NS (10.0 * 1000.0 / 12.0)
 
+/* EOF1, 32 full-speed bit times before the SOF (USB 1.1 Table 11-1): a hub
+   ends any upstream packet still running there with an EOP (s11.3.2), so a
+   device behind a hub reaches the host whole only by EOF1. */
+#define UHCI_EOF1_NS (32.0 * 1000.0 / 12.0)
+
 /* The most data bytes, up to len, of a transaction that ends within left
    ns; -1 if not even an empty one does. */
 static int
@@ -705,6 +710,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     int          result;
     double       in_ns = 0.0;
     double       to_eof;
+    double       to_end;
 
     dma_bm_read(addr, (uint8_t *) td, 16, 4);
     *link = td[0];
@@ -738,8 +744,10 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
        (case C), and past EOF only as an EOF babble (s2.1.1 bit 7, s4.1.4). */
     if (*left < (UHCI_EOF2_NS + uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32)))
         return TD_NO_TIME;
+    usb    = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
     to_eof = (iso && (pid == USB_PID_OUT)) ? *left : (*left - UHCI_EOF2_NS);
-    fit    = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, to_eof);
+    to_end = ((pid == USB_PID_IN) && (usb != NULL) && (usb->parent != NULL)) ? (*left - UHCI_EOF1_NS) : to_eof;
+    fit    = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, to_end);
 
     p.pid     = pid;
     p.ep      = (td[2] >> 15) & 0x0f;
@@ -756,7 +764,6 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     if ((pid != USB_PID_IN) && (len > 0))
         dma_bm_read(td[3], buf, len, 1);
 
-    usb = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
     if ((pid != USB_PID_IN) && (fit < len)) {
         /* The HC ends its own packet with a bit stuff error (s4.1.4) rather
            than draw a handshake past EOF2 (USB 1.1 s11.3), so the device
@@ -791,6 +798,13 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
                 if (p.actual > room)
                     p.actual = room;
                 eof = 1;
+            } else if ((ret != USB_RET_NO_RESPONSE) && (in_ns > to_end) && ((p.bus_len <= len) || (fit < len))) {
+                /* The hub's EOP at EOF1 cut it: a CRC error, or a handshake
+                   that fails its PID check, is discarded (USB 1.1 s8.7.3,
+                   s8.3.1), so the device, never ACKed, keeps it. A packet
+                   past MaxLen before EOF1 was a babble first. */
+                usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x: the hub cuts the answer at EOF1", addr);
+                ret = USB_RET_NO_RESPONSE;
             }
         }
 

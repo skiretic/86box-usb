@@ -1456,12 +1456,15 @@ ohci_port_timer_stop(ohci_port_t *p)
 }
 
 /* A change bit set by the root hub raises RootHubStatusChange (p121); the
-   HCD's own writes to the status bits do not. */
+   HCD's own writes to the status bits do not. Outside USBOPERATIONAL only
+   OC and RD are possible (p57-58): the port bit latches, RHSC is not set
+   and is not raised later. */
 static void
 ohci_port_change(ohci_port_t *p, uint32_t bits)
 {
     p->sts |= bits;
-    p->hc->intsts |= OHCI_INT_RHSC;
+    if ((p->hc->control & OHCI_CTL_HCFS) == OHCI_HCFS_OPERATIONAL)
+        p->hc->intsts |= OHCI_INT_RHSC;
 }
 
 static int
@@ -1711,7 +1714,8 @@ ohci_root_hub_reset(ohci_t *dev)
             if (!(dev->rh_desc_a & OHCI_DA_NPS))
                 p->usb->powered_reset = 0;
         }
-        /* ALi-C p188: CSC resets to 1 on a non-removable port. */
+        /* ALi-C p188: CSC resets to 1 on a non-removable port. In USBRESET
+           that raises no RHSC (p57). */
         if ((i < dev->ndp) && ohci_port_fixed(p))
             ohci_port_change(p, OHCI_PS_CSC);
     }
@@ -2484,6 +2488,14 @@ ohci_control_write(ohci_t *dev, uint32_t val)
     if (dev->chip_flags & OHCI_CHIP_RWC)
         mask |= OHCI_CTL_RWC;
     dev->control = val & mask;
+
+    /* OCR clears after the changeover (p127), the InterruptRouting change
+       that hands the HC over (p55-56, p125). */
+    if (((dev->control ^ old) & OHCI_CTL_IR) && (dev->cmdsts & OHCI_CS_OCR)) {
+        dev->cmdsts &= ~OHCI_CS_OCR;
+        usb_trace(USB_LOG_IRQ, -1, "OHCI InterruptRouting %i -> %i: ownership changeover, OwnershipChangeRequest cleared",
+                  !!(old & OHCI_CTL_IR), !!(dev->control & OHCI_CTL_IR));
+    }
 
     if ((dev->control ^ old) & OHCI_CTL_HCFS) {
         usb_trace(USB_LOG_REG, -1, "OHCI HCFS %s -> %s", ohci_hcfs_name(old), ohci_hcfs_name(dev->control));

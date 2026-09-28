@@ -1355,6 +1355,12 @@ sis_5513_pci_to_isa_init(UNUSED(const device_t *info))
             }
 
             dev->sis->acpi->priv = dev->sis;
+            /* The 5595's USB SMI# is in its ACPI block; the 5582's is 95h
+               in the 5581 host bridge. */
+            if (dev->rev != 0x11) {
+                dev->sis->usb_smi      = acpi_sis5595_usb_smi;
+                dev->sis->usb_smi_priv = dev->sis->acpi;
+            }
             acpi_set_slot(dev->sis->acpi, dev->sis->sb_pci_slot);
             acpi_set_nvr(dev->sis->acpi, dev->nvr);
 

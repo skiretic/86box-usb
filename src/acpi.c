@@ -1668,6 +1668,21 @@ acpi_sis5595_pmu_event(void *priv)
     }
 }
 
+/* USB SMI#: with USBSMI_EN (LEG_EN bit 6) set, the OHCI's SMI pin sets
+   USBSMI_STS (LEG_STS bit 6) and raises SMI# through SMI_EN (SiS95
+   p150-151). */
+void
+acpi_sis5595_usb_smi(void *priv, int level)
+{
+    acpi_t *dev = (acpi_t *) priv;
+
+    if (level && !dev->usb_smi_level && (dev->regs.leg_en & 0x40)) {
+        dev->regs.leg_sts |= 0x40;
+        acpi_sis5595_smi_raise(dev);
+    }
+    dev->usb_smi_level = !!level;
+}
+
 void
 acpi_sis5595_smbus_event(void *priv)
 {

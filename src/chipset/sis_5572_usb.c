@@ -123,6 +123,17 @@ sis_5572_usb_irq(void *priv, int level)
         pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
 }
 
+/* The OHCI's SMI pin goes to the chip's legacy USB SMI# receiver: 95h on
+   the 5571/5581 host bridge, ACPI LEG_STS on the 5595. */
+static void
+sis_5572_usb_smi(void *priv, int level)
+{
+    sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
+
+    if (dev->sis->usb_enabled && (dev->sis->usb_smi != NULL))
+        dev->sis->usb_smi(dev->sis->usb_smi_priv, level);
+}
+
 /* The integrated USB disable leaves the function invisible: no window, no
    bus master, no USBIRQ. Its registers are kept for when it comes back. */
 void
@@ -316,6 +327,7 @@ sis_5572_usb_init(UNUSED(const device_t *info))
     /* USB */
     dev->usb = device_add(&usb_device);
     ohci_set_irq_handler(dev->usb, sis_5572_usb_irq, dev);
+    ohci_set_smi_handler(dev->usb, sis_5572_usb_smi, dev);
     dev->sis->usb_priv = dev;
 
     sis_5572_usb_reset(dev);

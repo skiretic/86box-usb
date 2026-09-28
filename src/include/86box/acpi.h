@@ -159,6 +159,7 @@ typedef struct acpi_t {
     int         irq_line;
     int         mirq_is_level;
     int         usb_sts_w1c; /* SLC90E66 GLBSTS bit 1 rules */
+    int         usb_smi_level; /* SiS 5595: the OHCI's SMI pin */
     uint64_t    pmtmr_latch;
     pc_timer_t  timer;
     pc_timer_t  resume_timer;
@@ -217,6 +218,8 @@ extern void    acpi_sis5582_pmu_event(void *priv);
 extern void    acpi_sis5595_smi_raise(void *priv);
 extern void    acpi_sis5595_pmu_event(void *priv);
 extern void    acpi_sis5595_smbus_event(void *priv);
+/* The OHCI's SMI pin as the 5595's USB SMI# source (LEG_STS bit 6). */
+extern void    acpi_sis5595_usb_smi(void *priv, int level);
 extern void    acpi_sis5595_software_smi(void *priv);
 
 #ifdef __cplusplus

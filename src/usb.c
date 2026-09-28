@@ -540,7 +540,7 @@ uhci_self_stop(uhci_t *dev, uint16_t sts_bit)
     uhci_update_irq(dev);
 }
 
-/* Bus time of one transaction in ns (USB 1.1 s5.11.3), Host_Delay 0 and
+/* Bus time of one transaction in ns (USB 1.1 s5.9.3), Host_Delay 0 and
    Hub_LS_Setup at its minimum of four full-speed bit times. */
 static double
 uhci_bus_ns(int low_speed, int iso, int in, int bytes)

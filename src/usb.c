@@ -1272,8 +1272,9 @@ uhci_inw(uint16_t addr, void *priv)
     uint16_t      off = addr & 0x1f;
     uint16_t      ret;
 
+    /* At 1Fh the high byte is 20h, past this block: it floats high, as in uhci_inl. */
     if (off & 1)
-        ret = (uhci_read16(dev, off) >> 8) | (uhci_read16(dev, off + 1) << 8);
+        ret = (uhci_read16(dev, off) >> 8) | ((off < 0x1f) ? (uhci_read16(dev, off + 1) << 8) : 0xff00);
     else
         ret = uhci_read16(dev, off);
 

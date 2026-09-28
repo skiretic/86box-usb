@@ -200,12 +200,17 @@ acpi_update_irq(acpi_t *dev)
         case VEN_SMC:
             sci_level |= (dev->regs.pmsts & BM_STS);
             break;
+        case VEN_SIS_5582:
+            sci_level |= !!(dev->regs.reg_14 & dev->regs.reg_16 & 0x4000);
+            break;
         case VEN_SIS_5595_1997:
         case VEN_SIS_5595:
             if ((sis != NULL) && (sis->pmu_regs != NULL)) {
                 sci_level |= (sis->pmu_regs[0x80] | sis->pmu_regs[0x81] |
                               sis->pmu_regs[0x82] | sis->pmu_regs[0x83]);
             }
+            sci_level |= !!(dev->regs.gpe_sts & dev->regs.gpe_en &
+                            ((dev->vendor == VEN_SIS_5595_1997) ? 0x40000000 : 0x00000100));
             break;
     }
 
@@ -1579,10 +1584,12 @@ acpi_reg_write_sis_5582(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x14:
         case 0x15:
             dev->regs.reg_14 &= ~((val << shift32) & 0xff9f);
+            acpi_update_irq(dev);
             break;
         case 0x16:
         case 0x17:
             dev->regs.reg_16 = ((dev->regs.reg_16 & ~(0xff << shift16)) | (val << shift16)) & 0xff1f;
+            acpi_update_irq(dev);
             break;
         case 0x18:
         case 0x19:
@@ -1666,6 +1673,51 @@ acpi_sis5595_pmu_event(void *priv)
         dev->regs.gpe_sts |= 0x00001000;
         acpi_sis5595_smi_raise(dev);
     }
+}
+
+/* USB_STS/USB_EN: ACPI 14h/16h bit 14 on the 5582 (SiS82 p163), GPE bit 30
+   on the 1997 5595 (SiS95 1997 p116), bit 8 on the later one (SiS95 p140). */
+static uint32_t
+acpi_sis_usb_pme_bit(const acpi_t *dev)
+{
+    switch (dev->vendor) {
+        case VEN_SIS_5582:
+            return 0x00004000;
+        case VEN_SIS_5595_1997:
+            return 0x40000000;
+        case VEN_SIS_5595:
+            return 0x00000100;
+        default:
+            return 0;
+    }
+}
+
+/* The USB power-management event: an interrupt or SMI# of the USB function
+   sets USB_STS; with USB_EN it raises SCI, or SMI# with SCI_EN clear
+   (SiS82 p46-47 and p53, SiS95 p26 and p140). */
+void
+acpi_sis_usb_event(acpi_t *dev)
+{
+    uint32_t bit = acpi_sis_usb_pme_bit(dev);
+
+    if (bit == 0)
+        return;
+    if (dev->vendor == VEN_SIS_5582) {
+        dev->regs.reg_14 |= bit;
+        if (!(dev->regs.reg_16 & bit))
+            return;
+    } else {
+        dev->regs.gpe_sts |= bit;
+        if (!(dev->regs.gpe_en & bit))
+            return;
+    }
+
+    if (dev->regs.pmcntrl & 0x01)
+        acpi_update_irq(dev);
+    else if (dev->vendor == VEN_SIS_5582)
+        smi_raise();
+    else
+        acpi_sis5595_smi_raise(dev);
 }
 
 /* USB SMI#: with USBSMI_EN (LEG_EN bit 6) set, the OHCI's SMI pin sets
@@ -1755,6 +1807,7 @@ acpi_reg_write_sis_5595(int size, uint16_t addr, uint8_t val, void *priv)
                 dev->regs.gpe_sts &= ~((val << shift32) & 0xff03ffbf);
             else
                 dev->regs.gpe_sts &= ~((val << shift32) & 0xff83ffff);
+            acpi_update_irq(dev);
             break;
         case 0x18:
         case 0x19:
@@ -1765,6 +1818,7 @@ acpi_reg_write_sis_5595(int size, uint16_t addr, uint8_t val, void *priv)
             else
                 dev->regs.gpe_en = ((dev->regs.gpe_en & ~(0xff << shift32)) |
                                    (val << shift32)) & 0xff83ffff;
+            acpi_update_irq(dev);
             break;
         case 0x1c:
             dev->regs.gpe_pin = ((dev->regs.gpe_pin & ~(0xff << shift32)) | ((val & 0xff) << shift32));

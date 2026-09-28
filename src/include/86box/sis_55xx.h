@@ -28,6 +28,7 @@ typedef struct
     /* The chip's legacy USB SMI# receiver for the OHCI's SMI pin. */
     void      (*usb_smi)(void *priv, int level);
     void       *usb_smi_priv;
+    uint8_t     usb_pme_level; /* enabled INT or SMI, for the ACPI USB event */
 
     uint8_t    *pmu_regs;
 

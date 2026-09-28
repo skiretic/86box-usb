@@ -106,6 +106,18 @@ sis_5572_usb_unk_read(uint16_t addr, void *priv)
     return ret;
 }
 
+/* The ACPI USB power-management event: a rising edge of the enabled
+   function's INT or SMI# sets USB_STS (SiS82 p53, SiS95 p140). */
+static void
+sis_5572_usb_pme(sis_5572_usb_t *dev)
+{
+    int level = dev->sis->usb_enabled && (dev->sis->usb_irq_level || dev->sis->usb_smi_level);
+
+    if (level && !dev->sis->usb_pme_level && (dev->sis->acpi != NULL))
+        acpi_sis_usb_event(dev->sis->acpi);
+    dev->sis->usb_pme_level = level;
+}
+
 /* USBIRQ reaches the 8259 through the bridge's USBIRQ remapping register,
    emulated as MIRQ3 (SiS71 p61, SiS82 p150, SiS95 p105); it is a
    shareable level request (SiS95 p66). */
@@ -115,6 +127,7 @@ sis_5572_usb_irq(void *priv, int level)
     sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
 
     dev->sis->usb_irq_level = !!level;
+    sis_5572_usb_pme(dev);
     if (!dev->sis->usb_enabled)
         return;
     if (level)
@@ -133,6 +146,7 @@ sis_5572_usb_smi(void *priv, int level)
     dev->sis->usb_smi_level = !!level;
     if (dev->sis->usb_enabled && (dev->sis->usb_smi != NULL))
         dev->sis->usb_smi(dev->sis->usb_smi_priv, level);
+    sis_5572_usb_pme(dev);
 }
 
 /* The integrated USB disable leaves the function invisible: no window, no
@@ -157,6 +171,7 @@ sis_5572_usb_apply_enable(void *priv)
     }
     if (dev->sis->usb_smi_level && (dev->sis->usb_smi != NULL))
         dev->sis->usb_smi(dev->sis->usb_smi_priv, on);
+    sis_5572_usb_pme(dev);
 }
 
 void

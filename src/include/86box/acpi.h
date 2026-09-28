@@ -220,6 +220,7 @@ extern void    acpi_sis5595_pmu_event(void *priv);
 extern void    acpi_sis5595_smbus_event(void *priv);
 /* The OHCI's SMI pin as the 5595's USB SMI# source (LEG_STS bit 6). */
 extern void    acpi_sis5595_usb_smi(void *priv, int level);
+extern void    acpi_sis_usb_event(acpi_t *dev);
 extern void    acpi_sis5595_software_smi(void *priv);
 
 #ifdef __cplusplus

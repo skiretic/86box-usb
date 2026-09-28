@@ -819,6 +819,15 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
             }
         }
 
+        /* Behind a hub a handshake still running at EOF1 is cut by the hub's
+           EOP (USB 1.1 s11.3.2) and fails its PID check (s8.3.1): the device
+           has the data, the host sees no handshake. */
+        if ((pid != USB_PID_IN) && !iso && (ret != USB_RET_NO_RESPONSE) && (usb->parent != NULL) &&
+            (uhci_bus_ns(ls, 0, 0, len) > (*left - UHCI_EOF1_NS))) {
+            usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x: the hub cuts the handshake at EOF1", addr);
+            ret = USB_RET_NO_RESPONSE;
+        }
+
         /* An isochronous OUT has no handshake (USB 1.1 s8.5.4): once token and
            data are sent the transaction is over, whoever took the data. */
         if (iso && (pid == USB_PID_OUT))

@@ -628,6 +628,25 @@ uhci_td_timeout(uhci_t *dev, uint32_t *ctrl)
     return TD_FAILED;
 }
 
+/* A device still sending at EOF2 loses the port it sends through (USB 1.1
+   s11.2.2, s11.8.1). The chip may keep its root ports enabled; a device
+   behind a hub is on that hub's port, not a root port. */
+static void
+uhci_eof_babbler(uhci_t *dev, usb_dev_t *usb)
+{
+    if (dev->babble_keep_port)
+        return;
+
+    for (int i = 0; i < UHCI_PORTS; i++) {
+        uhci_port_t *port = &dev->port[i];
+
+        if ((port->usb == usb) && (port->sc & UHCI_PORT_PE)) {
+            port->sc = (port->sc & ~UHCI_PORT_PE) | UHCI_PORT_PEDC;
+            usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i disabled: EOF babble, PORTSC %04x", i + 1, port->sc);
+        }
+    }
+}
+
 static int
 uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *link)
 {
@@ -636,6 +655,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     uint8_t      buf[1280];
     usb_packet_t p;
     usb_dev_t   *usb;
+    usb_dev_t   *babbler = NULL;
     int          pid;
     int          len;
     int          ls;
@@ -679,12 +699,13 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
         return TD_NO_TIME;
     fit = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, *left);
 
-    p.pid    = pid;
-    p.ep     = (td[2] >> 15) & 0x0f;
-    p.toggle = (td[2] >> 19) & 1;
-    p.data   = buf;
-    p.len    = len;
-    p.actual = 0;
+    p.pid     = pid;
+    p.ep      = (td[2] >> 15) & 0x0f;
+    p.toggle  = (td[2] >> 19) & 1;
+    p.data    = buf;
+    p.len     = len;
+    p.actual  = 0;
+    p.bus_len = 0;
     /* The UHCI accepts no more than MaxLen (s3.2.3); a babbled packet gets
        no handshake (USB 1.1 s8.4.5.2), so the device keeps it. */
     p.ack_overrun = 0;
@@ -707,10 +728,18 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
             p.len = room;
         ret   = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
         p.len = len; /* a short packet is short of MaxLen */
-        if ((fit < len) && (iso ? ((ret == USB_RET_ACK) && (p.actual > room)) : (ret == USB_RET_BABBLE))) {
-            ret      = USB_RET_BABBLE;
-            p.actual = room;
-            eof      = 1;
+
+        /* An IN runs past EOF when the device's packet does, whatever MaxLen:
+           its data, or with none its handshake or the wait for one. A device
+           that answered is still sending at EOF2; with no answer the port is
+           idle there. */
+        if ((pid == USB_PID_IN) && (uhci_bus_ns(ls, iso, 1, p.bus_len) > *left)) {
+            if (ret != USB_RET_NO_RESPONSE)
+                babbler = usb;
+            ret = USB_RET_BABBLE;
+            if (p.actual > room)
+                p.actual = room;
+            eof = 1;
         }
 
         /* An isochronous OUT has no handshake (USB 1.1 s8.5.4): once token and
@@ -719,25 +748,16 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
             ret = USB_RET_ACK;
     }
 
-    /* OUT data is on the bus whatever the handshake; IN data only if sent.
-       An EOF babble lasts to the end of the frame. */
+    /* OUT data is on the bus whatever the handshake; an IN takes the time
+       of the packet the device sent, all of it on a babble. An EOF babble
+       lasts to the end of the frame. */
     if (eof)
         *left = 0.0;
     else
-        *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.actual : len);
+        *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.bus_len : len);
 
-    /* A device still sending at EOF2 loses its root port (USB 1.1 s11.2.2,
-       s11.8.1) unless the chip keeps it. */
-    if (eof && (pid == USB_PID_IN) && (usb != NULL) && !dev->babble_keep_port) {
-        for (int i = 0; i < UHCI_PORTS; i++) {
-            uhci_port_t *port = &dev->port[i];
-
-            if ((port->usb == usb) && (port->sc & UHCI_PORT_PE)) {
-                port->sc = (port->sc & ~UHCI_PORT_PE) | UHCI_PORT_PEDC;
-                usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i disabled: EOF babble, PORTSC %04x", i + 1, port->sc);
-            }
-        }
-    }
+    if (babbler != NULL)
+        uhci_eof_babbler(dev, babbler);
 
     /* Each execution rewrites the status field (s3.2.2 bits 23:16) and ActLen,
        7FFh (no bytes) unless data moved. */

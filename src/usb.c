@@ -991,7 +991,9 @@ uhci_cmd_write(uhci_t *dev, uint16_t val)
             }
             usb_trace(USB_LOG_REG, dev->frnum, "UHCI GRESET start");
         }
-        dev->cmd = UHCI_CMD_GRESET;
+        /* GRESET does not reset USBCMD itself (it reads 1 until software
+           clears it), so the other bits latch; nothing runs while it is held. */
+        dev->cmd = val & ~UHCI_CMD_HCRESET;
         return;
     }
 
@@ -1043,8 +1045,9 @@ uhci_portsc_write(uhci_t *dev, int n, uint16_t val)
     port->sc &= ~(val & (UHCI_PORT_CSC | UHCI_PORT_PEDC));
 
     if ((val & UHCI_PORT_PR) && !(old & UHCI_PORT_PR)) {
-        /* Reset disables the port. Intel silicon reports that as an enable
-           change and the end of reset as a connect change (Linux uhci-hub.c). */
+        /* The reset SE0 reads as a disconnect: an enabled port reports its
+           disable in PEDC, and the end of reset is a connect change (silicon
+           behavior per Linux uhci-hub.c and SeaBIOS usb-uhci.c). */
         if (old & UHCI_PORT_PE)
             port->sc |= UHCI_PORT_PEDC;
         port->sc = (port->sc & ~(UHCI_PORT_PE | UHCI_PORT_SUSP | UHCI_PORT_RD)) | UHCI_PORT_PR;
@@ -1206,8 +1209,16 @@ static uint32_t
 uhci_inl(uint16_t addr, void *priv)
 {
     const uhci_t *dev = (uhci_t *) priv;
-    uint16_t      off = addr & 0x1c;
-    uint32_t      ret = uhci_read16(dev, off) | ((uint32_t) uhci_read16(dev, off + 2) << 16);
+    uint16_t      off = addr & 0x1f;
+    uint32_t      ret = 0;
+
+    /* Byte by byte, so an unaligned dword gets the bytes at its offset.
+       Bytes past 1Fh belong to no register of this block and float high. */
+    for (int i = 3; i >= 0; i--) {
+        uint16_t b = off + i;
+
+        ret = (ret << 8) | ((b < 0x20) ? ((uhci_read16(dev, b) >> ((b & 1) << 3)) & 0xff) : 0xff);
+    }
 
     usb_trace(USB_LOG_REG, dev->frnum, "R32 +%02x %-9s = %08x", off, uhci_reg_name(off), ret);
 

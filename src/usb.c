@@ -907,7 +907,10 @@ uhci_run_frame(uhci_t *dev)
     int      steps  = 0;
     int      r;
     int      resume = dev->dbg_resume;
-    double   left   = uhci_frame_us(dev) * 1000.0;
+    /* The frame opens with its SOF (s1.1.1): SYNC, PID, frame number and
+       CRC5, 32 bits, then the 3-bit EOP (USB 1.1 s8.4.2, Table 7-1). A
+       debug resume carries the remainder it already charged. */
+    double   left   = (uhci_frame_us(dev) * 1000.0) - (35.0 * 1000.0 / 12.0);
     double   presof = UHCI_EOF2_NS + uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
 
     /* A frame not resumed has walked nothing yet. */

@@ -130,12 +130,15 @@ sis_5572_usb_smi(void *priv, int level)
 {
     sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
 
+    dev->sis->usb_smi_level = !!level;
     if (dev->sis->usb_enabled && (dev->sis->usb_smi != NULL))
         dev->sis->usb_smi(dev->sis->usb_smi_priv, level);
 }
 
 /* The integrated USB disable leaves the function invisible: no window, no
-   bus master, no USBIRQ. Its registers are kept for when it comes back. */
+   bus master, no USBIRQ, no SMI. Its registers are kept for when it comes
+   back. A held USBIRQ or SMI is dropped and re-driven with the gate, so the
+   PIC source state and the SMI# receiver's edge latch follow what they see. */
 void
 sis_5572_usb_apply_enable(void *priv)
 {
@@ -146,12 +149,14 @@ sis_5572_usb_apply_enable(void *priv)
                             dev->pci_conf[0x11], dev->pci_conf[0x12],
                             dev->pci_conf[0x13], on && (dev->pci_conf[0x04] & 0x02));
     ohci_set_bus_master(dev->usb, on && (dev->pci_conf[0x04] & 0x04));
-    if (!dev->sis->usb_irq_level)
-        return;
-    if (on)
-        pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
-    else
-        pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+    if (dev->sis->usb_irq_level) {
+        if (on)
+            pci_set_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+        else
+            pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
+    }
+    if (dev->sis->usb_smi_level && (dev->sis->usb_smi != NULL))
+        dev->sis->usb_smi(dev->sis->usb_smi_priv, on);
 }
 
 void

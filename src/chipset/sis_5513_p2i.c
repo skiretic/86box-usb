@@ -1104,10 +1104,11 @@ sis_5513_01_pci_to_isa_reset(sis_5513_pci_to_isa_t *dev)
     dev->pci_conf[0x74] = dev->pci_conf[0x75] = 0x00;
     dev->pci_conf[0x76] = dev->pci_conf[0x77] = 0x00;
 
+    /* Before MIRQ3 loses its route: a held USBIRQ is released on its line. */
+    sis_5513_usb_enable(dev, 0);
+
     pci_set_mirq_routing(PCI_MIRQ1, PCI_IRQ_DISABLED);
     pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
-
-    dev->sis->usb_enabled = 0;
 }
 
 static void
@@ -1136,6 +1137,9 @@ sis_5513_11_pci_to_isa_reset(sis_5513_pci_to_isa_t *dev)
     dev->pci_conf[0x89] = dev->pci_conf[0x8a] = 0x00;
     dev->pci_conf[0x90] = dev->pci_conf[0x91] = 0x00;
 
+    /* Before MIRQ3 loses its route: a held USBIRQ is released on its line. */
+    sis_5513_usb_enable(dev, 0);
+
     pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
     pci_set_mirq_routing(PCI_MIRQ5, PCI_IRQ_DISABLED);
 
@@ -1145,7 +1149,6 @@ sis_5513_11_pci_to_isa_reset(sis_5513_pci_to_isa_t *dev)
     sis_5595_acpi_recalc(dev);
 
     dev->sis->ide_bits_1_3_writable = 0;
-    dev->sis->usb_enabled = 0;
 
     sis_5513_apc_recalc(dev, 0);
 }
@@ -1178,6 +1181,9 @@ sis_5513_b0_pci_to_isa_reset(sis_5513_pci_to_isa_t *dev)
     dev->pci_conf[0x8b] = dev->pci_conf[0x8c] = 0x00;
     dev->pci_conf[0x90] = dev->pci_conf[0x91] = 0x00;
 
+    /* Before MIRQ3 loses its route: a held USBIRQ is released on its line. */
+    sis_5513_usb_enable(dev, 0);
+
     pci_set_mirq_routing(PCI_MIRQ3, PCI_IRQ_DISABLED);
     pci_set_mirq_routing(PCI_MIRQ5, PCI_IRQ_DISABLED);
     pci_set_mirq_routing(PCI_MIRQ6, PCI_IRQ_DISABLED);
@@ -1198,8 +1204,6 @@ sis_5513_b0_pci_to_isa_reset(sis_5513_pci_to_isa_t *dev)
     dev->dam_irq_enable = 0;
 
     cpu_cpurst_on_sr = 1;
-
-    dev->sis->usb_enabled = 0;
 
     sis_5513_apc_recalc(dev, 0);
 

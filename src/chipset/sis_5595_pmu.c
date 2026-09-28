@@ -301,7 +301,8 @@ sis_5595_pmu_write(int addr, uint8_t val, void *priv)
 
     sis_5595_pmu_log("SiS 5595 PMU: [W] dev->pci_conf[%02X] = %02X\n", addr, val);
 
-    if (dev->sis->usb_enabled)  switch (addr) {
+    /* Function 1 of its own: 62h bit 6 enables the USB function only. */
+    switch (addr) {
         default:
             break;
 

@@ -648,10 +648,11 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
             p->bus_len = ep->pend_len;
 
             /* Data the host cannot accept gets no handshake (8.4.5.2), so a
-               babbled packet is resent; an OHCI ACKs an overrun instead. */
-            if ((ep->pend_len > p->len) && !p->ack_overrun) {
-                memcpy(p->data, ep->pend_buf, p->len);
-                p->actual = p->len;
+               babbled packet, or any packet cut off at EOF, is resent; an
+               OHCI ACKs an overrun instead. */
+            if (p->no_ack || ((ep->pend_len > p->len) && !p->ack_overrun)) {
+                p->actual = (ep->pend_len > p->len) ? p->len : ep->pend_len;
+                memcpy(p->data, ep->pend_buf, p->actual);
                 return USB_RET_BABBLE;
             }
 

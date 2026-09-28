@@ -32,7 +32,7 @@ enum {
     USB_RET_NAK,
     USB_RET_STALL,
     USB_RET_NO_RESPONSE,     /* no device answered: the host times out */
-    USB_RET_BABBLE,          /* IN data longer than the host allowed; not ACKed */
+    USB_RET_BABBLE,          /* IN data longer than the host allowed, or cut off at EOF; not ACKed */
     USB_RET_TOGGLE_MISMATCH, /* IN data with the wrong DATA PID: ACKed, discarded */
     USB_RET_OVERRUN          /* IN data longer than the host allowed, ACKed: the excess is lost */
 };
@@ -58,6 +58,9 @@ typedef struct usb_packet_t {
     /* IN: the host ACKs data past len (OVERRUN) instead of leaving it
        unanswered (BABBLE). OHCI does, UHCI does not. */
     uint8_t  ack_overrun;
+    /* IN: the host answers nothing the device sends, even a packet within
+       len (UHCI: cut off at EOF), so the device keeps it (BABBLE). */
+    uint8_t  no_ack;
 } usb_packet_t;
 
 typedef struct usb_dev_ops_t {

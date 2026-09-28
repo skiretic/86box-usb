@@ -566,6 +566,32 @@ uhci_bytes_before_eof(int low_speed, int iso, int in, int len, double left)
     return len;
 }
 
+/* Wire time in ns of an IN answered by a handshake, or by nothing (the
+   host's timeout wait), from USB 1.1 s11.3.3: 34-bit token, 18 bits of
+   turnaround, 16-bit handshake and its 3-bit EOP. A low-speed bit is 8
+   full-speed bits; the preamble sent while a full-speed device sits on an
+   enabled root port (s3.2.2 bit 26) adds 20. */
+static double
+uhci_in_nodata_ns(const uhci_t *dev, int low_speed, int handshake)
+{
+    double bits = 34.0 + 18.0 + (handshake ? (16.0 + 3.0) : 0.0);
+
+    if (low_speed) {
+        bits *= 8.0;
+        for (int i = 0; i < UHCI_PORTS; i++) {
+            const uhci_port_t *port = &dev->port[i];
+
+            if ((port->usb != NULL) && !port->usb->low_speed && (port->sc & UHCI_PORT_PE) &&
+                !(port->sc & (UHCI_PORT_SUSP | UHCI_PORT_PR))) {
+                bits += 20.0;
+                break;
+            }
+        }
+    }
+
+    return bits * 1000.0 / 12.0;
+}
+
 /* One descriptor fetch, about one PCI burst read; it also bounds a loop
    of empty queue heads to the frame. */
 #define UHCI_FETCH_NS 250.0
@@ -671,6 +697,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     int          eof = 0;
     int          ret;
     int          result;
+    double       in_ns = 0.0;
 
     dma_bm_read(addr, (uint8_t *) td, 16, 4);
     *link = td[0];
@@ -740,17 +767,22 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
         ret   = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
         p.len = len; /* a short packet is short of MaxLen */
 
-        /* An IN runs past EOF when the device's packet does, whatever MaxLen:
-           its data, or with none its handshake or the wait for one. A device
-           that answered is still sending at EOF2; with no answer the port is
-           idle there. */
-        if ((pid == USB_PID_IN) && (uhci_bus_ns(ls, iso, 1, p.bus_len) > *left)) {
-            if (ret != USB_RET_NO_RESPONSE)
+        /* An IN runs past EOF when the device's packet does, whatever MaxLen,
+           and the device is then still sending at EOF2. A NAK or STALL is
+           timed on the wire. With no answer only the token, which always
+           ends before EOF past the preSOF gate, was sent: a timeout. */
+        if (pid == USB_PID_IN) {
+            if ((ret == USB_RET_NAK) || (ret == USB_RET_STALL) || (ret == USB_RET_NO_RESPONSE))
+                in_ns = uhci_in_nodata_ns(dev, ls, ret != USB_RET_NO_RESPONSE);
+            else
+                in_ns = uhci_bus_ns(ls, iso, 1, p.bus_len);
+            if ((ret != USB_RET_NO_RESPONSE) && (in_ns > *left)) {
                 babbler = usb;
-            ret = USB_RET_BABBLE;
-            if (p.actual > room)
-                p.actual = room;
-            eof = 1;
+                ret     = USB_RET_BABBLE;
+                if (p.actual > room)
+                    p.actual = room;
+                eof = 1;
+            }
         }
 
         /* An isochronous OUT has no handshake (USB 1.1 s8.5.4): once token and
@@ -760,12 +792,12 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     }
 
     /* OUT data is on the bus whatever the handshake; an IN takes the time
-       of the packet the device sent, all of it on a babble. An EOF babble
+       of what the device sent, all of a babbled packet. An EOF babble
        lasts to the end of the frame. */
     if (eof)
         *left = 0.0;
     else
-        *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.bus_len : len);
+        *left -= (pid == USB_PID_IN) ? in_ns : uhci_bus_ns(ls, iso, 0, len);
 
     if (babbler != NULL)
         uhci_eof_babbler(dev, babbler);

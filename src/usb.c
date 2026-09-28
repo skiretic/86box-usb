@@ -1421,7 +1421,7 @@ usb_attach(usb_dev_t *udev)
         /* An OHCI is in use once its chipset routes its interrupt. */
         if ((oc != NULL) && (oc->set_irq != NULL)) {
             wired = 1;
-            for (int i = 0; i < oc->ports; i++) {
+            for (int i = 0; i < oc->ndp; i++) {
                 if (oc->port[i].usb == NULL) {
                     ohci_port_attach(&oc->port[i], udev);
                     return 1;
@@ -1442,10 +1442,27 @@ usb_attach(usb_dev_t *udev)
                 return 1;
         }
 
-        for (int i = 0; (oc != NULL) && (oc->set_irq != NULL) && (i < oc->ports); i++) {
+        for (int i = 0; (oc != NULL) && (oc->set_irq != NULL) && (i < oc->ndp); i++) {
             usb_dev_t *hub = oc->port[i].usb;
 
             if ((hub != NULL) && (hub->ops->attach != NULL) && hub->ops->attach(hub, udev))
+                return 1;
+        }
+    }
+
+    /* Last, an OHCI connector past NDP: its port is not implemented, and the
+       device stays unseen until the chipset raises NDP. */
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        ohci_t *oc = (usb_hcs[h] != NULL) ? usb_hcs[h]->ohci : NULL;
+
+        for (int i = (oc != NULL) ? oc->ndp : 0; (oc != NULL) && (oc->set_irq != NULL) && (i < oc->ports); i++) {
+            usb_dev_t *on = oc->port[i].usb;
+
+            if (on == NULL) {
+                ohci_port_attach(&oc->port[i], udev);
+                return 1;
+            }
+            if ((on->ops->attach != NULL) && on->ops->attach(on, udev))
                 return 1;
         }
     }

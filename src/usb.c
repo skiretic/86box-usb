@@ -121,7 +121,8 @@ struct uhci_t {
     uint8_t     irq_level;
     uint8_t     frame_frozen;
     uint8_t     bus_master; /* PCICMD BME from the chipset */
-    /* Where a debug single step stopped inside the frozen frame. */
+    /* Where the schedule walk stands in the current frame; a stop in debug
+       mode resumes there. */
     uint8_t     dbg_resume;
     uint32_t    dbg_link;
     double      dbg_left;
@@ -511,8 +512,10 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
             uhci_run_frame(dev);
     } else {
         /* Outside debug mode a stop resets the SOF counter; in debug mode it
-           freezes (Table 4), to the timer's own resolution. */
+           freezes (Table 4), to the timer's own resolution, and the walk
+           resumes where it stopped, whoever cleared Run/Stop. */
         dev->frame_frozen  = !!(dev->cmd & UHCI_CMD_SWDBG);
+        dev->dbg_resume    = dev->frame_frozen;
         dev->frame_left_us = (double) timer_get_remaining_u64(&dev->frame_timer) / (double) TIMER_USEC;
         timer_stop(&dev->frame_timer);
         uhci_latch_frame_status(dev);
@@ -831,19 +834,24 @@ uhci_run_frame(uhci_t *dev)
     int      work   = 0;
     int      steps  = 0;
     int      r;
+    int      resume = dev->dbg_resume;
     double   left   = uhci_frame_us(dev) * 1000.0;
     double   presof = uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
+
+    /* A frame not resumed has walked nothing yet. */
+    dev->dbg_resume = 0;
+    if (!resume)
+        dev->dbg_link = UHCI_LP_T;
 
     /* With Bus Master Enable clear the UHCI may not touch memory at all
        (PIIX4 6.1.3); the frame counter needs no memory and keeps counting. */
     if (!uhci_running(dev) || !dev->bus_master)
         return;
 
-    /* A debug single step picks up where the last one stopped (Table 4). */
-    if (dev->dbg_resume) {
-        dev->dbg_resume = 0;
-        link            = dev->dbg_link;
-        left            = dev->dbg_left;
+    /* A stop in debug mode picks up where the walk left off (Table 4). */
+    if (resume) {
+        link = dev->dbg_link;
+        left = dev->dbg_left;
         usb_trace(USB_LOG_SCHED, dev->frnum, "debug step resumes at %08x", link);
     } else {
         dma_bm_read(dev->flbaseadd + ((dev->frnum & 0x3ff) << 2), (uint8_t *) &link, 4, 4);
@@ -856,6 +864,9 @@ uhci_run_frame(uhci_t *dev)
            inactive IOC TD behind it is first seen in a later frame. */
         if (left < presof)
             break;
+        /* A process error stops the walk here. */
+        dev->dbg_link = link;
+        dev->dbg_left = left;
         left -= UHCI_FETCH_NS;
 
         if (link & UHCI_LP_Q) {
@@ -918,9 +929,8 @@ uhci_run_frame(uhci_t *dev)
            the frame, so that step resumes at nothing until the next frame.
            A TD not started for lack of time was not executed. */
         if ((dev->cmd & UHCI_CMD_SWDBG) && (r != TD_INACTIVE) && (r != TD_NO_TIME)) {
-            dev->dbg_link   = (r == TD_END_FRAME) ? UHCI_LP_T : link;
-            dev->dbg_left   = left;
-            dev->dbg_resume = 1;
+            dev->dbg_link = (r == TD_END_FRAME) ? UHCI_LP_T : link;
+            dev->dbg_left = left;
             uhci_self_stop(dev, 0);
             break;
         }
@@ -928,6 +938,13 @@ uhci_run_frame(uhci_t *dev)
         /* Babble ends the frame: no further TDs in it (s3.2.2 bit 20). */
         if ((r == TD_END_FRAME) || (left <= 0.0))
             break;
+    }
+
+    /* A walk that ended with the HC running is done with this frame and
+       waits for the next SOF (s2.1.1.1), so a later stop resumes at nothing. */
+    if (uhci_running(dev)) {
+        dev->dbg_link = UHCI_LP_T;
+        dev->dbg_left = left;
     }
 }
 

@@ -392,6 +392,8 @@ pipc_usb_reset_regs(pipc_t *dev, int i)
     }
     dev->usb_regs[i][0xc1] = 0x20;
     dev->usb_smi_level[i]  = 0;
+    if (dev->usb[i] != NULL)
+        uhci_set_babble_keep_port(dev->usb[i], 0);
     pipc_usb_update_irq(dev, i);
     pipc_usb_update_legacy(dev, i);
 }
@@ -1591,6 +1593,11 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 pipc_usb_update_irq(dev, func - 2);
                 break;
 
+            case 0x40:
+                /* Bit 6: a port babbling at EOF is not disabled. */
+                dev->usb_regs[func - 2][0x40] = val;
+                uhci_set_babble_keep_port(dev->usb[func - 2], val & 0x40);
+                break;
             case 0x41:
                 dev->usb_regs[func - 2][0x41] = val;
                 pipc_usb_update_kbc_claim(dev);

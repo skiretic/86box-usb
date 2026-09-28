@@ -125,7 +125,9 @@ struct uhci_t {
     uint8_t     dbg_resume;
     uint32_t    dbg_link;
     double      dbg_left;
-    uint64_t    frame_left_us;
+    double      frame_left_us;
+    /* VIA Rx40 bit 6: a port babbling at EOF stays enabled. */
+    uint8_t     babble_keep_port;
     /* Completions of the frame in progress; they reach USBSTS at its end (s4.1). */
     uint8_t     eof_ioc;
     uint8_t     eof_spd;
@@ -477,6 +479,7 @@ uhci_latch_frame_status(uhci_t *dev)
 }
 
 static void uhci_run_frame(uhci_t *dev);
+static void uhci_frame_end(void *priv);
 
 /* Called after every USBCMD change: starts or stops the frame clock. */
 static void
@@ -488,19 +491,29 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
         return;
 
     if (running) {
-        if (dev->frame_frozen && (dev->cmd & UHCI_CMD_SWDBG))
-            timer_on_auto(&dev->frame_timer, (double) dev->frame_left_us);
+        int at_eof = 0;
+
+        /* A frame frozen with nothing left ends as it resumes; a zero period
+           would stop the timer instead. */
+        if (dev->frame_frozen && (dev->cmd & UHCI_CMD_SWDBG) && (dev->frame_left_us > 0.0))
+            timer_on_auto(&dev->frame_timer, dev->frame_left_us);
+        else if (dev->frame_frozen && (dev->cmd & UHCI_CMD_SWDBG))
+            at_eof = 1;
         else {
             timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
             dev->dbg_resume = 0;
         }
         dev->frame_frozen = 0;
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock started, FLBASEADD %08x", dev->flbaseadd);
-        uhci_run_frame(dev);
+        if (at_eof)
+            uhci_frame_end(dev);
+        else
+            uhci_run_frame(dev);
     } else {
-        /* Outside debug mode a stop resets the SOF counter; in debug mode it freezes (Table 4). */
+        /* Outside debug mode a stop resets the SOF counter; in debug mode it
+           freezes (Table 4), to the timer's own resolution. */
         dev->frame_frozen  = !!(dev->cmd & UHCI_CMD_SWDBG);
-        dev->frame_left_us = timer_get_remaining_us(&dev->frame_timer);
+        dev->frame_left_us = (double) timer_get_remaining_u64(&dev->frame_timer) / (double) TIMER_USEC;
         timer_stop(&dev->frame_timer);
         uhci_latch_frame_status(dev);
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock stopped%s", dev->frame_frozen ? " (frozen, SWDBG)" : "");
@@ -539,6 +552,17 @@ uhci_bus_ns(int low_speed, int iso, int in, int bytes)
     return 9107.0 + (83.54 * bits);
 }
 
+/* The most data bytes, up to len, of a transaction that ends within left
+   ns; -1 if not even an empty one does. */
+static int
+uhci_bytes_before_eof(int low_speed, int iso, int in, int len, double left)
+{
+    while ((len >= 0) && (uhci_bus_ns(low_speed, iso, in, len) > left))
+        len--;
+
+    return len;
+}
+
 /* One descriptor fetch, about one PCI burst read; it also bounds a loop
    of empty queue heads to the frame. */
 #define UHCI_FETCH_NS 250.0
@@ -573,13 +597,33 @@ enum {
     TD_RETRY,     /* left active: NAK or a counted error */
     TD_FAILED,    /* inactive with an error: queue not advanced */
     TD_END_FRAME, /* babble ends the frame */
-    TD_NO_TIME,   /* not started: past the point where it could finish */
+    TD_NO_TIME,   /* not started: preSOF has passed */
     TD_HALT       /* process error: Run/Stop cleared */
 };
 
 #ifdef ENABLE_USB_LOG
 static const char *const uhci_ret_names[] = { "ACK", "NAK", "STALL", "timeout", "babble", "toggle mismatch", "overrun" };
 #endif
+
+/* CRC/timeout, counted down by C_ERR; 0 retries forever (s3.2.2). */
+static int
+uhci_td_timeout(uhci_t *dev, uint32_t *ctrl)
+{
+    int cerr = (*ctrl & UHCI_TD_CERR) >> 27;
+
+    *ctrl |= UHCI_TD_CRCTO;
+    if (cerr == 0)
+        return TD_RETRY;
+
+    cerr--;
+    *ctrl = (*ctrl & ~UHCI_TD_CERR) | ((uint32_t) cerr << 27);
+    if (cerr != 0)
+        return TD_RETRY;
+
+    *ctrl        = (*ctrl & ~UHCI_TD_ACTIVE) | UHCI_TD_STALLED;
+    dev->eof_err = 1;
+    return TD_FAILED;
+}
 
 static int
 uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *link)
@@ -593,11 +637,10 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     int          len;
     int          ls;
     int          iso;
-    int          cerr;
+    int          fit;
+    int          eof = 0;
     int          ret;
     int          result;
-    double       cost;
-    double       maxp_ns;
 
     dma_bm_read(addr, (uint8_t *) td, 16, 4);
     *link = td[0];
@@ -626,12 +669,12 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     ls  = !!(ctrl & UHCI_TD_LS);
     iso = !!(ctrl & UHCI_TD_IOS);
 
-    /* Nothing starts that cannot finish before EOF, nor inside the window
-       kept for a MAXP-sized packet (s1.3.1 cases A and B). */
-    cost    = uhci_bus_ns(ls, iso, pid == USB_PID_IN, len);
-    maxp_ns = uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32);
-    if (*left < ((cost > maxp_ns) ? cost : maxp_ns))
+    /* Nothing starts past preSOF, the window kept for a MAXP-sized packet
+       (s1.3.1 cases A and B); what starts before it runs on (case C), and
+       past EOF only as an EOF babble (s2.1.1 bit 7, s4.1.4). */
+    if (*left < uhci_bus_ns(0, 0, 1, (dev->cmd & UHCI_CMD_MAXP) ? 64 : 32))
         return TD_NO_TIME;
+    fit = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, *left);
 
     p.pid    = pid;
     p.ep     = (td[2] >> 15) & 0x0f;
@@ -647,15 +690,51 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
         dma_bm_read(td[3], buf, len, 1);
 
     usb = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
-    ret = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
+    if ((pid != USB_PID_IN) && (fit < len)) {
+        /* The HC ends its own packet at EOF with a bit stuff error (s4.1.4),
+           so the device takes nothing. */
+        ret = USB_RET_BABBLE;
+        eof = 1;
+    } else {
+        int room = (fit < 0) ? 0 : fit;
 
-    /* An isochronous OUT has no handshake (USB 1.1 s8.5.4): once token and
-       data are sent the transaction is over, whoever took the data. */
-    if (iso && (pid == USB_PID_OUT))
-        ret = USB_RET_ACK;
+        /* IN data cut off at EOF gets no handshake, so the device keeps it;
+           an isochronous IN is sent once, whatever the host can take. */
+        if ((fit < len) && !iso)
+            p.len = room;
+        ret   = (usb != NULL) ? usb_dev_packet(usb, &p) : USB_RET_NO_RESPONSE;
+        p.len = len; /* a short packet is short of MaxLen */
+        if ((fit < len) && (iso ? ((ret == USB_RET_ACK) && (p.actual > room)) : (ret == USB_RET_BABBLE))) {
+            ret      = USB_RET_BABBLE;
+            p.actual = room;
+            eof      = 1;
+        }
 
-    /* OUT data is on the bus whatever the handshake; IN data only if sent. */
-    *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.actual : len);
+        /* An isochronous OUT has no handshake (USB 1.1 s8.5.4): once token and
+           data are sent the transaction is over, whoever took the data. */
+        if (iso && (pid == USB_PID_OUT))
+            ret = USB_RET_ACK;
+    }
+
+    /* OUT data is on the bus whatever the handshake; IN data only if sent.
+       An EOF babble lasts to the end of the frame. */
+    if (eof)
+        *left = 0.0;
+    else
+        *left -= uhci_bus_ns(ls, iso, pid == USB_PID_IN, (pid == USB_PID_IN) ? p.actual : len);
+
+    /* A device still sending at EOF2 loses its root port (USB 1.1 s11.2.2,
+       s11.8.1) unless the chip keeps it. */
+    if (eof && (pid == USB_PID_IN) && (usb != NULL) && !dev->babble_keep_port) {
+        for (int i = 0; i < UHCI_PORTS; i++) {
+            uhci_port_t *port = &dev->port[i];
+
+            if ((port->usb == usb) && (port->sc & UHCI_PORT_PE)) {
+                port->sc = (port->sc & ~UHCI_PORT_PE) | UHCI_PORT_PEDC;
+                usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i disabled: EOF babble, PORTSC %04x", i + 1, port->sc);
+            }
+        }
+    }
 
     /* Each execution rewrites the status field (s3.2.2 bits 23:16) and ActLen,
        7FFh (no bytes) unless data moved. */
@@ -684,9 +763,17 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
 
         case USB_RET_NAK:
             ctrl |= UHCI_TD_NAK;
+            /* A NAK or STALL to a SETUP is also a timeout (s3.2.2 bits 19, 18
+               and the Table 7 note): C_ERR counts it, Stalled only at 0. */
+            if (pid == USB_PID_SETUP)
+                result = uhci_td_timeout(dev, &ctrl);
             break;
 
         case USB_RET_STALL:
+            if (pid == USB_PID_SETUP) {
+                result = uhci_td_timeout(dev, &ctrl);
+                break;
+            }
             ctrl   = (ctrl & ~UHCI_TD_ACTIVE) | UHCI_TD_STALLED;
             result = TD_FAILED;
             dev->eof_err = 1;
@@ -702,18 +789,8 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
             break;
 
         default:
-            /* No handshake: CRC/timeout, counted down by C_ERR; 0 retries forever (s3.2.2). */
-            ctrl |= UHCI_TD_CRCTO;
-            cerr = (ctrl & UHCI_TD_CERR) >> 27;
-            if (cerr != 0) {
-                cerr--;
-                ctrl = (ctrl & ~UHCI_TD_CERR) | (cerr << 27);
-                if (cerr == 0) {
-                    ctrl   = (ctrl & ~UHCI_TD_ACTIVE) | UHCI_TD_STALLED;
-                    result = TD_FAILED;
-                    dev->eof_err = 1;
-                }
-            }
+            /* No handshake. */
+            result = uhci_td_timeout(dev, &ctrl);
             break;
     }
 
@@ -731,10 +808,10 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
 
     dma_bm_write(addr + 4, (uint8_t *) &ctrl, 4, 4);
 
-    usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x %s dev %i ep %i D%i len %i%s -> %s, ctrl %08x",
+    usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x %s dev %i ep %i D%i len %i%s -> %s%s, ctrl %08x",
               addr, (pid == USB_PID_IN) ? "IN" : ((pid == USB_PID_OUT) ? "OUT" : "SETUP"),
               (td[2] >> 8) & 0x7f, p.ep, p.toggle, p.len, ls ? " LS" : "",
-              uhci_ret_names[ret], ctrl);
+              uhci_ret_names[ret], eof ? " at EOF" : "", ctrl);
 
     return result;
 }
@@ -1292,6 +1369,12 @@ void
 uhci_set_bus_master(usb_t *dev, int enable)
 {
     dev->uhci->bus_master = !!enable;
+}
+
+void
+uhci_set_babble_keep_port(usb_t *dev, int keep)
+{
+    dev->uhci->babble_keep_port = !!keep;
 }
 
 #define USB_MAX_HC 8

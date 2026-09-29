@@ -809,8 +809,9 @@ smram_restore_state_p5(uint32_t *saved_state)
     cpu_state.seg_ss.base   = saved_state[SMRAM_FIELD_P5_SS_BASE];
     cpu_state.seg_ss.limit  = saved_state[SMRAM_FIELD_P5_SS_LIMIT];
     cpu_state.seg_ss.access = (saved_state[SMRAM_FIELD_P5_SS_ACCESS] >> 8) & 0xff;
-    /* The actual CPL (DPL of CS) is overwritten with DPL of SS. */
-    cpu_state.seg_cs.access  = (cpu_state.seg_cs.access & ~0x60) | (cpu_state.seg_ss.access & 0x60);
+    /* The CPL comes back with the saved CS cache, not from SS.DPL: a real-mode
+       SS cache is kept with DPL 3, and an SMI can land in real mode or after
+       PE is set but before SS is reloaded, both at CPL 0. */
     cpu_state.seg_ss.ar_high = (saved_state[SMRAM_FIELD_P5_SS_ACCESS] >> 16) & 0xff;
     smm_seg_load(&cpu_state.seg_ss);
 

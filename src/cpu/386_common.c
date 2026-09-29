@@ -1425,11 +1425,9 @@ enter_smm(int in_hlt)
 
     nmi_mask = 0;
 
-    if (smi_latched) {
-        in_smm      = 2;
-        smi_latched = 0;
-    } else
-        in_smm = 1;
+    /* Entering consumes the latch; this stay can latch one SMI of its own,
+       even when it was entered from the latch. */
+    smi_latched = 0;
 
     smm_in_hlt = in_hlt;
 
@@ -1479,11 +1477,6 @@ enter_smm_check(int in_hlt)
                 x386_common_log("SMI while in unlatched SMM\n");
 #endif
                 smi_latched = 1;
-                break;
-            case 2:
-#ifdef ENABLE_386_COMMON_LOG
-                x386_common_log("SMI while in latched SMM\n");
-#endif
                 break;
         }
 #ifdef ENABLE_386_COMMON_LOG

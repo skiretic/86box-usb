@@ -41,6 +41,7 @@
 #include <86box/video.h>
 #include <86box/vid_cga.h>
 #include <86box/vid_mcga.h>
+#include <86box/vid_ps55da2.h>
 #include <86box/plat_unused.h>
 #include <86box/thread.h>
 #include <86box/network.h>
@@ -6005,7 +6006,7 @@ const machine_t machines[] = {
         .flags     = MACHINE_FLAGS_NONE,
         .ram       = {
             .min  = 512,
-            .max  = 1024,
+            .max  = 15360,
             .step = 128 /* assumed */
         },
         .nvrmask                  = 127,
@@ -7199,6 +7200,54 @@ const machine_t machines[] = {
     /* 386SX machines which utilize the MCA bus */
     /* Has IBM PS/2 Type 1 KBC firmware. */
     {
+        .name              = "[MCA] IBM PS/2 model 55LS",
+        .internal_name     = "ibmps2_m55ls",
+        .type              = MACHINE_TYPE_386SX,
+        .chipset           = MACHINE_CHIPSET_PROPRIETARY,
+        .init              = machine_ps2_model_55ls_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_386SX,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 16000000,
+            .max_bus     = 0,
+            .min_voltage = 0,
+            .max_voltage = 0,
+            .min_multi   = 0,
+            .max_multi   = 0
+        },
+        .bus_flags = MACHINE_PS2_MCA,
+        .flags     = MACHINE_VIDEO,
+        .ram       = {
+            .min  = 1024,
+            .max  = 8192,
+            .step = 1024
+        },
+        .nvrmask                  = 63,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = &kbc_at_device,
+        .kbc_params               = KBC_VEN_IBM,
+        .nvr_device               = &nvr_at_device,
+        .nvr_params               = NVR_PS_NO_NMI,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x00000cf0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = NULL,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = NULL,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "" }
+    },
+    /* Has IBM PS/2 Type 1 KBC firmware. */
+    {
         .name              = "[MCA] IBM PS/2 model 55SX",
         .internal_name     = "ibmps2_m55sx",
         .type              = MACHINE_TYPE_386SX,
@@ -7284,6 +7333,55 @@ const machine_t machines[] = {
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
         .device                   = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = NULL,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "" }
+    },
+    /* Has IBM PS/2 Type 1 KBC firmware. */
+    {
+        .name              = "[MCA] IBM PS/55 model 5535-S",
+        .internal_name     = "ibmps55_m35s",
+        .type              = MACHINE_TYPE_386SX,
+        .chipset           = MACHINE_CHIPSET_PROPRIETARY,
+        .init              = machine_ps55_model_5535s_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_386SX,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 16000000,
+            .max_bus     = 0,
+            .min_voltage = 0,
+            .max_voltage = 0,
+            .min_multi   = 0,
+            .max_multi   = 0
+        },
+        .bus_flags = MACHINE_PS2_MCA,
+        .flags     = MACHINE_VIDEO | MACHINE_KEYBOARD_JIS,
+        .ram       = {
+            /* 1MB is not enough for the reference disk */
+            .min  = 2048,
+            .max  = 8192,
+            .step = 1024
+        },
+        .nvrmask                  = 63,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = &kbc_at_device,
+        .kbc_params               = KBC_VEN_IBM,
+        .nvr_device               = &nvr_at_device,
+        .nvr_params               = NVR_PS_NO_NMI,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x00000cf0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = NULL,
+        .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = NULL,
         .snd_device               = NULL,
@@ -8569,13 +8667,61 @@ const machine_t machines[] = {
         .net_device               = NULL,
         .aliases                  = { "" }
     },
+    /* Has IBM PS/2 Type 1 KBC firmware. */
+    {
+        .name              = "[MCA] IBM PS/55 model 5540-T",
+        .internal_name     = "ibmps55_m40t",
+        .type              = MACHINE_TYPE_386DX,
+        .chipset           = MACHINE_CHIPSET_PROPRIETARY,
+        .init              = machine_ps55_model_5540t_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_386DX | CPU_PKG_486BL,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 20000000,
+            .max_bus     = 0,
+            .min_voltage = 0,
+            .max_voltage = 0,
+            .min_multi   = 0,
+            .max_multi   = 0
+        },
+        .bus_flags = MACHINE_PS2_MCA | MACHINE_BUS_MCA32,
+        .flags     = MACHINE_VIDEO | MACHINE_KEYBOARD_JIS,
+        .ram       = {
+            .min  = 2048,
+            .max  = 65536,
+            .step = 2048
+        },
+        .nvrmask                  = 63,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = &kbc_at_device,
+        .kbc_params               = KBC_VEN_IBM,
+        .nvr_device               = &nvr_at_device,
+        .nvr_params               = NVR_PS_NO_NMI,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x00000cf0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = NULL,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = &ps55db2_device,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "" }
+    },
     /* Has IBM PS/55 5551-Sxx, Txx stage 2 firmware. */
     {
         .name              = "[MCA] IBM PS/55 model 5550-S/T Stage II",
         .internal_name     = "ibmps55_m50t",
         .type              = MACHINE_TYPE_386DX,
         .chipset           = MACHINE_CHIPSET_PROPRIETARY,
-        .init              = machine_ps55_model_50t_init,
+        .init              = machine_ps55_model_5550t_init,
         .p1_handler        = machine_generic_p1_handler,
         .gpio_handler      = NULL,
         .available_flag    = MACHINE_AVAILABLE,
@@ -8962,7 +9108,7 @@ const machine_t machines[] = {
         .internal_name     = "ibmps55_m50v",
         .type              = MACHINE_TYPE_386DX_486,
         .chipset           = MACHINE_CHIPSET_PROPRIETARY,
-        .init              = machine_ps55_model_50v_init,
+        .init              = machine_ps55_model_5550v_init,
         .p1_handler        = machine_generic_p1_handler,
         .gpio_handler      = NULL,
         .available_flag    = MACHINE_AVAILABLE,
@@ -12787,7 +12933,7 @@ const machine_t machines[] = {
         .bus_flags = MACHINE_PS2_PCI,
         /* Machine has custom (currently unemulated) power management harware
            needed for the APM interface to function */
-        .flags     = MACHINE_IDE | MACHINE_VIDEO | MACHINE_APM,
+        .flags     = MACHINE_IDE_DUAL | MACHINE_VIDEO | MACHINE_APM,
         .ram       = {
             .min  = 1024,
             .max  = 65536,
@@ -15282,6 +15428,55 @@ const machine_t machines[] = {
         .net_device               = NULL,
         .ide_device               = &ide_rz1000_pci_single_channel_device,
         .aliases                  = { "Intel Plato", "Dell Dimension XPS P___", "Ambra DP90 PCI", "" }
+    },
+    /* EISA and PCI, the PCEB and ESC; AMI 'H' KBC. */
+    {
+        .name              = "[i430NX] Intergraph TD-3",
+        .internal_name     = "td3",
+        .type              = MACHINE_TYPE_SOCKET5,
+        .chipset           = MACHINE_CHIPSET_INTEL_430NX,
+        .init              = machine_at_td3_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_SOCKET5_7,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 60000000,
+            .max_bus     = 66666667,
+            .min_voltage = 3380,
+            .max_voltage = 3520,
+            .min_multi   = 1.5,
+            .max_multi   = 1.5
+        },
+        .bus_flags = MACHINE_PCIE | MACHINE_BUS_PS2,
+        .flags     = MACHINE_SCSI | MACHINE_NIC | MACHINE_APM,
+        .ram       = {
+            .min  = 2048,
+            .max  = 524288,
+            .step = 2048
+        },
+        .nvrmask                  = 127,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = &kbc_at_device,
+        .kbc_params               = KBC_VEN_AMI | 0x00004800,
+        .nvr_device               = &nvr_at_device,
+        .nvr_params               = NVR_AT,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x000004f0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = &td3_device,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = NULL,
+        .snd_device               = NULL,
+        .net_device               = &pcnet_am79c970a_onboard_device,
+        .scsi_device              = &ncr53c810_onboard_pci_device,
+        .aliases                  = { "InterGraph MSMT282", "" }
     },
     /* Has unknown KBC firmware. */
     {
@@ -22892,8 +23087,8 @@ const machine_t machines[] = {
             .package     = CPU_PKG_SLOT1,
             .block       = CPU_BLOCK_NONE,
             .min_bus     = 60000000,
-            .max_bus     = 83333333,
-            .min_voltage = 1800,
+            .max_bus     = 66666667,
+            .min_voltage = 2800,
             .max_voltage = 3500,
             .min_multi   = 1.5,
             .max_multi   = 8.0
@@ -22902,10 +23097,10 @@ const machine_t machines[] = {
         .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_USB,
         .ram       = {
             .min  = 8192,
-            .max  = 393216,
+            .max  = 786432,
             .step = 8192
         },
-        .nvrmask                  = 511,
+        .nvrmask                  = 255,
         .jumpered_ecp_dma         = 0,
         .default_jumpered_ecp_dma = -1,
         .kbc_device               = NULL,
@@ -22917,13 +23112,13 @@ const machine_t machines[] = {
         .kbc_p1                   = 0x00000cf0,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
-        .device                   = NULL,
+        .device                   = &acerv62x_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = NULL,
         .snd_device               = NULL,
         .net_device               = NULL,
-        .aliases                  = { "" }
+        .aliases                  = { "Acer AcerPower 9606WC", "Acer AcerPower 9606NC", "" }
     },
     /* Has an SM(S)C FDC37C932 Super I/O chip with on-chip KBC with AMI
        MegaKey (revision '5') KBC firmware. */
@@ -24211,6 +24406,55 @@ const machine_t machines[] = {
     /* Has a SM(S)C FDC37M707 Super I/O chip with on-chip Phoenix MultiKey/42i
        KBC firmware. */
     {
+        .name              = "[i440BX] Intel RC440BX (microATX)",
+        .internal_name     = "rc440bx",
+        .type              = MACHINE_TYPE_SLOT1,
+        .chipset           = MACHINE_CHIPSET_INTEL_440BX,
+        .init              = machine_at_rc440bx_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_SLOT1,
+            .block       = CPU_BLOCK(CPU_PENTIUMPRO, CPU_CYRIX3S),
+            .min_bus     = 66666667,
+            .max_bus     = 100000000,
+            .min_voltage = 1800,
+            .max_voltage = 3500,
+            .min_multi   = 1.5,
+            .max_multi   = 8.0
+        },
+        .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_USB,
+        .ram       = {
+            .min  = 8192,
+            .max  = 524288,
+            .step = 8192
+        },
+        .nvrmask                  = 255,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = NULL,
+        .kbc_params               = 0x00000000,
+        .nvr_device               = NULL,
+        .nvr_params               = 0x00000000,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x00000cf0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = &rc440bx_device,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = NULL,
+        .snd_device               = &es1373_onboard_device,
+        .net_device               = NULL,
+        .aliases                  = { "Intel Rochester", "Gateway Tolstoy", "" }
+    },
+    /* Has a SM(S)C FDC37M707 Super I/O chip with on-chip Phoenix MultiKey/42i
+       KBC firmware. */
+    {
         .name              = "[i440BX] Intel SE440BX-2",
         .internal_name     = "se440bx2",
         .type              = MACHINE_TYPE_SLOT1,
@@ -24249,13 +24493,13 @@ const machine_t machines[] = {
         .kbc_p1                   = 0x00000cf0,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
-        .device                   = NULL,
+        .device                   = &se440bx2_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = NULL,
         .snd_device               = NULL,
         .net_device               = NULL,
-        .aliases                  = { "" }
+        .aliases                  = { "Intel Seattle 2", "Micron MBD001109-xx", "" }
     },
     /* Has a Winbond W83977TF Super I/O chip with on-chip KBC with AMIKey-2 (updated 'H') KBC firmware. */
     {

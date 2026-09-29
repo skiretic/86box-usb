@@ -685,6 +685,9 @@ exec386_dynarec_dyn(void)
 #    endif
         inrecomp = 0;
 
+        if (x86_was_reset)
+            codegen_reset();
+
 #    ifndef USE_NEW_DYNAREC
         if (!use32)
             cpu_state.pc &= 0xffff;

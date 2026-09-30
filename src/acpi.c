@@ -281,6 +281,15 @@ acpi_raise_smi(void *priv, int do_smi)
     }
 }
 
+/* SMI# on the VIA blocks is a level: SMI_EN and a status bit with its
+   enable set (VT82C586B p50-51). A status left pending while SMI_EN or
+   its enable was off fires the moment they come back. */
+static int
+acpi_via_smi_level(const acpi_t *dev)
+{
+    return (dev->regs.glbctl & 0x0001) && (dev->regs.glbsts & dev->regs.glben & 0xffff);
+}
+
 static uint32_t
 acpi_reg_read_common_regs(UNUSED(int size), uint16_t addr, void *priv)
 {
@@ -1260,6 +1269,7 @@ acpi_reg_write_via_common(int size, uint16_t addr, uint8_t val, void *priv)
     acpi_t *dev = (acpi_t *) priv;
     int     shift16;
     int     shift32;
+    int     level;
 
     addr &= 0xff;
     acpi_log("(%i) ACPI Write (%i) %02X: %02X\n", in_smm, size, addr, val);
@@ -1298,8 +1308,11 @@ acpi_reg_write_via_common(int size, uint16_t addr, uint8_t val, void *priv)
             /* GLBCTL - Global Control Register (IO) */
             usb_trace(USB_LOG_KBC, -1, "ACPI GLBCTL <- %02X (was %04X, GLBEN %04X, smi_active %d), %04X:%08X smm %d",
                       val, dev->regs.glbctl & 0xffff, dev->regs.glben, dev->regs.smi_active, CS, cpu_state.pc, in_smm);
+            level              = acpi_via_smi_level(dev);
             dev->regs.glbctl   = (dev->regs.glbctl & ~0xff) | (val & 0xff);
             dev->regs.smi_lock = !!(dev->regs.glbctl & 0x0010);
+            if (!level && acpi_via_smi_level(dev))
+                acpi_raise_smi(dev, 1);
             /* Setting BIOS_RLS also sets GBL_STS and generates SMI. */
             if (dev->regs.glbctl & 0x0002) {
                 dev->regs.pmsts |= 0x20;
@@ -1358,6 +1371,7 @@ acpi_reg_write_via(int size, uint16_t addr, uint8_t val, void *priv)
     acpi_t *dev = (acpi_t *) priv;
     int     shift16;
     int     shift32;
+    int     level;
 
     addr &= 0xff;
     acpi_log("(%i) ACPI Write (%i) %02X: %02X\n", in_smm, size, addr, val);
@@ -1375,7 +1389,10 @@ acpi_reg_write_via(int size, uint16_t addr, uint8_t val, void *priv)
             /* GLBEN - Global Enable Register (IO) */
             usb_trace(USB_LOG_KBC, -1, "ACPI GLBEN+%d <- %02X (was %04X, GLBCTL %04X), %04X:%08X smm %d",
                       addr & 1, val, dev->regs.glben, dev->regs.glbctl & 0xffff, CS, cpu_state.pc, in_smm);
+            level           = acpi_via_smi_level(dev);
             dev->regs.glben = ((dev->regs.glben & ~(0xff << shift16)) | (val << shift16)) & 0x007f;
+            if (!level && acpi_via_smi_level(dev))
+                acpi_raise_smi(dev, 1);
             break;
         case 0x30:
         case 0x31:
@@ -1424,6 +1441,7 @@ acpi_reg_write_via_596b(int size, uint16_t addr, uint8_t val, void *priv)
     acpi_t *dev = (acpi_t *) priv;
     int     shift16;
     int     shift32;
+    int     level;
 
     addr &= 0x7f;
     acpi_log("(%i) ACPI Write (%i) %02X: %02X\n", in_smm, size, addr, val);
@@ -1441,7 +1459,10 @@ acpi_reg_write_via_596b(int size, uint16_t addr, uint8_t val, void *priv)
             /* GLBEN - Global Enable Register (IO) */
             usb_trace(USB_LOG_KBC, -1, "ACPI GLBEN+%d <- %02X (was %04X, GLBCTL %04X), %04X:%08X smm %d",
                       addr & 1, val, dev->regs.glben, dev->regs.glbctl & 0xffff, CS, cpu_state.pc, in_smm);
+            level           = acpi_via_smi_level(dev);
             dev->regs.glben = ((dev->regs.glben & ~(0xff << shift16)) | (val << shift16)) & 0xfdff;
+            if (!level && acpi_via_smi_level(dev))
+                acpi_raise_smi(dev, 1);
             break;
         case 0x30:
         case 0x31:

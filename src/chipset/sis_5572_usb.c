@@ -149,19 +149,18 @@ sis_5572_usb_smi(void *priv, int level)
     sis_5572_usb_pme(dev);
 }
 
-/* The integrated USB disable leaves the function invisible: no window, no
-   bus master, no USBIRQ, no SMI. Its registers are kept for when it comes
-   back. A held USBIRQ or SMI is dropped and re-driven with the gate, so the
-   PIC source state and the SMI# receiver's edge latch follow what they see. */
+/* The integrated USB disable hides the function's config space: no bus
+   master, no USBIRQ, no SMI. Its registers are kept for when it comes
+   back, and the OHCI window stays with its own 04h bit 1 and BAR: the
+   Award BIOS clears the enable and then resets the HC through the window,
+   polling HCR. A held USBIRQ or SMI is dropped and re-driven with the gate,
+   so the PIC source state and the SMI# receiver's edge latch follow. */
 void
 sis_5572_usb_apply_enable(void *priv)
 {
     sis_5572_usb_t *dev = (sis_5572_usb_t *) priv;
     int             on  = dev->sis->usb_enabled;
 
-    ohci_update_mem_mapping(dev->usb,
-                            dev->pci_conf[0x11], dev->pci_conf[0x12],
-                            dev->pci_conf[0x13], on && (dev->pci_conf[0x04] & 0x02));
     ohci_set_bus_master(dev->usb, on && (dev->pci_conf[0x04] & 0x04));
     if (dev->sis->usb_irq_level) {
         if (on)

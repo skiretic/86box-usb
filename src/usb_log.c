@@ -37,7 +37,7 @@ typedef struct usb_log_file_t {
     uint64_t last_us;
 } usb_log_file_t;
 
-static const char *const layer_names[USB_LOG_LAYERS] = { "reg", "sched", "irq", "pcap" };
+static const char *const layer_names[USB_LOG_LAYERS] = { "reg", "sched", "irq", "pcap", "kbc" };
 
 static usb_log_file_t log_files[USB_LOG_LAYERS];
 static uint64_t       log_cap;

@@ -39,6 +39,7 @@
 #include <86box/pci.h>
 #include <86box/sio.h>
 #include <86box/keyboard.h>
+#include <86box/usb_log.h>
 
 #define STAT_PARITY        0x80
 #define STAT_RTIMEOUT      0x40
@@ -2669,6 +2670,7 @@ kbc_at_port_1_write(uint16_t port, uint8_t val, void *priv)
     uint8_t fast_a20 = (kbc_ven != KBC_VEN_SIEMENS);
 
     kbc_at_log("ATkbc: [%04X:%08X] write(%04X) = %02X\n", CS, cpu_state.pc, port, val);
+    usb_trace(USB_LOG_KBC, -1, "8042 write 60 <- %02X, status %02X, %04X:%08X smm %d", val, dev->status, CS, cpu_state.pc, in_smm);
 
     /* The host may write the next byte before the pending parameter was consumed; take it
        first instead of silently overwriting it, fix BIOS not waiting for IBF to clear. */
@@ -2706,6 +2708,7 @@ kbc_at_port_2_write(uint16_t port, uint8_t val, void *priv)
     uint8_t fast_a20 = (kbc_ven != KBC_VEN_SIEMENS);
 
     kbc_at_log("ATkbc: [%04X:%08X] write(%04X) = %02X\n", CS, cpu_state.pc, port, val);
+    usb_trace(USB_LOG_KBC, -1, "8042 write 64 <- %02X, status %02X, %04X:%08X smm %d", val, dev->status, CS, cpu_state.pc, in_smm);
 
     /* The host may write the next byte before the pending parameter was consumed; take it
        first instead of silently overwriting it, fix BIOS not waiting for IBF to clear. */
@@ -2790,6 +2793,7 @@ kbc_at_port_1_read(uint16_t port, void *priv)
         cpu_override_dynarec = 0;
 
     kbc_at_log("ATkbc: [%04X:%08X] read (%04X) = %02X\n",  CS, cpu_state.pc, port, ret);
+    usb_trace(USB_LOG_KBC, -1, "8042 read 60 -> %02X, status %02X, %04X:%08X smm %d", ret, dev->status, CS, cpu_state.pc, in_smm);
 
     return ret;
 }
@@ -2806,6 +2810,7 @@ kbc_at_port_2_read(uint16_t port, void *priv)
     ret = dev->status;
 
     kbc_at_log("ATkbc: [%04X:%08X] read (%04X) = %02X\n",  CS, cpu_state.pc, port, ret);
+    usb_trace(USB_LOG_KBC, -1, "8042 read 64 -> %02X, %04X:%08X smm %d", ret, CS, cpu_state.pc, in_smm);
 
     return ret;
 }

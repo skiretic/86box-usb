@@ -43,6 +43,7 @@
 #include <86box/hdc_ide.h>
 #include <86box/hdc_ide_sff8038i.h>
 #include <86box/sis_55xx.h>
+#include <86box/usb_log.h>
 
 int        acpi_rtc_status     = 0;
 atomic_int acpi_pwrbut_pressed = 0;
@@ -254,6 +255,10 @@ acpi_raise_smi(void *priv, int do_smi)
 
     if (dev->regs.glbctl & 0x01) {
         if ((dev->vendor == VEN_VIA) || (dev->vendor == VEN_VIA_596B)) {
+            usb_trace(USB_LOG_KBC, -1, "ACPI SMI %s (GLBSTS %04X GLBEN %04X GLBCTL %04X lock %d active %d), %04X:%08X smm %d",
+                      (!dev->regs.smi_lock || !dev->regs.smi_active) ? (do_smi ? "raised" : "armed") : "held",
+                      dev->regs.glbsts, dev->regs.glben, dev->regs.glbctl & 0xffff, dev->regs.smi_lock, dev->regs.smi_active,
+                      CS, cpu_state.pc, in_smm);
             if (!dev->regs.smi_lock || !dev->regs.smi_active) {
                 if (do_smi)
                     smi_raise();
@@ -1291,6 +1296,8 @@ acpi_reg_write_via_common(int size, uint16_t addr, uint8_t val, void *priv)
             break;
         case 0x2c:
             /* GLBCTL - Global Control Register (IO) */
+            usb_trace(USB_LOG_KBC, -1, "ACPI GLBCTL <- %02X (was %04X, GLBEN %04X, smi_active %d), %04X:%08X smm %d",
+                      val, dev->regs.glbctl & 0xffff, dev->regs.glben, dev->regs.smi_active, CS, cpu_state.pc, in_smm);
             dev->regs.glbctl   = (dev->regs.glbctl & ~0xff) | (val & 0xff);
             dev->regs.smi_lock = !!(dev->regs.glbctl & 0x0010);
             /* Setting BIOS_RLS also sets GBL_STS and generates SMI. */
@@ -1302,6 +1309,8 @@ acpi_reg_write_via_common(int size, uint16_t addr, uint8_t val, void *priv)
             break;
         case 0x2d:
             /* GLBCTL - Global Control Register (IO) */
+            usb_trace(USB_LOG_KBC, -1, "ACPI GLBCTL+1 <- %02X (was %04X, smi_active %d), %04X:%08X smm %d",
+                      val, dev->regs.glbctl & 0xffff, dev->regs.smi_active, CS, cpu_state.pc, in_smm);
             dev->regs.glbctl &= ~((val << 8) & 0x0100);
             if (val & 0x01)
                 dev->regs.smi_active = 0;
@@ -1364,6 +1373,8 @@ acpi_reg_write_via(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x2a:
         case 0x2b:
             /* GLBEN - Global Enable Register (IO) */
+            usb_trace(USB_LOG_KBC, -1, "ACPI GLBEN+%d <- %02X (was %04X, GLBCTL %04X), %04X:%08X smm %d",
+                      addr & 1, val, dev->regs.glben, dev->regs.glbctl & 0xffff, CS, cpu_state.pc, in_smm);
             dev->regs.glben = ((dev->regs.glben & ~(0xff << shift16)) | (val << shift16)) & 0x007f;
             break;
         case 0x30:
@@ -1428,6 +1439,8 @@ acpi_reg_write_via_596b(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x2a:
         case 0x2b:
             /* GLBEN - Global Enable Register (IO) */
+            usb_trace(USB_LOG_KBC, -1, "ACPI GLBEN+%d <- %02X (was %04X, GLBCTL %04X), %04X:%08X smm %d",
+                      addr & 1, val, dev->regs.glben, dev->regs.glbctl & 0xffff, CS, cpu_state.pc, in_smm);
             dev->regs.glben = ((dev->regs.glben & ~(0xff << shift16)) | (val << shift16)) & 0xfdff;
             break;
         case 0x30:

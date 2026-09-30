@@ -13,7 +13,11 @@
  *            REG   - guest accesses to the host controller registers;
  *            SCHED - schedule walk (frame list, QH/TD or ED/TD);
  *            IRQ   - status bits and interrupt line changes;
- *            PCAP  - transactions as a usbmon pcap file.
+ *            PCAP  - transactions as a usbmon pcap file;
+ *            KBC   - the legacy keyboard emulation's control plane: every
+ *                    8042 port 60h/64h cycle and every VIA ACPI GLBEN /
+ *                    GLBCTL write with CS:EIP and the SMM flag, and each
+ *                    SMI the ACPI block raises or holds (off by default).
  *
  *          Built only with ENABLE_USB_LOG; otherwise every call below
  *          compiles to nothing. At run time the USB_LOG environment
@@ -37,6 +41,7 @@ enum {
     USB_LOG_SCHED,
     USB_LOG_IRQ,
     USB_LOG_PCAP,
+    USB_LOG_KBC,
     USB_LOG_LAYERS
 };
 

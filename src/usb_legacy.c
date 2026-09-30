@@ -53,8 +53,10 @@ uhci_legsup_kbc_cycle(uint8_t *legsup, uint8_t *a20, uint16_t port, int write, u
     int bit = ((port == 0x64) ? 2 : 0) | (write ? 1 : 0);
 
     /* The A20GATE pass-through sequence reaches the 8042 with no trap and no
-       status: 64h <- D1h (one or more), 60h <- data, 64h reads (zero or
-       more), 64h <- FFh. Any other cycle ends it and is handled normally. */
+       status: 64h <- D1h (one or more), 60h <- data, 64h <- FFh. Any other
+       cycle ends it and is handled normally, except the 64h status reads
+       the A20 routines poll before every write of the sequence (HIMEM,
+       Linux): a status poll is not a command and never ends it. */
     if (legsup[0] & LEGSUP_A20PTEN) {
         if (legsup[0] & LEGSUP_PSS) {
             if (write && (port == 0x64) && (val == 0xd1) && (*a20 == A20_WAIT_DATA))
@@ -63,7 +65,7 @@ uhci_legsup_kbc_cycle(uint8_t *legsup, uint8_t *a20, uint16_t port, int write, u
                 *a20 = A20_WAIT_END;
                 return 0;
             }
-            if (!write && (port == 0x64) && (*a20 == A20_WAIT_END))
+            if (!write && (port == 0x64))
                 return 0;
             uhci_legsup_a20_end(legsup);
             if (write && (port == 0x64) && (val == 0xff) && (*a20 == A20_WAIT_END) && !(opts & UHCI_LEGSUP_A20_FF_TRAPPED))

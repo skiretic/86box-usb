@@ -561,6 +561,7 @@ stpc_usb_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
         case 0x0b:
         case 0x0e:
         case 0x10:
+        case 0x3d:
             return;
 
         case 0x05:
@@ -921,6 +922,9 @@ stpc_setup(stpc_t *dev)
                  STPC chipsets say 0x80, which is indeed multi-function (as the STPC Atlas programming manual
                  indicates as well), and Windows 2000 also issues a 0x7B STOP error if it is 0x40. */
         dev->pci_conf[3][0x0e] = /*0x40*/ 0x80;
+
+        /* The USB function interrupts on INTA# (PM 22.3.1). */
+        dev->pci_conf[3][0x3d] = PCI_INTA;
     }
 
     /* PCI setup */

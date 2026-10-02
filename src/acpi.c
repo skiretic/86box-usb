@@ -2442,7 +2442,7 @@ acpi_set_trap_update(acpi_t *dev, void (*update)(void *priv), void *priv)
 uint8_t
 acpi_ali_soft_smi_status_read(acpi_t *dev)
 {
-    return dev->regs.ali_soft_smi = 1;
+    return dev->regs.ali_soft_smi;
 }
 
 void

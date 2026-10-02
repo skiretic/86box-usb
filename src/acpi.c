@@ -1769,6 +1769,20 @@ acpi_sis5595_usb_smi(void *priv, int level)
     dev->usb_smi_level = !!level;
 }
 
+/* The OHCI's SMI pin is a level (OHCI 1.0a 6.1), and USBSMI_STS is cleared
+   before the handler exits (SiS95 p150): a clear, or an enable written while
+   the pin is still high, sets the status again and raises SMI#. */
+static void
+acpi_sis5595_usb_smi_held(acpi_t *dev, uint8_t old_en)
+{
+    if (!dev->usb_smi_level || !(dev->regs.leg_en & 0x40))
+        return;
+    if (!(dev->regs.leg_sts & 0x40) || !(old_en & 0x20)) {
+        dev->regs.leg_sts |= 0x40;
+        acpi_sis5595_smi_raise(dev);
+    }
+}
+
 void
 acpi_sis5595_smbus_event(void *priv)
 {
@@ -1911,10 +1925,12 @@ acpi_reg_write_sis_5595(int size, uint16_t addr, uint8_t val, void *priv)
             break;
         case 0x30:
             dev->regs.leg_sts &= ~val;
+            acpi_sis5595_usb_smi_held(dev, dev->regs.leg_en);
             break;
         case 0x31:
             old = dev->regs.leg_en;
             dev->regs.leg_en = val;
+            acpi_sis5595_usb_smi_held(dev, old);
             if (!(old & 0x04) && (val & 0x04))
                 timer_on_auto(&dev->per_timer, 16000000.0);
             else if ((old & 0x04) && !(val & 0x04))

@@ -260,6 +260,8 @@ device_set_context(device_context_t *ctx, const device_t *dev, int inst)
         { .old = "Adaptec AHA-2940U", .new = "Adaptec AHA-2940 Ultra (AIC-7880)" },
         { .old = "Adaptec AHA-2940 Ultra", .new = "Adaptec AHA-2940 Ultra (AIC-7880)" },
         { .old = "Adaptec AHA-2944 Ultra Wide (differential)", .new = "Adaptec AHA-2944UW" },
+        { .old = "ATI Mach64GX ISA", .new = "ATI Graphics Pro Turbo (Mach64GX) ISA" },
+        { .old = "ATI Mach64GX VLB", .new = "ATI Graphics Pro Turbo (Mach64GX) VLB" },
         { 0 }
     };
 
@@ -1350,6 +1352,20 @@ const device_t device_none = {
 const device_t device_internal = {
     .name          = "Internal",
     .internal_name = "internal",
+    .flags         = 0,
+    .local         = 0,
+    .init          = NULL,
+    .close         = NULL,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = NULL,
+    .force_redraw  = NULL,
+    .config        = NULL
+};
+
+const device_t device_external = {
+    .name          = "External",
+    .internal_name = "external",
     .flags         = 0,
     .local         = 0,
     .init          = NULL,

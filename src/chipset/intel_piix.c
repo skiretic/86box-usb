@@ -65,6 +65,7 @@ typedef struct _piix_ {
     uint8_t        max_func;
     uint8_t        pci_slot;
     uint8_t        no_mirq0;
+    uint8_t        no_usb;
     uint8_t        regs[4][256];
     uint16_t       func0_id;
     uint16_t       nvr_io_base;
@@ -666,6 +667,10 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
         if (func > 1)
             return;
     }
+
+    /* A machine without the USB function: function 2 does not decode. */
+    if (dev->no_usb && (func == 2))
+        return;
 
     /* Ignore the new IDE BAR's on the Intel chips. */
     if ((dev->type < 5) && (func == 1) && (addr >= 0x10) && (addr <= 0x1f))
@@ -1404,7 +1409,7 @@ piix_read(int func, int addr, UNUSED(int len), void *priv)
         ret = 0x00;
 
     /* Return on unsupported function. */
-    if ((func <= dev->max_func) || ((func == 1) && (dev->max_func == 0))) {
+    if (((func <= dev->max_func) || ((func == 1) && (dev->max_func == 0))) && !(dev->no_usb && (func == 2))) {
         fregs = (uint8_t *) dev->regs[func];
         ret   = fregs[addr];
 
@@ -1773,6 +1778,7 @@ piix_init(const device_t *info)
     dev->func_shift = (info->local >> 8) & 0x0f;
     dev->no_mirq0   = (info->local >> 12) & 0x0f;
     dev->func0_id   = (info->local >> 16) & 0xffff;
+    dev->no_usb     = !!(info->local & PIIX4_NO_USB);
 
     pci_add_card(PCI_ADD_SOUTHBRIDGE, piix_read, piix_write, dev, &dev->pci_slot);
     piix_log("PIIX%i: Added to slot: %02X\n", dev->type, dev->pci_slot);
@@ -1794,7 +1800,7 @@ piix_init(const device_t *info)
     else
         sff_set_irq_mode(dev->bm[1], IRQ_MODE_MIRQ_0);
 
-    if (dev->type >= 3) {
+    if ((dev->type >= 3) && !dev->no_usb) {
         dev->usb   = device_add(&usb_device);
         if (dev->type <= 4)
             uhci_set_irq_handler(dev->usb, piix_usb_irq, dev);

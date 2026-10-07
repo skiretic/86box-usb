@@ -66,6 +66,7 @@ extern const device_t fdc37c669_device;
 
 #define FDC37M60X            0x00047
 #define FDC37M70X            0x00042
+#define FDC37B80X            0x00042
 #define FDC37XXXX_CHIP_ID    0x000ff
 
 #define FDC37XXX1            0x00100    /* Compaq KBC firmware and configuration registers on GPIO ports. */
@@ -108,6 +109,7 @@ extern const device_t i82091aa_device;
 #define PCX73XX_IDE_SEC      0x00002
 
 #define PCX73XX_FDC_ON       0x10000
+#define PCX73XX_DENSEL_LOW   0x20000    /* IDENT strapped low: DENSEL active low at 500 kbps and 1 Mbps. */
 
 #define PC87310_ALI          0x00004
 #define PC87332              PC87310_ALI

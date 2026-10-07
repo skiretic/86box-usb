@@ -246,6 +246,7 @@ const device_t usb_opti_82c861_device = {
 static const device_t *const usb_card_devices[] = {
     &device_none,
     &usb_opti_82c861_device,
+    &usb_via_vt83c572_device,
     NULL
 };
 

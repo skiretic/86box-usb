@@ -39,6 +39,8 @@ extern const device_t usb_device;
 extern const device_t usb_msd_device;
 /* A USB speaker, listed with the sound cards. */
 extern const device_t usb_speaker_device;
+/* The VIA VT83C572 PCI to USB controller on an add-in card. */
+extern const device_t usb_via_vt83c572_device;
 /* USB hubs, listed on the Ports page; usb_hub_type 0 is none. */
 extern const device_t usb_hub_4port_device;
 extern int            usb_hub_type;

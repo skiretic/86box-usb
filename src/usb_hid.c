@@ -4,10 +4,11 @@
  *          PC systems and compatibles from 1981 through fairly recent
  *          system designs based on the PCI bus.
  *
- *          USB HID mouse and keyboard, written from the HID 1.11
+ *          USB HID mouse, keyboard and tablet, written from the HID 1.11
  *          specification and the HID Usage Tables 1.12: a low-speed
- *          boot-interface mouse with three buttons and a wheel, and a
- *          low-speed boot-interface keyboard.
+ *          boot-interface mouse with three buttons and a wheel, a
+ *          low-speed boot-interface keyboard, and a full-speed absolute
+ *          pointer with three buttons that follows the host pointer.
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -26,6 +27,7 @@
 #include <86box/mouse.h>
 #include <86box/keyboard.h>
 #include <86box/thread.h>
+#include <86box/video.h>
 #include <86box/usb_dev.h>
 #include <86box/plat_unused.h>
 
@@ -831,6 +833,312 @@ const device_t keyboard_usb_device = {
     .local         = 0,
     .init          = hid_kbd_init,
     .close         = hid_kbd_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = NULL,
+    .force_redraw  = NULL,
+    .config        = NULL
+};
+
+/* Absolute pointer (HID 1.11 p47, HUT 1.12 p26/p69). The Windows mouse
+   drivers scale by the Physical extent itself, not the Logical one: Win98
+   (v - PhysMin) << 16 / (PhysMax - PhysMin), 2000/XP v * 0FFFFh / PhysMax.
+   With Physical 0/0, which HID 1.11 p48 reads as "same as logical", both
+   post v unscaled (2000/XP divide by (1 << size) - 1), so 0..32767 covers
+   half the screen; Physical must be declared equal to Logical. Values stay
+   under 2^15: the Windows parsers sign-extend by field size whatever the
+   Logical Minimum. */
+#define HID_TABLET_MAX 32767
+
+static const uint8_t hid_tablet_report_desc[] = {
+    0x05, 0x01,       /* Usage Page (Generic Desktop) */
+    0x09, 0x02,       /* Usage (Mouse) */
+    0xa1, 0x01,       /* Collection (Application) */
+    0x09, 0x01,       /*   Usage (Pointer) */
+    0xa1, 0x00,       /*   Collection (Physical) */
+    0x05, 0x09,       /*     Usage Page (Button) */
+    0x19, 0x01,       /*     Usage Minimum (1) */
+    0x29, 0x03,       /*     Usage Maximum (3) */
+    0x15, 0x00,       /*     Logical Minimum (0) */
+    0x25, 0x01,       /*     Logical Maximum (1) */
+    0x95, 0x03,       /*     Report Count (3) */
+    0x75, 0x01,       /*     Report Size (1) */
+    0x81, 0x02,       /*     Input (Data, Variable, Absolute) */
+    0x95, 0x01,       /*     Report Count (1) */
+    0x75, 0x05,       /*     Report Size (5) */
+    0x81, 0x01,       /*     Input (Constant) */
+    0x05, 0x01,       /*     Usage Page (Generic Desktop) */
+    0x09, 0x30,       /*     Usage (X) */
+    0x09, 0x31,       /*     Usage (Y) */
+    0x15, 0x00,       /*     Logical Minimum (0) */
+    0x26, 0xff, 0x7f, /*     Logical Maximum (32767) */
+    0x35, 0x00,       /*     Physical Minimum (0) */
+    0x46, 0xff, 0x7f, /*     Physical Maximum (32767) */
+    0x75, 0x10,       /*     Report Size (16) */
+    0x95, 0x02,       /*     Report Count (2) */
+    0x81, 0x02,       /*     Input (Data, Variable, Absolute) */
+    0xc0,             /*   End Collection */
+    0xc0              /* End Collection */
+};
+
+#define HID_TABLET_REPORT 5
+
+static const uint8_t hid_tablet_dev_desc[18] = {
+    18, 0x01,   /* bLength, DEVICE */
+    0x10, 0x01, /* bcdUSB 1.10 */
+    0x00, 0x00, 0x00,
+    64,         /* bMaxPacketSize0 */
+    0x00, 0x00, /* idVendor */
+    0x06, 0x00, /* idProduct */
+    0x00, 0x01, /* bcdDevice */
+    1, 2, 0,    /* iManufacturer, iProduct, iSerialNumber */
+    1           /* bNumConfigurations */
+};
+
+#define HID_TABLET_CFG_LEN (9 + 9 + 9 + 7)
+
+static const uint8_t hid_tablet_cfg_desc[HID_TABLET_CFG_LEN] = {
+    /* Configuration */
+    9, 0x02, HID_TABLET_CFG_LEN, 0x00, 1, 1, 0,
+    0x80, /* bus powered, no remote wakeup */
+    50,   /* 100 mA */
+    /* Interface 0: HID, no boot interface, so subclass and protocol 0 (HID p18-19) */
+    9, 0x04, 0, 0, 1, 0x03, 0x00, 0x00, 0,
+    /* HID descriptor, between interface and endpoint (HID 7.1) */
+    9, 0x21, 0x11, 0x01, 0, 1, 0x22, sizeof(hid_tablet_report_desc), 0x00,
+    /* Endpoint 1 IN, interrupt, 8 bytes, 10 ms (usb11 p220) */
+    7, 0x05, 0x81, 0x03, 8, 0x00, 10
+};
+
+static const char *const hid_tablet_strings[] = {
+    "86Box",
+    "USB Tablet"
+};
+
+typedef struct hid_tablet_t {
+    usb_dev_t  usb;
+    hid_idle_t idle;
+    uint8_t    cur[HID_TABLET_REPORT];  /* the latest state */
+    uint8_t    sent[HID_TABLET_REPORT]; /* the last report on the interrupt pipe */
+    int        sent_valid;              /* none yet in this configuration */
+    int        attached;
+} hid_tablet_t;
+
+/* Host position, 0..1 of the displayed image, to a logical value: the center
+   of the guest pixel under it (size active pixels; 0 = unknown, no snap).
+   A pixel edge would round into the pixel before it in a driver that scales
+   to 0..65535, and the center keeps the far edge off 32767, which the Win98
+   driver scales past 65535 and its 16-bit path wraps to the left edge. */
+static uint16_t
+hid_tablet_axis(double a, int size)
+{
+    if (!(a > 0.0))
+        a = 0.0;
+    if (a > 1.0)
+        a = 1.0;
+    if (size > 0) {
+        /* The host divides a whole position by its width: q / w * w can
+           come back a hair under q. */
+        int p = (int) (a * size + 1e-6);
+
+        if (p >= size)
+            p = size - 1;
+        a = (p + 0.5) / size;
+    }
+    if (a >= 1.0)
+        return HID_TABLET_MAX;
+    return (uint16_t) (a * (HID_TABLET_MAX + 1));
+}
+
+/* Host input counts only in tablet mode; in mouse mode the state holds. A
+   press and release between two polls still shows as pressed (take). */
+static void
+hid_tablet_sample(hid_tablet_t *dev, int take)
+{
+    const monitor_t *m;
+    double           x;
+    double           y;
+    uint16_t         vx;
+    uint16_t         vy;
+    int              b;
+
+    if (mouse_input_mode < 1)
+        return;
+
+    mouse_get_abs_coords(&x, &y);
+
+    /* The monitor the host pointer is over (Qt: index + 1), else the first. */
+    if ((mouse_tablet_in_proximity > 0) && (mouse_tablet_in_proximity <= MONITORS_NUM))
+        m = &monitors[mouse_tablet_in_proximity - 1];
+    else
+        m = &monitors[0];
+
+    /* With overscan shown, the image carries the border around the active
+       display: the guest's screen is the inner xsize by ysize. */
+    if (enable_overscan && (m->mon_xsize > 0) && (m->mon_ysize > 0)) {
+        x = (x * (m->mon_xsize + m->mon_overscan_x) - (m->mon_overscan_x / 2.0)) / m->mon_xsize;
+        y = (y * (m->mon_ysize + m->mon_overscan_y) - (m->mon_overscan_y / 2.0)) / m->mon_ysize;
+    }
+
+    vx = hid_tablet_axis(x, m->mon_xsize);
+    vy = hid_tablet_axis(y, m->mon_ysize);
+    b  = tablet_get_buttons_ex();
+    if (take)
+        b |= tablet_take_pressed();
+
+    /* Host bits 0-2 are left, right, middle: Buttons 1-3 (HUT p69). */
+    dev->cur[0] = b & 0x07;
+    dev->cur[1] = vx & 0xff;
+    dev->cur[2] = vx >> 8;
+    dev->cur[3] = vy & 0xff;
+    dev->cur[4] = vy >> 8;
+}
+
+static int
+hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
+{
+    hid_tablet_t *dev    = (hid_tablet_t *) usb->priv;
+    uint16_t      wvalue = setup[2] | (setup[3] << 8);
+    uint16_t      windex = setup[4] | (setup[5] << 8);
+
+    if (windex != 0)
+        return USB_DATA_STALL;
+
+    /* Class descriptors from the interface (HID 7.1.1). */
+    if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
+        switch (wvalue >> 8) {
+            case 0x21:
+                memcpy(data, &hid_tablet_cfg_desc[18], 9);
+                return 9;
+            case 0x22:
+                memcpy(data, hid_tablet_report_desc, sizeof(hid_tablet_report_desc));
+                return sizeof(hid_tablet_report_desc);
+            default:
+                return USB_DATA_STALL;
+        }
+    }
+
+    /* GET/SET_PROTOCOL are boot-subclass requests (HID p64): STALL here. */
+    if (setup[0] == 0xa1) {
+        switch (setup[1]) {
+            case HID_GET_REPORT:
+                /* The one Input report, no report IDs (HID 7.2.1). */
+                if (wvalue != 0x0100)
+                    return USB_DATA_STALL;
+                hid_tablet_sample(dev, 0);
+                memcpy(data, dev->cur, HID_TABLET_REPORT);
+                return HID_TABLET_REPORT;
+            case HID_GET_IDLE:
+                data[0] = dev->idle.rate;
+                return 1;
+            default:
+                return USB_DATA_STALL;
+        }
+    }
+
+    if (setup[0] == 0x21) {
+        switch (setup[1]) {
+            case HID_SET_IDLE:
+                hid_idle_set(&dev->idle, wvalue >> 8);
+                return 0;
+            default:
+                /* No Output or Feature reports. */
+                return USB_DATA_STALL;
+        }
+    }
+
+    return USB_DATA_STALL;
+}
+
+/* Interrupt IN: a report on a change (and the first one in a configuration),
+   else the same report once the idle period runs out, else NAK (HID 7.2.4). */
+static int
+hid_tablet_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxlen))
+{
+    hid_tablet_t *dev = (hid_tablet_t *) usb->priv;
+
+    hid_tablet_sample(dev, 1);
+
+    if (((mouse_input_mode >= 1) && (!dev->sent_valid || memcmp(dev->cur, dev->sent, HID_TABLET_REPORT))) ||
+        hid_idle_due(&dev->idle)) {
+        memcpy(dev->sent, dev->cur, HID_TABLET_REPORT);
+        dev->sent_valid = 1;
+        memcpy(buf, dev->cur, HID_TABLET_REPORT);
+        hid_idle_reported(&dev->idle);
+        return HID_TABLET_REPORT;
+    }
+
+    return USB_DATA_NAK;
+}
+
+static void
+hid_tablet_configured(usb_dev_t *usb, UNUSED(int config))
+{
+    hid_tablet_t *dev = (hid_tablet_t *) usb->priv;
+
+    dev->sent_valid = 0;
+}
+
+static void
+hid_tablet_reset(usb_dev_t *usb)
+{
+    hid_tablet_t *dev = (hid_tablet_t *) usb->priv;
+
+    /* Pointers idle indefinitely by default (HID 7.2.4). */
+    dev->idle.rate    = 0;
+    dev->idle.pending = 0;
+    dev->sent_valid   = 0;
+}
+
+static const usb_dev_ops_t hid_tablet_ops = {
+    .control    = hid_tablet_control,
+    .data_in    = hid_tablet_data_in,
+    .data_out   = NULL,
+    .reset      = hid_tablet_reset,
+    .configured = hid_tablet_configured
+};
+
+static void *
+hid_tablet_init(UNUSED(const device_t *info))
+{
+    hid_tablet_t *dev = (hid_tablet_t *) calloc(1, sizeof(hid_tablet_t));
+
+    dev->usb.name      = "USB Tablet";
+    dev->usb.low_speed = 0;
+    dev->usb.dev_desc  = hid_tablet_dev_desc;
+    dev->usb.cfg_desc  = hid_tablet_cfg_desc;
+    dev->usb.cfg_len   = HID_TABLET_CFG_LEN;
+    dev->usb.strings   = hid_tablet_strings;
+    dev->usb.n_strings = 2;
+    dev->usb.ops       = &hid_tablet_ops;
+    dev->usb.priv      = dev;
+    usb_dev_init(&dev->usb);
+    hid_tablet_reset(&dev->usb);
+
+    mouse_set_buttons(3);
+
+    dev->attached = usb_attach(&dev->usb);
+
+    return dev;
+}
+
+static void
+hid_tablet_close(void *priv)
+{
+    hid_tablet_t *dev = (hid_tablet_t *) priv;
+
+    if (dev->attached)
+        usb_detach(&dev->usb);
+    free(dev);
+}
+
+const device_t tablet_usb_device = {
+    .name          = "USB Tablet",
+    .internal_name = "usb_tablet",
+    .flags         = DEVICE_USB,
+    .local         = 0,
+    .init          = hid_tablet_init,
+    .close         = hid_tablet_close,
     .reset         = NULL,
     .available     = NULL,
     .speed_changed = NULL,

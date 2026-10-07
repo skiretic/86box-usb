@@ -138,6 +138,7 @@ static mouse_t tablet_devices[] = {
     { &mouse_ibm7690_touch_device        },
     { &mouse_cga_lightpen_device        },
     { &mouse_pxl_380_device             },
+    { &tablet_usb_device                },
     { NULL                              }
 };
 

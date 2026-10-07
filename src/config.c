@@ -1308,8 +1308,10 @@ load_ports(void)
         }
     }
 
-    p            = ini_section_get_string(cat, "usb_hub", "none");
-    usb_hub_type = usb_hub_get_from_internal_name(p);
+    p             = ini_section_get_string(cat, "usb_card", "none");
+    usb_card_type = usb_card_get_from_internal_name(p);
+    p             = ini_section_get_string(cat, "usb_hub", "none");
+    usb_hub_type  = usb_hub_get_from_internal_name(p);
 
 #if 0
 // TODO: Load
@@ -3869,6 +3871,11 @@ save_ports(void)
         else
             ini_section_set_string(cat, temp, char_get_device(lpt_ports[c].device)->internal_name);
     }
+
+    if (usb_card_type == 0)
+        ini_section_delete_var(cat, "usb_card");
+    else
+        ini_section_set_string(cat, "usb_card", usb_card_get_internal_name(usb_card_type));
 
     if (usb_hub_type == 0)
         ini_section_delete_var(cat, "usb_hub");

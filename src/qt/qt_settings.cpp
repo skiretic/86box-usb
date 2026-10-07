@@ -262,6 +262,16 @@ Settings::ensurePage(int index)
                 placePage(PAGE_PORTS, ports);
                 connect(machine, &SettingsMachine::currentMachineChanged, ports,
                         &SettingsPorts::onCurrentMachineChanged);
+                /* A USB card gives the machine USB: the pages that list USB
+                   devices are brought up to the card chosen. */
+                connect(ports, &SettingsPorts::usbBusChanged, this, [this](int id) {
+                    if (input != nullptr)
+                        input->onCurrentMachineChanged(id);
+                    if (sound != nullptr)
+                        sound->onCurrentMachineChanged(id);
+                    if (storageControllers != nullptr)
+                        storageControllers->onCurrentMachineChanged(id);
+                });
                 if (machineId != ::machine)
                     ports->onCurrentMachineChanged(machineId);
             }

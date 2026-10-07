@@ -24,7 +24,13 @@ public:
 public slots:
     void onCurrentMachineChanged(int machineId);
 
+signals:
+    /* The USB card choice changed which USB devices the machine can take. */
+    void usbBusChanged(int machineId);
+
 private slots:
+    void on_comboBoxUsbCard_currentIndexChanged(int index);
+
     void on_comboBoxLpt1_currentIndexChanged(int index);
     void on_pushButtonConfigureLpt1_clicked();
     void on_comboBoxLpt2_currentIndexChanged(int index);
@@ -58,6 +64,7 @@ private:
     int                machineId = 0;
 
     void updateLptPortTracking(int i);
+    void updateUsbHubList();
 
     int                lpt_device_cfg_changed[4] = { 0, 0, 0, 0 };
     int                com_device_cfg_changed[SERIAL_MAX_UI] = { 0 };

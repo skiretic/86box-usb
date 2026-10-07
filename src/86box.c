@@ -1829,7 +1829,9 @@ pc_reset_hard_init(void)
      * that will be a call to device_reset_all() later !
      */
 
-    /* A USB hub goes on before any other USB device attaches. */
+    /* A PCI USB card and then a USB hub go on before any other USB device
+       attaches. */
+    usb_card_reset();
     usb_hub_reset();
 
     /* Reset and reconfigure the Sound Card layer. */

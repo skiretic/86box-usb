@@ -47,6 +47,7 @@ add_executable(86Box
     mca.c
     usb.c
     usb_audio.c
+    usb_card.c
     usb_dev.c
     usb_hid.c
     usb_hub.c

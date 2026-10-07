@@ -48,6 +48,20 @@ extern const device_t *usb_hub_get_device(int hub);
 extern const char     *usb_hub_get_internal_name(int hub);
 extern int             usb_hub_get_from_internal_name(const char *s);
 extern void            usb_hub_reset(void);
+/* PCI USB host controller cards, listed on the Ports page; usb_card_type 0
+   is none. */
+extern const device_t usb_opti_82c861_device;
+extern int            usb_card_type;
+/* The settings dialog's card choice before it is saved, -1 outside it. */
+extern int            usb_card_pending;
+
+extern int             usb_card_get_ndev(void);
+extern const device_t *usb_card_get_device(int card);
+extern const char     *usb_card_get_internal_name(int card);
+extern int             usb_card_get_from_internal_name(const char *s);
+/* Whether the selected card gives machine mch a USB bus. */
+extern int             usb_card_has_bus(int mch);
+extern void            usb_card_reset(void);
 
 /* Functions. */
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);
@@ -73,6 +87,7 @@ extern void ohci_hardwire_bus_master(usb_t *dev);
 #define OHCI_CHIP_LST_0628H 0x01 /* HcLSThreshold resets to 0628h, not 0 */
 #define OHCI_CHIP_RWC       0x02 /* RemoteWakeupConnected is R/W, not hard 0 */
 #define OHCI_CHIP_NO_SMI    0x04 /* no SMI pin: OwnershipChange is tied to 0 */
+#define OHCI_CHIP_POTPGT_RW 0x08 /* POTPGT is a full R/W byte, not bits 25:24 */
 extern void ohci_set_chip_flags(usb_t *dev, uint32_t flags);
 /* The root hub has a connector for each of its ports (2 by default); the
    first ndp are implemented (NumberDownstreamPorts). A chipset strap may

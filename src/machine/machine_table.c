@@ -18229,8 +18229,8 @@ const machine_t machines[] = {
             .min_multi   = 1.5,
             .max_multi   = 3.0
         },
-        .bus_flags = MACHINE_PS2_PCI | MACHINE_BUS_USB,
-        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_USB, /* Machine has internal video: C&T F65548 (not yet implemented) */
+        .bus_flags = MACHINE_PS2_PCI, /* PIIX3 USB not brought out: no connector, no BIOS option. */
+        .flags     = MACHINE_IDE_DUAL | MACHINE_APM, /* Machine has internal video: C&T F65548 (not yet implemented) */
         .ram       = {
             .min  = 8192,
             .max  = 65536,

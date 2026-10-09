@@ -345,7 +345,10 @@ hub_control(usb_dev_t *udev, const uint8_t *setup, uint8_t *data)
             return 4;
 
         case 0xa000 | HUB_GET_DESCRIPTOR:
-            if ((wvalue != 0x2900) || (windex != 0))
+            /* USB 1.0 used descriptor type 0; USB 1.1 changed it to 29h
+               (Table 11-8, 11.16.2.4). BIOSes of the period, e.g. Intel's,
+               still send type 0. Accept either with descriptor index 0. */
+            if (((wvalue != 0x0000) && (wvalue != 0x2900)) || (windex != 0))
                 return USB_DATA_STALL;
             memcpy(data, hub_desc, sizeof(hub_desc));
             return sizeof(hub_desc);

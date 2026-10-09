@@ -558,12 +558,12 @@ piix_usb_update_irq(piix_t *dev)
             }
         }
     } else if (dev->acpi != NULL) {
-        /* LEGACY_USB_STS clears only with its child statuses, USBIRQS, the trap
-           statuses and A20PTS: masking USBSMIEN does not clear it (PIIX4
-           7.2.10 bit 1). */
+        /* LEGACY_USB_STS clears when no enabled legacy source is pending (PIIX4
+           7.2.10 bit 1). LEGSUP enable bits determine which child statuses
+           can cause an SMI# (6.1.12). */
         if (smi)
             dev->acpi->regs.glbsts |= 0x0002;
-        else if (!(fregs[0xc1] & 0x9f))
+        else if (!sources)
             dev->acpi->regs.glbsts &= ~0x0002;
         if (smi) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX4 legacy USB SMI event, GLBEN %04x GLBCTL %08x",

@@ -1214,8 +1214,12 @@ uhci_cmd_write(uhci_t *dev, uint16_t val)
     }
 
     if (val & UHCI_CMD_HCRESET) {
-        /* Completes at once, so the self-clearing bit already reads 0. */
+        /* Completes at once, so the self-clearing bit already reads 0. Reset
+           clears USBSTS (Table 7, HC Reset row) and leaves Run/Stop 0, so the
+           controller then sits stopped and reports HCHalted (Table 7, Run/Stop
+           = 0 row; s2.1.2 bit 5). Intel BIOSes poll bit 5 after HCRESET. */
         uhci_hc_reset(dev);
+        uhci_set_halted(dev, 1);
         return;
     }
 

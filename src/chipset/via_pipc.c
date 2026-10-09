@@ -1085,6 +1085,9 @@ pipc_read(int func, int addr, UNUSED(int len), void *priv)
     int     c;
     uint8_t pm_func = dev->usb[1] ? 4 : 3;
 
+    /* A function disabled in function 0 (48h, 85h) answers no config cycle and
+       reads FFh. Each branch is bounded by function number, so a disabled one
+       cannot fall through into the next branch's register bank. */
     if (func > dev->max_func)
         return ret;
     else if (func == 0) {                       /* PCI-ISA bridge */
@@ -1117,7 +1120,7 @@ pipc_read(int func, int addr, UNUSED(int len), void *priv)
             else
                 ret &= ~0x20;
         }
-    } else if ((func < pm_func) && !((func == 2) ? (dev->pci_isa_regs[0x48] & 0x04) : (dev->pci_isa_regs[0x85] & 0x10))) /* USB */
+    } else if ((func >= 2) && (func < pm_func) && !((func == 2) ? (dev->pci_isa_regs[0x48] & 0x04) : (dev->pci_isa_regs[0x85] & 0x10))) /* USB */
         ret = dev->usb_regs[func - 2][addr];
     else if (func == pm_func) { /* Power */
         ret = dev->power_regs[addr];
@@ -1133,7 +1136,7 @@ pipc_read(int func, int addr, UNUSED(int len), void *priv)
             else
                 ret |= 0x10;
         }
-    } else if ((func <= (pm_func + 2)) && !(dev->pci_isa_regs[0x85] & ((func == (pm_func + 1)) ? 0x04 : 0x08))) { /* AC97 / MC97 */
+    } else if ((func > pm_func) && (func <= (pm_func + 2)) && !(dev->pci_isa_regs[0x85] & ((func == (pm_func + 1)) ? 0x04 : 0x08))) { /* AC97 / MC97 */
         if (addr == 0x40) {
             if (dev->local >= VIA_PIPC_686A)
                 ret = ac97_via_read_status(dev->ac97);

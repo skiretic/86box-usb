@@ -60,6 +60,7 @@ typedef struct ali1543_t {
     uint8_t pmu_slot;
     uint8_t usb_dev_enable;
     uint8_t usb_irq_level; /* the M5237's INT output */
+    uint8_t usb_smi_level; /* the M5237's SMI output */
     uint8_t ide_dev_enable;
     uint8_t pmu_dev_enable;
     uint8_t type;
@@ -133,18 +134,24 @@ ali5237_irq(void *priv, int level)
         ali5237_drive_irq(dev, dev->usb_irq_level);
 }
 
-/* The OHCI's SMI output sets M7101 USB Bus SMI Status, 4Ah bit 5 (ALi-C
-   p133), which has no enable of its own; 77h bit 3 gates the SMI (p144). */
+/* USB Bus SMI Status, 4Ah bit 5 (ALi-C p133), follows the enabled M5237's
+   request because the BIOS never clears it. A rising request raises SMI
+   when 77h bit 3 (ALi-C p144) is set. */
 static void
 ali5237_smi(void *priv, int level)
 {
     ali1543_t *dev = (ali1543_t *) priv;
 
-    if (!level || !dev->usb_dev_enable)
+    dev->usb_smi_level = !!level;
+    level = dev->usb_smi_level && dev->usb_dev_enable;
+    if (level == !!(dev->pmu_conf[0x4a] & 0x20))
         return;
-    dev->pmu_conf[0x4a] |= 0x20;
-    if (dev->pmu_conf[0x77] & 0x08)
-        smi_raise();
+    dev->pmu_conf[0x4a] &= ~0x20;
+    if (level) {
+        dev->pmu_conf[0x4a] |= 0x20;
+        if (dev->pmu_conf[0x77] & 0x08)
+            smi_raise();
+    }
 }
 
 /* 53h bit 6 makes the M5237 invisible (ALi-C p64): no window, no bus
@@ -156,6 +163,7 @@ ali5237_set_enable(ali1543_t *dev, int enable)
         return;
 
     dev->usb_dev_enable = enable;
+    ali5237_smi(dev, dev->usb_smi_level);
     ohci_update_mem_mapping(dev->usb, dev->usb_conf[0x11], dev->usb_conf[0x12], dev->usb_conf[0x13],
                             enable && (dev->usb_conf[0x04] & 2));
     ohci_set_bus_master(dev->usb, enable && (dev->usb_conf[0x04] & 4));
@@ -1155,7 +1163,7 @@ ali7101_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->pmu_conf[addr] &= ~(val & 0x9f);
             break;
         case 0x4a:
-            dev->pmu_conf[addr] &= ~(val & 0x38);
+            dev->pmu_conf[addr] &= ~(val & 0x18);
             break;
 
         case 0x4c:
@@ -1264,13 +1272,19 @@ ali7101_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->pmu_conf[addr] = val & 0x7f;
             break;
 
-        case 0x77:
+        case 0x77: {
+            uint8_t old = dev->pmu_conf[addr];
+
             /* TODO: If bit 1 is clear, then status bit is set even if SMI is disabled. */
             dev->pmu_conf[addr] = val;
             ali1543_log("PMU77: %02X\n", val);
             nvr_smi_enable((dev->pmu_conf[0x77] & 0x08) && (dev->pmu_conf[0x40] & 0x08), dev->nvr);
             apm_set_do_smi(dev->acpi->apm, (dev->pmu_conf[0x77] & 0x08) && (dev->pmu_conf[0x41] & 0x10));
+            /* Opening the gate services a live USB request (ALi-C p144). */
+            if (!(old & 0x08) && (val & 0x08) && dev->usb_dev_enable && dev->usb_smi_level)
+                smi_raise();
             break;
+        }
 
         case 0x78:
             dev->pmu_conf[addr] = val;
@@ -1537,7 +1551,7 @@ ali7101_read(int func, int addr, UNUSED(int len), void *priv)
                         dev->pmu_conf[addr] &= 0x60;
                         break;
                     case 0x4a:
-                        dev->pmu_conf[addr] &= 0xc7;
+                        dev->pmu_conf[addr] &= 0xe7;
                         break;
 
                     case 0x4e:
@@ -1610,6 +1624,7 @@ ali1543_reset(void *priv)
 
     /* M7101 */
     memset(dev->pmu_conf, 0x00, sizeof(dev->pmu_conf));
+    ali5237_smi(dev, dev->usb_smi_level);
     dev->pmu_conf[0x00] = 0xb9;
     dev->pmu_conf[0x01] = 0x10;
     dev->pmu_conf[0x02] = 0x01;

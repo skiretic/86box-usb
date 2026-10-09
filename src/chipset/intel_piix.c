@@ -548,6 +548,10 @@ piix_usb_update_irq(piix_t *dev)
     sources = uhci_legsup_event(&fregs[0xc0], dev->usb_irq_level);
     smi     = (sources & ~dev->usb_smi_level) && !(fregs[0xc0] & 0x40);
     if (dev->type == 3) {
+        /* RLUSB drops when no enabled legacy source is pending. PIIX3 2.2.22
+           calls it software-cleared, but shipped AMI handlers never clear it
+           on the USB path and reopen CSMIGATE, which only works if RLUSB drops
+           with its sources. */
         if (smi) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX3 legacy USB SMI event, SMIEN %02x%02x SMICNTL %02x",
                       dev->regs[0][0xa3], dev->regs[0][0xa2], dev->regs[0][0xa0]);
@@ -556,7 +560,8 @@ piix_usb_update_irq(piix_t *dev)
                 if (dev->regs[0][0xa0] & 0x01)
                     smi_raise();
             }
-        }
+        } else if (!sources)
+            dev->regs[0][0xab] &= ~0x01;
     } else if (dev->acpi != NULL) {
         /* LEGACY_USB_STS clears when no enabled legacy source is pending (PIIX4
            7.2.10 bit 1). LEGSUP enable bits determine which child statuses

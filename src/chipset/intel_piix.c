@@ -1529,6 +1529,11 @@ piix_reset_hard(piix_t *dev)
     fregs[0x07] = 0x02;
     if (dev->type == 4)
         fregs[0x08] = dev->rev & 0x07;
+    else if (dev->type == 3)
+        /* Real 82371SB boards read ISA (fn0) revision 01 but IDE revision 00.
+           The Epox P55-VA's Award BIOS hides USB (fn0 6Ah bit 4) when fn0
+           reads revision 00. */
+        fregs[0x08] = 0x00;
     else
         fregs[0x08] = dev->rev;
     if (dev->type == 5)
@@ -1932,7 +1937,7 @@ const device_t piix3_device = {
     .name          = "Intel 82371SB (PIIX3)",
     .internal_name = "piix3",
     .flags         = DEVICE_PCI,
-    .local         = 0x70000403,
+    .local         = 0x70000413,
     .init          = piix_init,
     .close         = piix_close,
     .reset         = piix_reset,
@@ -1946,7 +1951,7 @@ const device_t piix3_ioapic_device = {
     .name          = "Intel 82371SB (PIIX3) (Boards with I/O APIC)",
     .internal_name = "piix3_ioapic",
     .flags         = DEVICE_PCI,
-    .local         = 0x70001403,
+    .local         = 0x70001413,
     .init          = piix_init,
     .close         = piix_close,
     .reset         = piix_reset,

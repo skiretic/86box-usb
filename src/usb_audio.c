@@ -243,6 +243,12 @@ usb_audio_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     uint16_t     windex  = setup[4] | (setup[5] << 8);
     uint16_t     wlength = setup[6] | (setup[7] << 8);
 
+    /* bRequest bit 7 is the Get bit and must match bmRequestType's direction
+       (Tables 5-1/5-2 p66-67): a Set sent device-to-host would run on stale
+       buffer bytes. Anything else is no request this device supports (5.2). */
+    if ((setup[0] ^ setup[1]) & 0x80)
+        return USB_DATA_STALL;
+
     /* Class requests to the AudioControl interface: only the Feature Unit
        has Controls (5.2.1: unknown entities STALL). */
     if (((setup[0] == 0x21) || (setup[0] == 0xa1)) && ((windex & 0xff) == AUD_IF_CONTROL)) {

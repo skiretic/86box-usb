@@ -324,6 +324,10 @@ struct ohci_t {
     uint32_t    fr_load;
     uint32_t    fn_msb;
     pc_timer_t  frame_timer;
+    /* The first 5 ms of USBSUSPEND, in which a resume event is held (p89). */
+    pc_timer_t  suspend_timer;
+    uint8_t     suspend_settling;
+    uint8_t     resume_held;
     /* List processing: bit times left in the frame being run, the next
        nonperiodic list and the control EDs served since the last bulk ED
        (carried across frames), and whether a list still waits for its first
@@ -1807,17 +1811,50 @@ ohci_rh_global_resume(ohci_t *dev)
 }
 
 /* A resume event in USBSUSPEND: the HC moves itself to USBRESUME and sets
-   ResumeDetected (p120). */
+   ResumeDetected (p120), but not in the first 5 ms of USBSUSPEND; an event
+   then waits for the 5 ms to pass (p89). */
 static void
 ohci_resume_detected(ohci_t *dev)
 {
     if ((dev->control & OHCI_CTL_HCFS) != OHCI_HCFS_SUSPEND)
         return;
+    if (dev->suspend_settling) {
+        if (!dev->resume_held)
+            usb_trace(USB_LOG_IRQ, -1, "OHCI resume event held: under 5 ms in USBSUSPEND");
+        dev->resume_held = 1;
+        return;
+    }
 
     usb_trace(USB_LOG_IRQ, -1, "OHCI resume detected: USBSUSPEND -> USBRESUME, ResumeDetected set");
     dev->control = (dev->control & ~OHCI_CTL_HCFS) | OHCI_HCFS_RESUME;
     dev->intsts |= OHCI_INT_RD;
     ohci_rh_global_resume(dev);
+}
+
+static void
+ohci_suspend_settled(void *priv)
+{
+    ohci_t *dev = (ohci_t *) priv;
+
+    dev->suspend_settling = 0;
+    if (dev->resume_held) {
+        dev->resume_held = 0;
+        ohci_resume_detected(dev);
+        ohci_update_irq(dev);
+    }
+}
+
+/* Entering USBSUSPEND starts the 5 ms; leaving it drops a held event, which
+   only USBSUSPEND turns into USBRESUME. */
+static void
+ohci_suspend_settle(ohci_t *dev, int entered)
+{
+    dev->resume_held      = 0;
+    dev->suspend_settling = entered;
+    if (entered)
+        timer_on_auto(&dev->suspend_timer, 5000.0);
+    else
+        timer_stop(&dev->suspend_timer);
 }
 
 /* With DeviceRemovable set, CSC comes only from a root hub reset (p145);
@@ -2856,6 +2893,7 @@ ohci_soft_reset(ohci_t *dev)
     dev->fn_msb         = 0x0000;
     dev->fr_load        = 0x0000;
     dev->control        = (dev->control & (OHCI_CTL_IR | OHCI_CTL_RWC)) | OHCI_HCFS_SUSPEND;
+    ohci_suspend_settle(dev, 1);
     dev->cmdsts         = 0x00000000;
     dev->intsts         = 0x00000000;
     dev->inten          = 0x00000000;
@@ -2879,6 +2917,7 @@ ohci_hard_reset(ohci_t *dev)
 {
     ohci_soft_reset(dev);
     dev->control   = OHCI_HCFS_RESET;
+    ohci_suspend_settle(dev, 0);
     dev->rh_desc_a = 0x01000000 | dev->ndp;
     dev->rh_desc_b = 0x00000000;
     ohci_root_hub_reset(dev);
@@ -2916,6 +2955,7 @@ ohci_control_write(ohci_t *dev, uint32_t val)
             ohci_frame_stop(dev);
         else if ((dev->control & OHCI_CTL_HCFS) == OHCI_HCFS_OPERATIONAL)
             ohci_frame_start(dev);
+        ohci_suspend_settle(dev, (dev->control & OHCI_CTL_HCFS) == OHCI_HCFS_SUSPEND);
         switch (dev->control & OHCI_CTL_HCFS) {
             case OHCI_HCFS_RESET:
                 /* The root hub is held in reset while in USBRESET (p57). */
@@ -3394,6 +3434,7 @@ usb_close(void *priv)
         timer_disable(&dev->ohci->port[i].timer);
     }
     timer_disable(&dev->ohci->frame_timer);
+    timer_disable(&dev->ohci->suspend_timer);
 
     timer_disable(&dev->uhci->frame_timer);
     timer_disable(&dev->uhci->detect_timer);
@@ -3424,6 +3465,7 @@ usb_init(UNUSED(const device_t *info))
     dev->ohci->ndp   = 2;
     dev->ohci->ports = 2;
     timer_add(&dev->ohci->frame_timer, ohci_frame_boundary, dev->ohci, 0);
+    timer_add(&dev->ohci->suspend_timer, ohci_suspend_settled, dev->ohci, 0);
     for (int i = 0; i < OHCI_MAX_PORTS; i++) {
         dev->ohci->port[i].num = i + 1;
         dev->ohci->port[i].hc  = dev->ohci;

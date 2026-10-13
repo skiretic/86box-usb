@@ -2876,9 +2876,12 @@ ohci_control_write(ohci_t *dev, uint32_t val)
     uint32_t old  = dev->control;
     uint32_t mask = OHCI_CTL_CBSR | OHCI_CTL_PLE | OHCI_CTL_IE | OHCI_CTL_CLE | OHCI_CTL_BLE | OHCI_CTL_HCFS | OHCI_CTL_IR | OHCI_CTL_RWE;
 
-    /* RemoteWakeupConnected is hard 0 on ALi, SiS and SMSC. */
+    /* RemoteWakeupConnected is hard 0 on ALi, SiS and SMSC;
+       RemoteWakeupEnable is read-only on SiS (5595 p174). */
     if (dev->chip_flags & OHCI_CHIP_RWC)
         mask |= OHCI_CTL_RWC;
+    if (dev->chip_flags & OHCI_CHIP_RWE_RO)
+        mask &= ~OHCI_CTL_RWE;
     dev->control = val & mask;
 
     /* OCR clears after the changeover (p127), the InterruptRouting change

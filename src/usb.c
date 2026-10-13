@@ -325,12 +325,12 @@ struct ohci_t {
     uint32_t    fn_msb;
     pc_timer_t  frame_timer;
     /* List processing: bit times left in the frame being run, the next
-       nonperiodic list and the control EDs left before a bulk ED (carried
-       across frames), and whether a list still waits for its first
+       nonperiodic list and the control EDs served since the last bulk ED
+       (carried across frames), and whether a list still waits for its first
        service since entering USBOPERATIONAL. */
     double      bits_left;
     int         np_list;
-    int         ratio_left;
+    int         ctrl_served;
     uint8_t     np_first[2];
     uint8_t     so_pending; /* the periodic list overran: SO at the next HCCA update */
     uint8_t     di_count;   /* Done Queue Interrupt Counter, 7 = no writeback due */
@@ -2467,27 +2467,35 @@ ohci_service_list(ohci_t *dev, int list)
 
 /* The nonperiodic lists (p107-108): CBSR + 1 control EDs that started a
    transaction, then one bulk ED visit; the count carries across frames and
-   an empty list yields to the other. Runs until the time or the work is
-   gone. */
+   an empty list yields to the other. The count is checked against the
+   current CBSR before each service (p110), so a CBSR change applies at
+   once. Runs until the time or the work is gone. */
 static void
 ohci_run_nonperiodic(ohci_t *dev, double stop)
 {
     int idle = 0;
 
     while ((dev->bits_left > stop) && (idle < 2)) {
-        int list = dev->np_list;
-        int r    = ohci_service_list(dev, list);
+        int list;
+        int r;
+
+        if ((dev->np_list == OHCI_LIST_CONTROL) && (dev->ctrl_served > (int) (dev->control & OHCI_CTL_CBSR)))
+            dev->np_list = OHCI_LIST_BULK;
+        list = dev->np_list;
+        r    = ohci_service_list(dev, list);
 
         if (r == OHCI_ED_NO_TIME)
             break;
         idle = (r == OHCI_ED_END) ? (idle + 1) : 0;
 
         if (list == OHCI_LIST_CONTROL) {
-            if ((r == OHCI_ED_END) || ((r == OHCI_ED_SENT) && (--dev->ratio_left <= 0)))
+            if (r == OHCI_ED_SENT)
+                dev->ctrl_served++;
+            else if (r == OHCI_ED_END)
                 dev->np_list = OHCI_LIST_BULK;
         } else {
-            dev->np_list    = OHCI_LIST_CONTROL;
-            dev->ratio_left = (dev->control & OHCI_CTL_CBSR) + 1;
+            dev->np_list     = OHCI_LIST_CONTROL;
+            dev->ctrl_served = 0;
         }
     }
 }
@@ -2742,7 +2750,7 @@ ohci_frame_start(ohci_t *dev)
     /* Nonperiodic service starts with the full control count (p108), each
        list from its head (p111). */
     dev->np_list     = OHCI_LIST_CONTROL;
-    dev->ratio_left  = (dev->control & OHCI_CTL_CBSR) + 1;
+    dev->ctrl_served = 0;
     dev->np_first[0] = dev->np_first[1] = 1;
     dev->di_count    = 7; /* p118 */
     timer_on_auto(&dev->frame_timer, ohci_frame_us(dev->fr_load));

@@ -162,9 +162,12 @@ hid_mouse_report(hid_mouse_t *dev, uint8_t *buf)
     int ox;
     int oy;
 
-    /* HID Y and the host's Y both grow downward; the wheel grows away from the user. */
+    /* HID Y and the host's Y both grow downward; the wheel grows away from the user.
+       In tablet mode the host wheel belongs to the tablet. */
     mouse_subtract_coords(&dx, &dy, &ox, &oy, -127, 127, 0, 0);
-    mouse_subtract_z(&dz, -127, 127, 0);
+    dz = 0;
+    if (mouse_input_mode == 0)
+        mouse_subtract_z(&dz, -127, 127, 0);
     dev->buttons = mouse_get_buttons_ex() & 0x07;
 
     buf[0] = dev->buttons;
@@ -877,11 +880,22 @@ static const uint8_t hid_tablet_report_desc[] = {
     0x75, 0x10,       /*     Report Size (16) */
     0x95, 0x02,       /*     Report Count (2) */
     0x81, 0x02,       /*     Input (Data, Variable, Absolute) */
+    /* A relative wheel, as on the mouse (HUT p29). Physical is global and
+       would carry X/Y's 0..32767 into it: 0/0 means "same as logical"
+       (HID 1.11 p48). */
+    0x09, 0x38,       /*     Usage (Wheel) */
+    0x15, 0x81,       /*     Logical Minimum (-127) */
+    0x25, 0x7f,       /*     Logical Maximum (127) */
+    0x35, 0x00,       /*     Physical Minimum (0) */
+    0x45, 0x00,       /*     Physical Maximum (0) */
+    0x75, 0x08,       /*     Report Size (8) */
+    0x95, 0x01,       /*     Report Count (1) */
+    0x81, 0x06,       /*     Input (Data, Variable, Relative) */
     0xc0,             /*   End Collection */
     0xc0              /* End Collection */
 };
 
-#define HID_TABLET_REPORT 5
+#define HID_TABLET_REPORT 6
 
 static const uint8_t hid_tablet_dev_desc[18] = {
     18, 0x01,   /* bLength, DEVICE */
@@ -961,6 +975,7 @@ hid_tablet_sample(hid_tablet_t *dev, int take)
     uint16_t         vx;
     uint16_t         vy;
     int              b;
+    int              dz;
 
     if (mouse_input_mode < 1)
         return;
@@ -983,8 +998,12 @@ hid_tablet_sample(hid_tablet_t *dev, int take)
     vx = hid_tablet_axis(x, m->mon_xsize);
     vy = hid_tablet_axis(y, m->mon_ysize);
     b  = tablet_get_buttons_ex();
-    if (take)
+    dz = 0;
+    if (take) {
         b |= tablet_take_pressed();
+        /* The wheel grows away from the user, as on the mouse. */
+        mouse_subtract_z(&dz, -127, 127, 0);
+    }
 
     /* Host bits 0-2 are left, right, middle: Buttons 1-3 (HUT p69). */
     dev->cur[0] = b & 0x07;
@@ -992,6 +1011,7 @@ hid_tablet_sample(hid_tablet_t *dev, int take)
     dev->cur[2] = vx >> 8;
     dev->cur[3] = vy & 0xff;
     dev->cur[4] = vy >> 8;
+    dev->cur[5] = (uint8_t) dz;
 }
 
 static int
@@ -1064,6 +1084,10 @@ hid_tablet_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxl
         memcpy(dev->sent, dev->cur, HID_TABLET_REPORT);
         dev->sent_valid = 1;
         memcpy(buf, dev->cur, HID_TABLET_REPORT);
+        /* The wheel is relative: a delta goes out once, an idle repeat
+           carries 0, and a nonzero delta always differs from sent. */
+        dev->cur[5]  = 0;
+        dev->sent[5] = 0;
         hid_idle_reported(&dev->idle);
         return HID_TABLET_REPORT;
     }

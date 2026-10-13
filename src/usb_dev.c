@@ -524,10 +524,14 @@ usb_dev_ctl_out(usb_dev_t *dev, const usb_packet_t *p)
 {
     usb_ep_t *ep = &dev->ep_out[0];
 
+    /* A retransmission is ACKed and discarded (8.6.4, Figure 8-18), also
+       that of a Status OUT whose handshake was lost after the transfer
+       ended here. */
+    if ((dev->ctl_stage != CTL_STALL) && (p->toggle != ep->toggle))
+        return USB_RET_ACK;
+
     switch (dev->ctl_stage) {
         case CTL_DATA_OUT:
-            if (p->toggle != ep->toggle)
-                return USB_RET_ACK; /* retransmission: ACK and discard (8.6.4) */
             if ((dev->ctl_pos + p->len) > dev->ctl_len) {
                 dev->ctl_stage = CTL_STALL;
                 return USB_RET_STALL;
@@ -539,8 +543,6 @@ usb_dev_ctl_out(usb_dev_t *dev, const usb_packet_t *p)
 
         case CTL_DATA_IN:
             /* Status stage of a control read; any length is accepted (8.5.2). */
-            if (p->toggle != ep->toggle)
-                return USB_RET_ACK;
             ep->toggle ^= 1;
             dev->ctl_stage = CTL_IDLE;
             usb_dev_pcap_ctl_close(dev, 0);

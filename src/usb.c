@@ -317,6 +317,7 @@ struct ohci_t {
     int         bus; /* pcap bus number */
     uint8_t     bus_master; /* PCI COMMAND Bus Master Enable from the chipset */
     uint8_t     bus_master_hardwired; /* ... or 1 through every reset */
+    uint8_t     mem_access;           /* PCI COMMAND Memory Access, as the window */
     uint32_t    chip_flags;           /* OHCI_CHIP_* */
     /* The frame in progress: FrameRemaining counts down from fr_load, and
        FrameNumber bit 15 as of the last HCCA update. */
@@ -1709,11 +1710,12 @@ usb_detach(usb_dev_t *udev)
 
 /* The INT and SMI outputs (p119, p121): an enabled status bit with MIE set
    requests an interrupt, on INT with InterruptRouting clear and on SMI with
-   it set; OwnershipChange goes to SMI only. */
+   it set; OwnershipChange goes to SMI only. With Memory Access off both are
+   held inactive, and a condition still pending comes back with it (p140). */
 static void
 ohci_update_irq(ohci_t *dev)
 {
-    uint32_t pending = (dev->inten & OHCI_INT_MIE) ? (dev->intsts & dev->inten & OHCI_INT_ALL) : 0;
+    uint32_t pending = (dev->mem_access && (dev->inten & OHCI_INT_MIE)) ? (dev->intsts & dev->inten & OHCI_INT_ALL) : 0;
     uint8_t  req     = !!(pending & ~OHCI_INT_OC);
     uint8_t  ir      = !!(dev->control & OHCI_CTL_IR);
     uint8_t  int_lvl = req && !ir;
@@ -3250,6 +3252,9 @@ ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3,
         mem_mapping_set_addr(&dev->ohci_mmio_mapping, dev->ohci_mem_base, 0x1000);
 
     usb_trace(USB_LOG_REG, -1, "OHCI MMIO %08x %s", dev->ohci_mem_base, dev->ohci_enable ? "enabled" : "disabled");
+
+    dev->ohci->mem_access = !!enable;
+    ohci_update_irq(dev->ohci);
 }
 
 void
@@ -3343,6 +3348,7 @@ usb_reset(void *priv)
 
     ohci_hard_reset(dev->ohci);
     dev->ohci->bus_master = dev->ohci->bus_master_hardwired;
+    dev->ohci->mem_access = 0;
     ohci_update_irq(dev->ohci);
 
     if (dev->uhci_enable && (dev->uhci_io_base != 0x0000))

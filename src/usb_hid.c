@@ -211,10 +211,14 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0xa1) {
         switch (setup[1]) {
             case HID_GET_REPORT:
-                if ((wvalue >> 8) != 0x01)
+                /* The one Input report, no report IDs (HID 7.2.1). */
+                if (wvalue != 0x0100)
                     return USB_DATA_STALL;
                 return hid_mouse_report(dev, data);
             case HID_GET_IDLE:
+                /* No report IDs: a nonzero ID names no report (HID 7.2.3). */
+                if ((wvalue & 0xff) != 0)
+                    return USB_DATA_STALL;
                 data[0] = dev->idle.rate;
                 return 1;
             case HID_GET_PROTOCOL:
@@ -228,6 +232,9 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0x21) {
         switch (setup[1]) {
             case HID_SET_IDLE:
+                /* No report IDs: a nonzero ID names no report (HID 7.2.4). */
+                if ((wvalue & 0xff) != 0)
+                    return USB_DATA_STALL;
                 hid_idle_set(&dev->idle, wvalue >> 8);
                 return 0;
             case HID_SET_PROTOCOL:
@@ -673,6 +680,9 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
                         return USB_DATA_STALL;
                 }
             case HID_GET_IDLE:
+                /* No report IDs: a nonzero ID names no report (HID 7.2.3). */
+                if ((wvalue & 0xff) != 0)
+                    return USB_DATA_STALL;
                 data[0] = dev->idle.rate;
                 return 1;
             case HID_GET_PROTOCOL:
@@ -693,6 +703,9 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
                 keyboard_update_states(!!(dev->leds & 0x02), !!(dev->leds & 0x01), !!(dev->leds & 0x04), !!(dev->leds & 0x10));
                 return 0;
             case HID_SET_IDLE:
+                /* No report IDs: a nonzero ID names no report (HID 7.2.4). */
+                if ((wvalue & 0xff) != 0)
+                    return USB_DATA_STALL;
                 hid_idle_set(&dev->idle, wvalue >> 8);
                 return 0;
             case HID_SET_PROTOCOL:
@@ -1058,6 +1071,9 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
                 memcpy(data, dev->cur, HID_TABLET_REPORT);
                 return HID_TABLET_REPORT;
             case HID_GET_IDLE:
+                /* No report IDs: a nonzero ID names no report (HID 7.2.3). */
+                if ((wvalue & 0xff) != 0)
+                    return USB_DATA_STALL;
                 data[0] = dev->idle.rate;
                 return 1;
             default:
@@ -1068,6 +1084,9 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0x21) {
         switch (setup[1]) {
             case HID_SET_IDLE:
+                /* No report IDs: a nonzero ID names no report (HID 7.2.4). */
+                if ((wvalue & 0xff) != 0)
+                    return USB_DATA_STALL;
                 hid_idle_set(&dev->idle, wvalue >> 8);
                 return 0;
             default:

@@ -970,7 +970,7 @@ stpc_init(const device_t *info)
         ohci_hardwire_bus_master(dev->usb);
         /* The PM defers the operational registers to the OHCI spec (22.2);
            no USB SMI source (25.2.14-16). */
-        ohci_set_chip_flags(dev->usb, OHCI_CHIP_LST_0628H | OHCI_CHIP_RWC | OHCI_CHIP_NO_SMI);
+        ohci_set_chip_flags(dev->usb, OHCI_CHIP_LST_0628H | OHCI_CHIP_RWC | OHCI_CHIP_NO_SMI | OHCI_CHIP_UE_RW);
     }
 
     dev->bm[0] = device_add_inst(&sff8038i_device, 1);

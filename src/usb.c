@@ -3002,6 +3002,14 @@ ohci_merge(uint32_t cur, uint32_t val, uint32_t lanes)
     return (cur & ~lanes) | (val & lanes);
 }
 
+static uint32_t
+ohci_inten_mask(const ohci_t *dev)
+{
+    uint32_t mask = OHCI_INT_ALL | OHCI_INT_MIE;
+
+    return (dev->chip_flags & OHCI_CHIP_UE_RW) ? mask : (mask & ~OHCI_INT_UE);
+}
+
 /* lanes selects the bytes the guest wrote (PCI byte enables): R/W bits in
    them merge, and unwritten bytes write 0 to the write-1 command bits. */
 static void
@@ -3046,13 +3054,14 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
             }
             break;
 
-        /* UnrecoverableError is not implemented, its enable ignores writes
-           (ALi-C p180, SMSC p106). */
+        /* UnrecoverableError is not implemented; its enable ignores writes
+           on ALi and SMSC (ALi-C p180, SMSC p106) but is R/W on SiS and
+           STPC (SiS95 p180, p575). */
         case OHCI_HCINTERRUPTENABLE:
-            dev->inten |= cmd & ((OHCI_INT_ALL | OHCI_INT_MIE) & ~OHCI_INT_UE);
+            dev->inten |= cmd & ohci_inten_mask(dev);
             break;
         case OHCI_HCINTERRUPTDISABLE:
-            dev->inten &= ~(cmd & ((OHCI_INT_ALL | OHCI_INT_MIE) & ~OHCI_INT_UE));
+            dev->inten &= ~(cmd & ohci_inten_mask(dev));
             break;
 
         case OHCI_HCHCCA:

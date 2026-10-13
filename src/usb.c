@@ -2196,7 +2196,9 @@ ohci_find_device(const ohci_t *dev, int addr, int low_speed)
     return NULL;
 }
 
-/* Bytes left in a General TD's buffer: the 13-bit A - B + 1 (p115). */
+/* Bytes left in a General TD's buffer: A - B + 1 with 13-bit A and B
+   (p115). A buffer holds 0 to 8192 bytes (p33), so the result needs 14
+   bits. */
 static int
 ohci_td_remaining(uint32_t cbp, uint32_t be)
 {
@@ -2207,7 +2209,7 @@ ohci_td_remaining(uint32_t cbp, uint32_t be)
     if ((cbp ^ be) & 0xfffff000)
         a |= 0x1000;
 
-    return (a - (cbp & 0xfff) + 1) & 0x1fff;
+    return (a - (cbp & 0xfff) + 1) & 0x3fff;
 }
 
 /* n bytes at CBP; past the end of CBP's 4 KB page they continue in BE's

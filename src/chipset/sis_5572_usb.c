@@ -345,7 +345,7 @@ sis_5572_usb_init(UNUSED(const device_t *info))
 
     /* USB */
     dev->usb = device_add(&usb_device);
-    ohci_set_chip_flags(dev->usb, OHCI_CHIP_RWE_RO | OHCI_CHIP_UE_RW);
+    ohci_set_chip_flags(dev->usb, OHCI_CHIP_RWE_RO | OHCI_CHIP_UE_RW | OHCI_CHIP_POTPGT_RW);
     ohci_set_irq_handler(dev->usb, sis_5572_usb_irq, dev);
     ohci_set_smi_handler(dev->usb, sis_5572_usb_smi, dev);
     dev->sis->usb_priv = dev;

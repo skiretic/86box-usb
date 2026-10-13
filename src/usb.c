@@ -3103,8 +3103,9 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
 
         case OHCI_HCRHDESCRIPTORA:
             /* PSM, NPS, OCPM, NOCP; POTPGT bits 25:24 only (ALi-C p185,
-               SMSC p111), or the whole byte (OPTi 82C861 PDF p35). A
-               NoPowerSwitching change powers ports on or off. */
+               SMSC p111), or the whole byte (OPTi 82C861 PDF p35, SiS95
+               p187, STPC per the spec p125). A NoPowerSwitching change
+               powers ports on or off. */
             ports = 0;
             for (int i = 0; i < dev->ndp; i++)
                 ports |= ohci_port_powered(&dev->port[i]) << i;

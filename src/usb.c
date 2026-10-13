@@ -2456,20 +2456,21 @@ ohci_service_list(ohci_t *dev, int list)
         return OHCI_ED_NONE;
     }
 
-    /* A TD found marks the list filled (p50, p112). */
+    /* A TD found marks the list filled (p50, p112). A packet that does not
+       fit ends only this ED's service; the next ED may still fit (p96, p100). */
     dev->cmdsts |= filled;
-    r = ohci_service_gtd(dev, ed_addr, ed);
-    if (r != OHCI_ED_NO_TIME)
-        *cur = ed[3] & 0xfffffff0;
+    r    = ohci_service_gtd(dev, ed_addr, ed);
+    *cur = ed[3] & 0xfffffff0;
 
     return r;
 }
 
-/* The nonperiodic lists (p107-108): CBSR + 1 control EDs that started a
-   transaction, then one bulk ED visit; the count carries across frames and
-   an empty list yields to the other. The count is checked against the
-   current CBSR before each service (p110), so a CBSR change applies at
-   once. Runs until the time or the work is gone. */
+/* The nonperiodic lists (p107-108): CBSR + 1 nonempty control EDs served
+   (a transaction, or a packet that did not fit), then one bulk ED visit;
+   the count carries across frames and an empty list yields to the other.
+   The count is checked against the current CBSR before each service
+   (p110), so a CBSR change applies at once. Runs until the time or the
+   work is gone. */
 static void
 ohci_run_nonperiodic(ohci_t *dev, double stop)
 {
@@ -2484,12 +2485,10 @@ ohci_run_nonperiodic(ohci_t *dev, double stop)
         list = dev->np_list;
         r    = ohci_service_list(dev, list);
 
-        if (r == OHCI_ED_NO_TIME)
-            break;
         idle = (r == OHCI_ED_END) ? (idle + 1) : 0;
 
         if (list == OHCI_LIST_CONTROL) {
-            if (r == OHCI_ED_SENT)
+            if ((r == OHCI_ED_SENT) || (r == OHCI_ED_NO_TIME))
                 dev->ctrl_served++;
             else if (r == OHCI_ED_END)
                 dev->np_list = OHCI_LIST_BULK;
@@ -2649,6 +2648,7 @@ ohci_run_periodic(ohci_t *dev)
 {
     uint32_t ed_addr;
     uint32_t ed[4];
+    uint32_t so_ed = 0;
     int      r;
 
     if (!(dev->control & OHCI_CTL_PLE))
@@ -2662,6 +2662,8 @@ ohci_run_periodic(ohci_t *dev)
     while (ed_addr != 0) {
         if (dev->bits_left < 1.0) {
             dev->so_pending = 1;
+            if (so_ed == 0)
+                so_ed = ed_addr;
             break;
         }
 
@@ -2673,10 +2675,12 @@ ohci_run_periodic(ohci_t *dev)
             break;
 
         if (!(ed[0] & OHCI_ED_K) && !(ed[2] & OHCI_ED_H) && ((ed[1] & 0xfffffff0) != (ed[2] & 0xfffffff0))) {
+            /* A packet that does not fit is an overrun, but only this ED's
+               service ends; later EDs may still fit (p96, p100). */
             r = (ed[0] & OHCI_ED_F) ? ohci_service_itd(dev, ed_addr, ed) : ohci_service_gtd(dev, ed_addr, ed);
-            if (r == OHCI_ED_NO_TIME) {
+            if ((r == OHCI_ED_NO_TIME) && (so_ed == 0)) {
                 dev->so_pending = 1;
-                break;
+                so_ed           = ed_addr;
             }
         }
 
@@ -2684,8 +2688,8 @@ ohci_run_periodic(ohci_t *dev)
         dev->period_cur = ed_addr;
     }
 
-    if (dev->so_pending)
-        usb_trace(USB_LOG_SCHED, dev->fm_number, "periodic list overran the frame at ED %08x", ed_addr);
+    if (so_ed != 0)
+        usb_trace(USB_LOG_SCHED, dev->fm_number, "periodic list overran the frame at ED %08x", so_ed);
 }
 
 /* The frame's schedule, run at its boundary against its bit time: the

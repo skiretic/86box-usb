@@ -92,6 +92,7 @@ extern void ohci_hardwire_bus_master(usb_t *dev);
 #define OHCI_CHIP_POTPGT_RW 0x08 /* POTPGT is a full R/W byte, not bits 25:24 */
 #define OHCI_CHIP_RWE_RO    0x10 /* RemoteWakeupEnable is read-only 0 */
 #define OHCI_CHIP_UE_RW     0x20 /* the UnrecoverableError enable is R/W */
+#define OHCI_CHIP_PTRS_RO   0x40 /* HcPeriodCurrentED, HcDoneHead ignore writes */
 extern void ohci_set_chip_flags(usb_t *dev, uint32_t flags);
 /* The root hub has a connector for each of its ports (2 by default); the
    first ndp are implemented (NumberDownstreamPorts). A chipset strap may

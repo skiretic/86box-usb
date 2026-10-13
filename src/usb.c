@@ -3067,9 +3067,12 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
         case OHCI_HCHCCA:
             dev->hcca = ohci_merge(dev->hcca, val, lanes) & 0xffffff00;
             break;
-        /* The current and done pointers are R/W on ALi, SiS and SMSC. */
+        /* The current and done pointers are R/W on ALi, SiS, SMSC and OPTi;
+           the spec's HCD-read-only HcPeriodCurrentED and HcDoneHead (p117,
+           p120) hold on STPC, whose PM defers to it (p575). */
         case OHCI_HCPERIODCURRENTED:
-            dev->period_cur = ohci_merge(dev->period_cur, val, lanes) & 0xfffffff0;
+            if (!(dev->chip_flags & OHCI_CHIP_PTRS_RO))
+                dev->period_cur = ohci_merge(dev->period_cur, val, lanes) & 0xfffffff0;
             break;
         case OHCI_HCCONTROLHEADED:
             dev->ctrl_head = ohci_merge(dev->ctrl_head, val, lanes) & 0xfffffff0;
@@ -3084,7 +3087,8 @@ ohci_reg_write(ohci_t *dev, uint32_t off, uint32_t val, uint32_t lanes)
             dev->bulk_cur = ohci_merge(dev->bulk_cur, val, lanes) & 0xfffffff0;
             break;
         case OHCI_HCDONEHEAD:
-            dev->done_head = ohci_merge(dev->done_head, val, lanes) & 0xfffffff0;
+            if (!(dev->chip_flags & OHCI_CHIP_PTRS_RO))
+                dev->done_head = ohci_merge(dev->done_head, val, lanes) & 0xfffffff0;
             break;
 
         case OHCI_HCFMINTERVAL:

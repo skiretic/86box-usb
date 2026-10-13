@@ -244,7 +244,7 @@ usb_dev_endpoint(usb_dev_t *dev, int windex)
 }
 
 static int
-usb_dev_string(const usb_dev_t *dev, int index, uint8_t *buf)
+usb_dev_string(const usb_dev_t *dev, int index, uint16_t langid, uint8_t *buf)
 {
     const char *s;
     int         len;
@@ -258,7 +258,9 @@ usb_dev_string(const usb_dev_t *dev, int index, uint8_t *buf)
         return 4;
     }
 
-    if (index > dev->n_strings)
+    /* The strings exist in US English only; wIndex picks the language
+       (9.6.5), so another LANGID names no string (9.4.3). */
+    if ((index > dev->n_strings) || (langid != 0x0409))
         return USB_DATA_STALL;
 
     s   = dev->strings[index - 1];
@@ -349,6 +351,10 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
                 break;
             switch (wvalue >> 8) {
                 case 0x01:
+                    /* One device descriptor: any other index does not
+                       exist, a Request Error (9.4.3). */
+                    if ((wvalue & 0xff) != 0)
+                        return USB_DATA_STALL;
                     memcpy(buf, dev->dev_desc, 18);
                     return 18;
                 case 0x02:
@@ -357,7 +363,7 @@ usb_dev_standard(usb_dev_t *dev, const uint8_t *setup, uint8_t *buf)
                     memcpy(buf, dev->cfg_desc, dev->cfg_len);
                     return dev->cfg_len;
                 case 0x03:
-                    return usb_dev_string(dev, wvalue & 0xff, buf);
+                    return usb_dev_string(dev, wvalue & 0xff, windex, buf);
                 default:
                     return USB_DATA_STALL;
             }

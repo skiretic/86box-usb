@@ -191,8 +191,11 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (windex != 0)
         return USB_DATA_STALL;
 
-    /* Class descriptors from the interface (HID 7.1.1). */
+    /* Class descriptors from the interface (HID 7.1.1), index 0 only: one
+       HID and one report descriptor. */
     if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
+        if ((wvalue & 0xff) != 0)
+            return USB_DATA_STALL;
         switch (wvalue >> 8) {
             case 0x21:
                 memcpy(data, &hid_mouse_cfg_desc[18], 9);
@@ -636,8 +639,11 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
     if (windex != 0)
         return USB_DATA_STALL;
 
-    /* Class descriptors from the interface (HID 7.1.1). */
+    /* Class descriptors from the interface (HID 7.1.1), index 0 only: one
+       HID and one report descriptor. */
     if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
+        if ((wvalue & 0xff) != 0)
+            return USB_DATA_STALL;
         switch (wvalue >> 8) {
             case 0x21:
                 memcpy(data, &hid_kbd_cfg_desc[18], 9);
@@ -1024,8 +1030,11 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (windex != 0)
         return USB_DATA_STALL;
 
-    /* Class descriptors from the interface (HID 7.1.1). */
+    /* Class descriptors from the interface (HID 7.1.1), index 0 only: one
+       HID and one report descriptor. */
     if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
+        if ((wvalue & 0xff) != 0)
+            return USB_DATA_STALL;
         switch (wvalue >> 8) {
             case 0x21:
                 memcpy(data, &hid_tablet_cfg_desc[18], 9);

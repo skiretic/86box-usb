@@ -2695,6 +2695,10 @@ ohci_run_frame(ohci_t *dev)
        and runs no lists. */
     dev->bits_left = (double) dev->fr_load + 1.0 - OHCI_SOF_BITS;
     ohci_run_nonperiodic(dev, (double) dev->periodic_start + 1.0);
+    /* Idle nonperiodic lists end early, but the periodic list still waits
+       for FrameRemaining to reach PeriodicStart (p122). */
+    if (dev->bits_left > ((double) dev->periodic_start + 1.0))
+        dev->bits_left = (double) dev->periodic_start + 1.0;
     ohci_run_periodic(dev);
     ohci_run_nonperiodic(dev, 0.0);
 }

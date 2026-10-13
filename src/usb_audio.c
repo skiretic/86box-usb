@@ -64,6 +64,16 @@
 #define AUD_START_MS 30
 #define AUD_MAX_MS   200
 
+/* Adaptive sink (USB 1.1 5.10.4.1.3 p63): the step follows the received
+   rate, read as the queue fill drifting from where playback started. A
+   fill off by the whole target would move the step 5%; the step moves at
+   most 1%, past UHCI's SOFMOD range (12000 +/- 64 bit times) and the
+   +/-1000 ppm Audio Formats 2.2.5 asks for. The fill is smoothed over
+   about 10 mixer calls. */
+#define AUD_ADAPT_GAIN 0.05
+#define AUD_ADAPT_MAX  0.01
+#define AUD_FILL_ALPHA 0.1
+
 static const uint32_t aud_rates[] = { 8000, 11025, 16000, 22050, 32000, 44100, 48000 };
 #define AUD_N_RATES (sizeof(aud_rates) / sizeof(aud_rates[0]))
 
@@ -136,17 +146,21 @@ typedef struct usb_audio_t {
     int16_t   queue[AUD_QUEUE][2];
     int       q_head;
     int       q_len;
-    double    pos; /* position between queue[q_head] and the next frame */
+    double    pos;         /* position between queue[q_head] and the next frame */
+    int       fill_set;    /* fill_avg and fill_target hold for this playback */
+    double    fill_avg;    /* queue fill at each mixer call, smoothed */
+    double    fill_target; /* the fill playback started at */
     int       attached;
 } usb_audio_t;
 
 static void
 usb_audio_stop(usb_audio_t *dev)
 {
-    dev->q_head  = 0;
-    dev->q_len   = 0;
-    dev->pos     = 0.0;
-    dev->playing = 0;
+    dev->q_head   = 0;
+    dev->q_len    = 0;
+    dev->pos      = 0.0;
+    dev->playing  = 0;
+    dev->fill_set = 0;
 }
 
 static uint32_t
@@ -267,8 +281,9 @@ usb_audio_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
             return 3;
         }
         if ((setup[1] == AUD_SET_CUR) && (wlength >= 3)) {
-            dev->rate = usb_audio_closest_rate(data[0] | (data[1] << 8) | (data[2] << 16));
-            dev->pos  = 0.0;
+            dev->rate     = usb_audio_closest_rate(data[0] | (data[1] << 8) | (data[2] << 16));
+            dev->pos      = 0.0;
+            dev->fill_set = 0;
             usb_trace(USB_LOG_SCHED, -1, "Speaker sampling frequency %u Hz", dev->rate);
             return 0;
         }
@@ -317,9 +332,23 @@ usb_audio_get_buffer(int32_t *buffer, uint16_t len, void *priv)
     usb_audio_t *dev  = (usb_audio_t *) priv;
     double       step = (double) dev->rate / (double) SOUND_FREQ;
     double       gain = (dev->mute || (dev->volume == AUD_VOL_SILENCE)) ? 0.0 : pow(10.0, (double) dev->volume / (256.0 * 20.0));
+    double       adj;
 
     if (!dev->playing)
         return;
+
+    if (!dev->fill_set) {
+        dev->fill_avg    = dev->q_len;
+        dev->fill_target = dev->q_len;
+        dev->fill_set    = 1;
+    } else
+        dev->fill_avg += (dev->q_len - dev->fill_avg) * AUD_FILL_ALPHA;
+    adj = AUD_ADAPT_GAIN * (dev->fill_avg - dev->fill_target) / dev->fill_target;
+    if (adj > AUD_ADAPT_MAX)
+        adj = AUD_ADAPT_MAX;
+    if (adj < -AUD_ADAPT_MAX)
+        adj = -AUD_ADAPT_MAX;
+    step *= 1.0 + adj;
 
     for (int c = 0; c < len; c++) {
         const int16_t *a;
@@ -328,8 +357,9 @@ usb_audio_get_buffer(int32_t *buffer, uint16_t len, void *priv)
         /* Two frames are needed to interpolate; running dry means waiting
            for 30 ms again. */
         if (dev->q_len < 2) {
-            dev->playing = 0;
-            dev->pos     = 0.0;
+            dev->playing  = 0;
+            dev->pos      = 0.0;
+            dev->fill_set = 0;
             break;
         }
 

@@ -565,18 +565,113 @@ uhci_self_stop(uhci_t *dev, uint16_t sts_bit)
 }
 
 /* Bus time of one transaction in ns (USB 1.1 s5.9.3), Host_Delay 0 and
-   Hub_LS_Setup at its minimum of four full-speed bit times. */
+   Hub_LS_Setup at its minimum of four full-speed bit times, for a data
+   packet of the given bits. */
 static double
-uhci_bus_ns(int low_speed, int iso, int in, int bytes)
+uhci_bits_ns(int low_speed, int iso, int in, double bits)
 {
-    double bits = floor(3.167 + (1.1667 * 8.0 * (double) bytes));
-
     if (low_speed)
         return (in ? 64060.0 : 64107.0) + (2.0 * 333.0) + ((in ? 676.67 : 667.0) * bits);
     if (iso)
         return (in ? 7268.0 : 6265.0) + (83.54 * bits);
 
     return 9107.0 + (83.54 * bits);
+}
+
+/* With s5.9.3's worst-case bit stuffing: what a packet of that size may
+   take, for the preSOF window and data not yet known. */
+static double
+uhci_bus_ns(int low_speed, int iso, int in, int bytes)
+{
+    return uhci_bits_ns(low_speed, iso, in, floor(3.167 + (1.1667 * 8.0 * (double) bytes)));
+}
+
+/* Bit stuffing (USB 1.1 s7.1.9) inserts a 0 after six 1s in a row, counted
+   on from the SYNC, which ends in a 1, through the PID (DATA0 C3h, DATA1
+   4Bh), the data and the CRC16 (s8.3.5: x^16 + x^15 + x^2 + 1, seeded with
+   ones, sent inverted, LSB first). The state after each data byte gives
+   every prefix of the packet as it would end there. */
+typedef struct uhci_stuff_t {
+    int      run;
+    int      stuffed;
+    uint16_t crc;
+} uhci_stuff_t;
+
+static void
+uhci_stuff_byte(uhci_stuff_t *s, uint8_t byte)
+{
+    for (int b = 0; b < 8; b++) {
+        if (!(byte & (1 << b)))
+            s->run = 0;
+        else if (++s->run == 6) {
+            s->stuffed++;
+            s->run = 0;
+        }
+    }
+}
+
+static void
+uhci_stuff_start(uhci_stuff_t *s, int toggle)
+{
+    s->run     = 1;
+    s->stuffed = 0;
+    s->crc     = 0xffff;
+    uhci_stuff_byte(s, toggle ? 0x4b : 0xc3);
+}
+
+static void
+uhci_stuff_data(uhci_stuff_t *s, uint8_t byte)
+{
+    s->crc ^= byte;
+    for (int b = 0; b < 8; b++)
+        s->crc = (s->crc & 1) ? ((s->crc >> 1) ^ 0xa001) : (s->crc >> 1);
+    uhci_stuff_byte(s, byte);
+}
+
+/* Stuffed bits of the packet that ends here: its CRC16 still to come. */
+static int
+uhci_stuff_end(const uhci_stuff_t *s)
+{
+    uhci_stuff_t e   = *s;
+    uint16_t     crc = ~e.crc;
+
+    uhci_stuff_byte(&e, crc & 0xff);
+    uhci_stuff_byte(&e, crc >> 8);
+    return e.stuffed;
+}
+
+/* Bus time of a transaction whose data packet is known: s5.9.3 with the
+   packet's own stuffing in place of the worst case. */
+static double
+uhci_data_ns(int low_speed, int iso, int in, int toggle, const uint8_t *data, int n)
+{
+    uhci_stuff_t s;
+
+    uhci_stuff_start(&s, toggle);
+    for (int i = 0; i < n; i++)
+        uhci_stuff_data(&s, data[i]);
+
+    return uhci_bits_ns(low_speed, iso, in, (8.0 * n) + uhci_stuff_end(&s));
+}
+
+/* The most bytes of a known packet whose transaction ends within left ns:
+   n if it all does, -1 if not even an empty one does. */
+static int
+uhci_data_fit(int low_speed, int iso, int toggle, const uint8_t *data, int n, double left)
+{
+    uhci_stuff_t s;
+    int          fit = -1;
+
+    uhci_stuff_start(&s, toggle);
+    for (int k = 0; k <= n; k++) {
+        if (uhci_bits_ns(low_speed, iso, 1, (8.0 * k) + uhci_stuff_end(&s)) > left)
+            break;
+        fit = k;
+        if (k < n)
+            uhci_stuff_data(&s, data[k]);
+    }
+
+    return fit;
 }
 
 /* EOF2, 10 full-speed bit times before the SOF (USB 1.1 Table 11-1): a
@@ -732,7 +827,11 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     int          eof = 0;
     int          ret;
     int          result;
-    double       in_ns = 0.0;
+    int          pend_n   = -1;
+    int          pend_tog = 0;
+    const uint8_t *pend   = NULL;
+    double       in_ns    = 0.0;
+    double       out_ns   = 0.0;
     double       to_eof;
     double       to_end;
 
@@ -771,7 +870,25 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     usb    = uhci_find_device(dev, (td[2] >> 8) & 0x7f, ls);
     to_eof = (iso && (pid == USB_PID_OUT)) ? *left : (*left - UHCI_EOF2_NS);
     to_end = ((pid == USB_PID_IN) && (usb != NULL) && (usb->parent != NULL)) ? (*left - UHCI_EOF1_NS) : to_eof;
-    fit    = uhci_bytes_before_eof(ls, iso, pid == USB_PID_IN, len, to_end);
+
+    /* Wire time is that of the packet itself, with its own bit stuffing
+       (USB 1.1 s7.1.9): the HC's data for an OUT, the device's pending
+       packet for an IN. An isochronous IN is known only once sent. */
+    if ((pid != USB_PID_IN) && (len > 0))
+        dma_bm_read(td[3], buf, len, 1);
+    if (pid != USB_PID_IN) {
+        out_ns = uhci_data_ns(ls, iso, 0, (td[2] >> 19) & 1, buf, len);
+        fit    = (out_ns > to_end) ? -1 : len;
+    } else {
+        if (!iso && (usb != NULL))
+            pend_n = usb_dev_in_peek(usb, (td[2] >> 15) & 0x0f, &pend, &pend_tog);
+        if (pend_n >= 0) {
+            fit = uhci_data_fit(ls, 0, pend_tog, pend, pend_n, to_end);
+            if ((fit == pend_n) || (fit > len))
+                fit = len;
+        } else
+            fit = uhci_bytes_before_eof(ls, iso, 1, len, to_end);
+    }
 
     p.pid     = pid;
     p.ep      = (td[2] >> 15) & 0x0f;
@@ -785,9 +902,6 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     p.ack_overrun = 0;
     p.no_ack      = 0;
     p.hub_cut     = 0;
-
-    if ((pid != USB_PID_IN) && (len > 0))
-        dma_bm_read(td[3], buf, len, 1);
 
     if ((pid != USB_PID_IN) && (fit < len)) {
         /* The HC ends its own packet with a bit stuff error (s4.1.4) rather
@@ -816,7 +930,14 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
         if (pid == USB_PID_IN) {
             if ((ret == USB_RET_NAK) || (ret == USB_RET_STALL) || (ret == USB_RET_NO_RESPONSE))
                 in_ns = uhci_in_nodata_ns(dev, ls, ret != USB_RET_NO_RESPONSE);
-            else
+            else if ((pend_n >= 0) && (p.bus_len == pend_n))
+                in_ns = uhci_data_ns(ls, 0, 1, pend_tog, pend, pend_n);
+            else if (iso && (p.bus_len <= p.actual)) {
+                /* Full-speed isochronous data is DATA0 (USB 1.1 s5.6.5). */
+                in_ns = uhci_data_ns(ls, 1, 1, 0, buf, p.bus_len);
+                fit   = uhci_data_fit(ls, 1, 0, buf, p.bus_len, to_end);
+                room  = (fit < 0) ? 0 : fit;
+            } else
                 in_ns = uhci_bus_ns(ls, iso, 1, p.bus_len);
             if ((ret != USB_RET_NO_RESPONSE) && (in_ns > to_eof)) {
                 babbler = usb;
@@ -845,7 +966,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
            EOP (USB 1.1 s11.3.2) and fails its PID check (s8.3.1): the device
            has the data, the host sees no handshake. */
         if ((pid != USB_PID_IN) && !iso && (ret != USB_RET_NO_RESPONSE) && (usb->parent != NULL) &&
-            (uhci_bus_ns(ls, 0, 0, len) > (*left - UHCI_EOF1_NS))) {
+            (out_ns > (*left - UHCI_EOF1_NS))) {
             usb_trace(USB_LOG_SCHED, dev->frnum, "TD %08x: the hub cuts the handshake at EOF1", addr);
             ret = USB_RET_NO_RESPONSE;
         }
@@ -862,7 +983,7 @@ uhci_exec_td(uhci_t *dev, uint32_t addr, int in_queue, double *left, uint32_t *l
     if (eof)
         *left = 0.0;
     else
-        *left -= (pid == USB_PID_IN) ? in_ns : uhci_bus_ns(ls, iso, 0, len);
+        *left -= (pid == USB_PID_IN) ? in_ns : out_ns;
 
     if (babbler != NULL)
         uhci_eof_babbler(dev, babbler);

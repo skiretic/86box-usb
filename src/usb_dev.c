@@ -695,6 +695,46 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
     }
 }
 
+/* The IN path above up to the point the packet is pending: a host that times
+   the packet on the wire needs its bytes before the device sends it. A NAK
+   leaves nothing behind; a STALL halts as the transaction would. */
+int
+usb_dev_in_peek(usb_dev_t *dev, int n, const uint8_t **data, int *toggle)
+{
+    usb_ep_t *ep;
+    int       ret;
+
+    n &= 0x0f;
+    ep = &dev->ep_in[n];
+    if (!dev->powered_reset || !ep->present || ((n != 0) && !dev->config) || (ep->halt && (n != 0)) || (ep->type == 1))
+        return -1;
+
+    if (!ep->pending) {
+        if (n == 0)
+            ret = usb_dev_ctl_in(dev, ep->pend_buf, ep->mps);
+        else if (dev->ops->data_in != NULL)
+            ret = dev->ops->data_in(dev, n, ep->pend_buf, ep->mps);
+        else
+            ret = USB_DATA_NAK;
+
+        if (ret == USB_DATA_NAK)
+            return -1;
+        if (ret == USB_DATA_STALL) {
+            if (n != 0)
+                ep->halt = 1;
+            else
+                dev->ctl_stage = CTL_STALL;
+            return -1;
+        }
+        ep->pend_len = ret;
+        ep->pending  = 1;
+    }
+
+    *data   = ep->pend_buf;
+    *toggle = ep->toggle;
+    return ep->pend_len;
+}
+
 /* Only a suspended device armed by SET_FEATURE may drive resume (7.1.7.5,
    9.2.5.2). Its 5 ms idle wait and the 1-15 ms K are not timed: the
    receiving port or hub latches the resume at once. */

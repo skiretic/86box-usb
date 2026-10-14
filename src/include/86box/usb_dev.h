@@ -149,6 +149,10 @@ struct usb_dev_t {
 extern void usb_dev_init(usb_dev_t *dev);
 extern void usb_dev_bus_reset(usb_dev_t *dev);
 extern int  usb_dev_packet(usb_dev_t *dev, usb_packet_t *p);
+/* The data packet a non-isochronous IN endpoint answers its next token with,
+   made pending so that transaction sends exactly it. Returns its length and
+   sets data and toggle, or returns -1 when the answer carries no data. */
+extern int  usb_dev_in_peek(usb_dev_t *dev, int ep, const uint8_t **data, int *toggle);
 /* Remote wakeup: a suspended device with DEVICE_REMOTE_WAKEUP set drives
    resume signaling upstream. Returns 1 if it did. Emulation thread only. */
 extern int  usb_dev_remote_wakeup(usb_dev_t *dev);

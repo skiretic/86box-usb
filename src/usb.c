@@ -107,7 +107,8 @@
 typedef struct uhci_port_t {
     uint16_t       sc;  /* CCS, CSC, PE, PEDC, RD, LSDA, PR, SUSP */
     usb_dev_t     *usb; /* the device on the wire, if any */
-    uint8_t        eop; /* RD written 0: the resume's EOP is on the wire */
+    uint8_t        eop;  /* RD written 0: the resume's EOP is on the wire */
+    uint16_t       line; /* bits 5:4 as sampled at the last EOF2 */
     pc_timer_t     eop_timer;
     struct uhci_t *hc;
     int            num;
@@ -496,6 +497,7 @@ uhci_latch_frame_status(uhci_t *dev)
 
 static void uhci_run_frame(uhci_t *dev);
 static void uhci_frame_end(void *priv);
+static void uhci_latch_lines(uhci_t *dev);
 
 /* Called after every USBCMD change: starts or stops the frame clock. */
 static void
@@ -508,6 +510,9 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
 
     if (running) {
         int at_eof = 0;
+
+        /* Until the first EOF2 the line status holds what it read stopped. */
+        uhci_latch_lines(dev);
 
         /* A frame frozen with nothing left ends as it resumes; a zero period
            would stop the timer instead. */
@@ -1082,6 +1087,7 @@ uhci_frame_end(void *priv)
     uhci_t *dev = (uhci_t *) priv;
 
     uhci_latch_frame_status(dev);
+    uhci_latch_lines(dev);
     dev->frnum      = (dev->frnum + 1) & 0x07ff;
     dev->dbg_resume = 0;
     timer_on_auto(&dev->frame_timer, uhci_frame_us(dev));
@@ -1313,30 +1319,45 @@ uhci_cmd_write(uhci_t *dev, uint16_t val)
     uhci_update_frame_clock(dev, was_running);
 }
 
+/* Line status on the wire now: SE0 with nothing attached or in reset, else
+   idle J, or K while resume is driven. J is D+ at full speed, D- at low
+   speed. A global resume drives K on enabled ports only, not on a
+   selectively suspended one (Table 6, "No Effect"). The EOP that ends a
+   resume reads as its SE0. */
+static uint16_t
+uhci_port_line(const uhci_t *dev, const uhci_port_t *port)
+{
+    uint16_t j;
+    int      fgr_k;
+
+    if (!(port->sc & UHCI_PORT_CCS) || uhci_port_in_reset(dev, port))
+        return 0;
+
+    fgr_k = (dev->cmd & UHCI_CMD_FGR) && ((port->sc & (UHCI_PORT_PE | UHCI_PORT_SUSP)) == UHCI_PORT_PE);
+    j     = port->usb->low_speed ? UHCI_PORT_DM : UHCI_PORT_DP;
+    if (port->eop || (fgr_k && dev->fgr_eop))
+        return 0;
+    if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) || fgr_k)
+        j ^= (UHCI_PORT_DP | UHCI_PORT_DM);
+
+    return j;
+}
+
+/* Line status is updated at EOF2 (s2.1.7 bits 5:4): sampled at each frame
+   end while frames run, read live while none do. */
+static void
+uhci_latch_lines(uhci_t *dev)
+{
+    for (int i = 0; i < UHCI_PORTS; i++)
+        dev->port[i].line = uhci_port_line(dev, &dev->port[i]);
+}
+
 static uint16_t
 uhci_portsc_read(const uhci_t *dev, int n)
 {
     const uhci_port_t *port = &dev->port[n];
-    uint16_t           ret  = port->sc | UHCI_PORT_ONE;
-    uint16_t           j;
 
-    /* Line status: SE0 with nothing attached or in reset, else idle J, or K
-       while resume is driven. J is D+ at full speed, D- at low speed. A
-       global resume drives K on enabled ports only, not on a selectively
-       suspended one (Table 6, "No Effect"). The EOP that ends a resume reads
-       as its SE0. */
-    if ((port->sc & UHCI_PORT_CCS) && !uhci_port_in_reset(dev, port)) {
-        int fgr_k = (dev->cmd & UHCI_CMD_FGR) && ((port->sc & (UHCI_PORT_PE | UHCI_PORT_SUSP)) == UHCI_PORT_PE);
-
-        j = port->usb->low_speed ? UHCI_PORT_DM : UHCI_PORT_DP;
-        if (port->eop || (fgr_k && dev->fgr_eop))
-            j = 0;
-        else if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) || fgr_k)
-            j ^= (UHCI_PORT_DP | UHCI_PORT_DM);
-        ret |= j;
-    }
-
-    return ret;
+    return port->sc | UHCI_PORT_ONE | (uhci_running(dev) ? port->line : uhci_port_line(dev, port));
 }
 
 static void

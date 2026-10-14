@@ -1244,11 +1244,13 @@ uhci_portsc_read(const uhci_t *dev, int n)
     uint16_t           j;
 
     /* Line status: SE0 with nothing attached or in reset, else idle J, or K
-       while resume is driven. J is D+ at full speed, D- at low speed. */
+       while resume is driven. J is D+ at full speed, D- at low speed. A
+       global resume drives K on enabled ports only, not on a selectively
+       suspended one (Table 6, "No Effect"). */
     if ((port->sc & UHCI_PORT_CCS) && !uhci_port_in_reset(dev, port)) {
         j = port->usb->low_speed ? UHCI_PORT_DM : UHCI_PORT_DP;
         if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) ||
-            ((dev->cmd & UHCI_CMD_FGR) && (port->sc & UHCI_PORT_PE)))
+            ((dev->cmd & UHCI_CMD_FGR) && ((port->sc & (UHCI_PORT_PE | UHCI_PORT_SUSP)) == UHCI_PORT_PE)))
             j ^= (UHCI_PORT_DP | UHCI_PORT_DM);
         ret |= j;
     }
@@ -1311,7 +1313,8 @@ uhci_port_idle(const uhci_t *dev, const uhci_port_t *port)
         return 0;
     if (!(port->sc & UHCI_PORT_PE))
         return 1;
-    if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) || (dev->cmd & UHCI_CMD_FGR))
+    if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) ||
+        ((dev->cmd & UHCI_CMD_FGR) && !(port->sc & UHCI_PORT_SUSP)))
         return 0;
     return (port->sc & UHCI_PORT_SUSP) || !uhci_running(dev);
 }

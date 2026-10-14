@@ -561,9 +561,6 @@ stpc_usb_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
         case 0x0b:
         case 0x0e:
         case 0x10:
-        /* BAR_OHCI is the only base address register (PM 8.9-8.10); BAR1-BAR5
-           are unimplemented and hardwired to 0 (PCI 2.1 6.2.5.1), or a sizing
-           pass reads them back as I/O BARs. */
         case 0x14 ... 0x27:
         case 0x3d:
             return;

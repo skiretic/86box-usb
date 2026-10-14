@@ -14,8 +14,10 @@ opRDTSC(UNUSED(uint32_t fetchdat))
     EDX = tsc >> 32;
     CLOCK_CYCLES(1);
 #ifdef USE_DYNAREC
-    /* A due timer run here can reset the CPU (the 8042 pulse); the nonzero
-       return ends the recompiled block, as the OUT ops do. */
+    /*
+       A due timer run here can reset the CPU (the 8042 pulse); the nonzero
+       return ends the recompiled block, as the OUT ops do.
+     */
     if (cpu_use_dynarec) {
         update_tsc();
         return x86_was_reset;

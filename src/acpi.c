@@ -51,6 +51,7 @@ atomic_int acpi_pwrbut_pressed = 0;
 int        acpi_enabled        = 0;
 
 static double cpu_to_acpi;
+static int    acpi_pmtmr_read_cycles;
 
 static int      acpi_power_on    = 0;
 static uint64_t acpi_last_clock  = 0ULL;
@@ -1050,7 +1051,8 @@ acpi_reg_write_common_regs(UNUSED(int size), uint16_t addr, uint8_t val, void *p
                         dma_reset();
                         dma_set_at(1);
 
-                        device_reset_all(DEVICE_PCI);
+                        /* The AGP slot shares the bus RST# signal. */
+                        device_reset_all(DEVICE_PCI | DEVICE_AGP);
                     }
 
                     if (sus_typ & SUS_RESET_CPU)
@@ -2111,16 +2113,14 @@ acpi_aux_reg_write_common(int size, uint16_t addr, uint8_t val, void *priv)
 static void
 acpi_latch_pmtmr(acpi_t *dev)
 {
-    uint32_t new_latch = acpi_timer_get(dev);
+    dev->pmtmr_latch = acpi_timer_get(dev);
 
-    if (new_latch == dev->pmtmr_latch) {
-        /* Windows Vista and 7 division by zero mitigation measure. */
-        if (dev->regs.timer32)
-            dev->pmtmr_latch = (new_latch + 1) & 0xffffffff;
-        else
-            dev->pmtmr_latch = (new_latch + 1) & 0x00ffffff;
-    } else
-        dev->pmtmr_latch = new_latch;
+    /* On real hardware, reading the timer takes longer than one of its ticks, so
+       two reads never return the same value, which Windows Vista and 7 rely on to
+       avoid a division by zero. Charge the read one tick, rather than returning the
+       value plus one when it has not changed: that made the timer go backwards, on
+       a third read within the same tick. */
+    cycles -= acpi_pmtmr_read_cycles;
 
 #ifdef USE_DYNAREC
     if (cpu_use_dynarec)
@@ -2652,9 +2652,10 @@ acpi_reset(void *priv)
 static void
 acpi_speed_changed(void *priv)
 {
-    acpi_t *dev        = (acpi_t *) priv;
-    cpu_to_acpi        = ACPI_TIMER_FREQ / cpuclock;
-    bool timer_enabled = timer_is_enabled(&dev->timer);
+    acpi_t *dev            = (acpi_t *) priv;
+    cpu_to_acpi            = ACPI_TIMER_FREQ / cpuclock;
+    acpi_pmtmr_read_cycles = (int) (cpuclock / ACPI_TIMER_FREQ) + 1;
+    bool timer_enabled     = timer_is_enabled(&dev->timer);
     timer_stop(&dev->timer);
 
     if (timer_enabled)
@@ -2713,8 +2714,9 @@ acpi_init(const device_t *info)
     if (dev == NULL)
         return NULL;
 
-    cpu_to_acpi = ACPI_TIMER_FREQ / cpuclock;
-    dev->vendor = info->local;
+    cpu_to_acpi            = ACPI_TIMER_FREQ / cpuclock;
+    acpi_pmtmr_read_cycles = (int) (cpuclock / ACPI_TIMER_FREQ) + 1;
+    dev->vendor            = info->local;
 
     dev->irq_line = 9;
 

@@ -522,10 +522,14 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
     } else {
         /* Outside debug mode a stop resets the SOF counter; in debug mode it
            freezes (Table 4), to the timer's own resolution, and the walk
-           resumes where it stopped, whoever cleared Run/Stop. */
+           resumes where it stopped, whoever cleared Run/Stop. The walk runs
+           at once, so the counter has also run for the bus time it charged:
+           the frame keeps the lesser of the timer and the walk's budget. */
         dev->frame_frozen  = !!(dev->cmd & UHCI_CMD_SWDBG);
         dev->dbg_resume    = dev->frame_frozen;
         dev->frame_left_us = (double) timer_get_remaining_u64(&dev->frame_timer) / (double) TIMER_USEC;
+        if (dev->frame_frozen && ((dev->dbg_left / 1000.0) < dev->frame_left_us))
+            dev->frame_left_us = (dev->dbg_left > 0.0) ? (dev->dbg_left / 1000.0) : 0.0;
         timer_stop(&dev->frame_timer);
         uhci_latch_frame_status(dev);
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock stopped%s", dev->frame_frozen ? " (frozen, SWDBG)" : "");
@@ -956,8 +960,10 @@ uhci_run_frame(uhci_t *dev)
 
     /* A frame not resumed has walked nothing yet. */
     dev->dbg_resume = 0;
-    if (!resume)
+    if (!resume) {
         dev->dbg_link = UHCI_LP_T;
+        dev->dbg_left = left;
+    }
 
     /* With Bus Master Enable clear the UHCI may not touch memory at all
        (PIIX4 6.1.3); the frame counter needs no memory and keeps counting. */

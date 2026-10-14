@@ -542,7 +542,11 @@ uhci_update_frame_clock(uhci_t *dev, int was_running)
         if (dev->frame_frozen && ((dev->dbg_left / 1000.0) < dev->frame_left_us))
             dev->frame_left_us = (dev->dbg_left > 0.0) ? (dev->dbg_left / 1000.0) : 0.0;
         timer_stop(&dev->frame_timer);
-        uhci_latch_frame_status(dev);
+        /* Completions reach USBSTS only at the end of their frame (TD bit 24).
+           A frozen frame still ends after the resume; any other stopped frame
+           is abandoned with the SOF counter (s2.1.1), and its completions with it. */
+        if (!dev->frame_frozen)
+            dev->eof_ioc = dev->eof_spd = dev->eof_err = 0;
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI frame clock stopped%s", dev->frame_frozen ? " (frozen, SWDBG)" : "");
     }
 }

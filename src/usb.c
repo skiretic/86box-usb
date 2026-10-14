@@ -105,8 +105,12 @@
 #define UHCI_TD_STATUS   0x00fe0000
 
 typedef struct uhci_port_t {
-    uint16_t   sc;  /* CCS, CSC, PE, PEDC, RD, LSDA, PR, SUSP */
-    usb_dev_t *usb; /* the device on the wire, if any */
+    uint16_t       sc;  /* CCS, CSC, PE, PEDC, RD, LSDA, PR, SUSP */
+    usb_dev_t     *usb; /* the device on the wire, if any */
+    uint8_t        eop; /* RD written 0: the resume's EOP is on the wire */
+    pc_timer_t     eop_timer;
+    struct uhci_t *hc;
+    int            num;
 } uhci_port_t;
 
 struct uhci_t {
@@ -137,6 +141,8 @@ struct uhci_t {
     uhci_port_t port[UHCI_PORTS];
     pc_timer_t  frame_timer;
     pc_timer_t  detect_timer;
+    uint8_t     fgr_eop; /* FGR written 0: the global resume's EOP is on the wire */
+    pc_timer_t  fgr_timer;
     void      (*set_irq)(void *priv, int level);
     void       *irq_priv;
 };
@@ -1088,6 +1094,51 @@ uhci_port_in_reset(const uhci_t *dev, const uhci_port_t *port)
     return (port->sc & UHCI_PORT_PR) || (dev->cmd & UHCI_CMD_GRESET);
 }
 
+/* Writing FGR or PORTSC RD from 1 to 0 ends the resume with a low-speed EOP,
+   2 bit times of SE0 and 1 of J (USB 1.1 s7.1.13.2): the bit reads 1 until
+   it is done (s2.1.1 bit 4, s2.1.7 bit 6). */
+#define UHCI_LS_EOP_US (3.0 / 1.5)
+
+static void
+uhci_fgr_eop_done(void *priv)
+{
+    uhci_t *dev = (uhci_t *) priv;
+
+    dev->fgr_eop = 0;
+    dev->cmd &= ~UHCI_CMD_FGR;
+    usb_trace(USB_LOG_REG, dev->frnum, "UHCI global resume EOP done, FGR cleared");
+}
+
+static void
+uhci_rd_eop_done(void *priv)
+{
+    uhci_port_t *port = (uhci_port_t *) priv;
+
+    port->eop = 0;
+    port->sc &= ~UHCI_PORT_RD;
+    usb_trace(USB_LOG_REG, port->hc->frnum, "UHCI port %i resume EOP done, RD cleared", port->num + 1);
+}
+
+/* A resume event during an EOP starts resume signaling over. */
+static void
+uhci_set_fgr(uhci_t *dev)
+{
+    if (dev->fgr_eop) {
+        timer_stop(&dev->fgr_timer);
+        dev->fgr_eop = 0;
+    }
+    dev->cmd |= UHCI_CMD_FGR;
+}
+
+static void
+uhci_port_eop_stop(uhci_port_t *port)
+{
+    if (port->eop) {
+        timer_stop(&port->eop_timer);
+        port->eop = 0;
+    }
+}
+
 /* Connect detection: an attached device is seen about 64 bit times after SE0 ends. */
 static void
 uhci_detect(void *priv)
@@ -1107,7 +1158,7 @@ uhci_detect(void *priv)
 
         /* A connect in global suspend is a resume event (Table 6; USBCMD bit 4). */
         if (dev->cmd & UHCI_CMD_EGSM) {
-            dev->cmd |= UHCI_CMD_FGR;
+            uhci_set_fgr(dev);
             dev->sts |= UHCI_STS_RD;
             usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS RD set (connect in global suspend)");
         }
@@ -1133,6 +1184,8 @@ uhci_power_on_reset(uhci_t *dev)
 {
     timer_stop(&dev->frame_timer);
     timer_stop(&dev->detect_timer);
+    timer_stop(&dev->fgr_timer);
+    dev->fgr_eop = 0;
 
     if (dev->sts != 0x0000)
         usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS %04x -> 0000 (reset)", dev->sts);
@@ -1151,8 +1204,10 @@ uhci_power_on_reset(uhci_t *dev)
     dev->frame_frozen = 0;
     dev->dbg_resume   = 0;
 
-    for (int i = 0; i < UHCI_PORTS; i++)
+    for (int i = 0; i < UHCI_PORTS; i++) {
+        uhci_port_eop_stop(&dev->port[i]);
         dev->port[i].sc = 0x0000;
+    }
 
     uhci_update_irq(dev);
 }
@@ -1163,6 +1218,8 @@ static void
 uhci_hc_reset(uhci_t *dev)
 {
     timer_stop(&dev->frame_timer);
+    timer_stop(&dev->fgr_timer);
+    dev->fgr_eop = 0;
 
     if (dev->sts != 0x0000)
         usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS %04x -> 0000 (HCRESET)", dev->sts);
@@ -1183,6 +1240,7 @@ uhci_hc_reset(uhci_t *dev)
         uhci_port_t *port = &dev->port[i];
         uint16_t     old  = port->sc;
 
+        uhci_port_eop_stop(port);
         port->sc &= ~(UHCI_PORT_CCS | UHCI_PORT_PE | UHCI_PORT_LSDA | UHCI_PORT_SUSP | UHCI_PORT_RD);
         if (old & UHCI_PORT_CCS)
             port->sc |= UHCI_PORT_CSC;
@@ -1234,6 +1292,19 @@ uhci_cmd_write(uhci_t *dev, uint16_t val)
         return;
     }
 
+    /* FGR written 0 holds while the EOP runs; written 1 drives K again. */
+    if (dev->fgr_eop) {
+        if (val & UHCI_CMD_FGR) {
+            timer_stop(&dev->fgr_timer);
+            dev->fgr_eop = 0;
+        } else
+            val |= UHCI_CMD_FGR;
+    } else if ((old & UHCI_CMD_FGR) && !(val & UHCI_CMD_FGR)) {
+        val |= UHCI_CMD_FGR;
+        dev->fgr_eop = 1;
+        timer_on_auto(&dev->fgr_timer, UHCI_LS_EOP_US);
+    }
+
     dev->cmd = val;
 
     /* RS written 0 sets HCHalted (Table 7); RS written 1 clears it. HCHalted is
@@ -1252,11 +1323,15 @@ uhci_portsc_read(const uhci_t *dev, int n)
     /* Line status: SE0 with nothing attached or in reset, else idle J, or K
        while resume is driven. J is D+ at full speed, D- at low speed. A
        global resume drives K on enabled ports only, not on a selectively
-       suspended one (Table 6, "No Effect"). */
+       suspended one (Table 6, "No Effect"). The EOP that ends a resume reads
+       as its SE0. */
     if ((port->sc & UHCI_PORT_CCS) && !uhci_port_in_reset(dev, port)) {
+        int fgr_k = (dev->cmd & UHCI_CMD_FGR) && ((port->sc & (UHCI_PORT_PE | UHCI_PORT_SUSP)) == UHCI_PORT_PE);
+
         j = port->usb->low_speed ? UHCI_PORT_DM : UHCI_PORT_DP;
-        if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) ||
-            ((dev->cmd & UHCI_CMD_FGR) && ((port->sc & (UHCI_PORT_PE | UHCI_PORT_SUSP)) == UHCI_PORT_PE)))
+        if (port->eop || (fgr_k && dev->fgr_eop))
+            j = 0;
+        else if (((port->sc & (UHCI_PORT_RD | UHCI_PORT_SUSP)) == (UHCI_PORT_RD | UHCI_PORT_SUSP)) || fgr_k)
             j ^= (UHCI_PORT_DP | UHCI_PORT_DM);
         ret |= j;
     }
@@ -1278,6 +1353,7 @@ uhci_portsc_write(uhci_t *dev, int n, uint16_t val)
            behavior per Linux uhci-hub.c and SeaBIOS usb-uhci.c). */
         if (old & UHCI_PORT_PE)
             port->sc |= UHCI_PORT_PEDC;
+        uhci_port_eop_stop(port);
         port->sc = (port->sc & ~(UHCI_PORT_PE | UHCI_PORT_SUSP | UHCI_PORT_RD)) | UHCI_PORT_PR;
         if (port->usb != NULL)
             usb_dev_bus_reset(port->usb);
@@ -1305,7 +1381,15 @@ uhci_portsc_write(uhci_t *dev, int n, uint16_t val)
         else
             port->sc &= ~UHCI_PORT_SUSP;
 
-        port->sc = (port->sc & ~UHCI_PORT_RD) | (val & UHCI_PORT_RD);
+        /* RD written 0 holds while the EOP runs; written 1 drives K again. */
+        if (port->eop) {
+            if (val & UHCI_PORT_RD)
+                uhci_port_eop_stop(port);
+        } else if ((old & UHCI_PORT_RD) && !(val & UHCI_PORT_RD)) {
+            port->eop = 1;
+            timer_on_auto(&port->eop_timer, UHCI_LS_EOP_US);
+        } else
+            port->sc = (port->sc & ~UHCI_PORT_RD) | (val & UHCI_PORT_RD);
     }
 }
 
@@ -1342,7 +1426,7 @@ uhci_port_resume(uhci_t *dev, int n)
         usb_trace(USB_LOG_REG, dev->frnum, "UHCI port %i resume detected, PORTSC %04x", n + 1, port->sc);
     }
     if (dev->cmd & UHCI_CMD_EGSM) {
-        dev->cmd |= UHCI_CMD_FGR;
+        uhci_set_fgr(dev);
         dev->sts |= UHCI_STS_RD;
         usb_trace(USB_LOG_IRQ, dev->frnum, "UHCI USBSTS RD set (resume signaling on port %i in global suspend)", n + 1);
     }
@@ -1696,13 +1780,14 @@ usb_detach(usb_dev_t *udev)
                    device not yet connect-detected, or under GRESET (which holds
                    PORTSC at 0), leaves no line change behind. */
                 if (hc->cmd & UHCI_CMD_EGSM) {
-                    hc->cmd |= UHCI_CMD_FGR;
+                    uhci_set_fgr(hc);
                     hc->sts |= UHCI_STS_RD;
                     usb_trace(USB_LOG_IRQ, hc->frnum, "UHCI USBSTS RD set (disconnect in global suspend)");
                 }
             }
             if (port->sc & UHCI_PORT_PE)
                 port->sc |= UHCI_PORT_PEDC;
+            uhci_port_eop_stop(port);
             port->sc &= ~(UHCI_PORT_CCS | UHCI_PORT_PE | UHCI_PORT_LSDA | UHCI_PORT_SUSP | UHCI_PORT_RD);
             usb_trace(USB_LOG_REG, hc->frnum, "UHCI port %i: %s detached, PORTSC %04x", i + 1, udev->name, port->sc);
             uhci_update_irq(hc);
@@ -3447,6 +3532,9 @@ usb_close(void *priv)
 
     timer_disable(&dev->uhci->frame_timer);
     timer_disable(&dev->uhci->detect_timer);
+    timer_disable(&dev->uhci->fgr_timer);
+    for (int i = 0; i < UHCI_PORTS; i++)
+        timer_disable(&dev->uhci->port[i].eop_timer);
     free(dev->uhci);
     free(dev->ohci);
     free(dev);
@@ -3469,6 +3557,12 @@ usb_init(UNUSED(const device_t *info))
     dev->uhci = (uhci_t *) calloc(1, sizeof(uhci_t));
     timer_add(&dev->uhci->frame_timer, uhci_frame_end, dev->uhci, 0);
     timer_add(&dev->uhci->detect_timer, uhci_detect, dev->uhci, 0);
+    timer_add(&dev->uhci->fgr_timer, uhci_fgr_eop_done, dev->uhci, 0);
+    for (int i = 0; i < UHCI_PORTS; i++) {
+        dev->uhci->port[i].hc  = dev->uhci;
+        dev->uhci->port[i].num = i;
+        timer_add(&dev->uhci->port[i].eop_timer, uhci_rd_eop_done, &dev->uhci->port[i], 0);
+    }
 
     dev->ohci        = (ohci_t *) calloc(1, sizeof(ohci_t));
     dev->ohci->ndp   = 2;

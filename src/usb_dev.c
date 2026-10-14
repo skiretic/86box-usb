@@ -623,13 +623,22 @@ usb_dev_transact(usb_dev_t *dev, usb_packet_t *p)
             if (ep->halt && (n != 0))
                 return USB_RET_STALL;
 
-            /* Isochronous: each packet is sent once; nothing to send is no answer. */
+            /* Isochronous: each packet is sent once; nothing to send is no
+               answer. The device sends up to its own wMaxPacketSize whatever
+               the host's buffer: past it a UHCI sees babble (UHCI 1.1
+               s3.2.3), an OHCI a data overrun. */
             if (ep->type == 1) {
-                ret = (dev->ops->data_in != NULL) ? dev->ops->data_in(dev, n, p->data, p->len) : USB_DATA_NAK;
+                uint8_t iso_buf[1023];
+                int     max = ((ep->mps > 0) && (ep->mps <= 1023)) ? ep->mps : 1023;
+
+                ret = (dev->ops->data_in != NULL) ? dev->ops->data_in(dev, n, iso_buf, max) : USB_DATA_NAK;
                 if (ret < 0)
                     return USB_RET_NO_RESPONSE;
-                p->actual  = ret;
                 p->bus_len = ret;
+                p->actual  = (ret > p->len) ? p->len : ret;
+                memcpy(p->data, iso_buf, p->actual);
+                if (ret > p->len)
+                    return p->ack_overrun ? USB_RET_OVERRUN : USB_RET_BABBLE;
                 return USB_RET_ACK;
             }
 

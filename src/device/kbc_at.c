@@ -265,13 +265,11 @@ kbc_translate(atkbc_t *dev, uint8_t val)
         return ret;
     }
 
-    /* Skip break code if translated make code has bit 7 set. */
-    if (translate && (dev->sc_or == 0x80) && (nont_to_t[val] & 0x80)) {
-        kbc_at_log("ATkbc: translate is on, skipping scan code: %02X (original: F0 %02X)\n", nont_to_t[val], val);
-        dev->sc_or = 0;
-        return ret;
-    }
-
+    /* The byte after F0 is translated and gets bit 7 like any other, even
+       when it is not a key code: a keyboard answers a command with ACK
+       ahead of the bytes still in its buffer (IBM 101/102-Key TR p. 19,
+       24), so an FA can follow the F0 of a break, and dropping it here
+       loses the ACK the host is waiting for. */
     kbc_at_log("ATkbc: translate is %s, ", translate ? "on" : "off");
 #ifdef ENABLE_KEYBOARD_AT_LOG
     kbc_at_log("scan code: ");

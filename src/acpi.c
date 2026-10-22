@@ -2634,8 +2634,11 @@ acpi_reset(void *priv)
     }
 
     if (acpi_power_on) {
-        /* Power on always generates a resume event. */
-        // dev->regs.pmsts |= 0x8100;
+        /* Power on always generates a resume event, except on the SiS 5582:
+           its APC powers the board up from the RTC well, while the PM
+           registers sit in the main 3.3V well and come up cleared. */
+        if (dev->vendor != VEN_SIS_5582)
+            dev->regs.pmsts |= 0x8100;
         acpi_power_on = 0;
     }
 

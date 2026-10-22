@@ -41,6 +41,7 @@ extern const device_t ali6117d_device;
 extern const device_t amd640_device;
 
 /* ASUS */
+extern const device_t asus48625_device;
 extern const device_t isa486c_device;
 
 /* Compaq */
@@ -187,6 +188,8 @@ extern const device_t sis_5571_device;
 extern const device_t sis_5581_device;
 extern const device_t sis_5591_1997_device;
 extern const device_t sis_530_device;
+extern const device_t sis_620_1997_device;
+extern const device_t sis_620_device;
 extern const device_t sis_5591_device;
 extern const device_t sis_5600_1997_device;
 extern const device_t sis_5600_device;
@@ -242,7 +245,6 @@ extern const device_t via_vt8231_device;
 
 extern const device_t vl82c480_device;
 extern const device_t vl82c486_device;
-extern int            vl82c486_cpu_cache_enable(void *priv);
 extern const device_t vl82c59x_device;
 extern const device_t vl82c59x_compaq_device;
 extern const device_t vl82c59x_wildcat_device;

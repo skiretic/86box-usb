@@ -49,6 +49,9 @@ uint32_t cr3;
 uint32_t cr4;
 uint32_t dr[8];
 
+int cpu_debug_regs_486 = 0;
+int cpu_dr_armed       = 0;
+
 uint32_t use32;
 int      stack32;
 
@@ -62,11 +65,7 @@ int nmi_enable = 1;
 int alt_access;
 int cpl_override = 0;
 
-#ifdef USE_NEW_DYNAREC
 uint16_t cpu_cur_status = 0;
-#else
-uint32_t cpu_cur_status = 0;
-#endif
 
 extern uint8_t *pccache2;
 
@@ -83,6 +82,7 @@ int soft_reset_mask = 0;
 int smi_latched = 0;
 int smm_in_hlt  = 0;
 int smi_block   = 0;
+int cpu_halted  = 0;
 
 /* RSM restarted a HLT and a latched SMI is about to be entered. */
 static int smm_rsm_restart = 0;
@@ -139,6 +139,8 @@ int opcode_has_modrm[256] = {
     0, 0, 0, 0,  0, 0, 1, 1,  0, 0, 0, 0,  0, 0, 1, 1, /*f0*/
 };
 
+/* How many bytes of an instruction the fetch helpers read at a page end,
+   so the ModR/M comes along (fastreadw_fetch/fastreadl_fetch) */
 int opcode_length[256] = { 3, 3, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 1, 3,   /* 0x0x */
                            3, 3, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 1, 1,   /* 0x1x */
                            3, 3, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 1, 1,   /* 0x2x */
@@ -154,7 +156,27 @@ int opcode_length[256] = { 3, 3, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 1, 3,   /* 
                            3, 3, 3, 1, 3, 3, 3, 3, 3, 1, 3, 1, 1, 2, 1, 1,   /* 0xcx */
                            3, 3, 3, 3, 2, 2, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3,   /* 0xdx */
                            2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 2, 1, 1, 1, 1,   /* 0xex */
-                           1, 1, 1, 1, 1, 1, 3, 3, 1, 1, 1, 1, 1, 1, 3, 3 }; /* 0xfx */
+                           1, 1, 1, 1, 1, 1, 3, 3, 1, 1, 1, 1, 1, 1, 3, 3 };
+
+/* The shortest each opcode can be (a ModR/M byte, an imm8, a second opcode
+   byte): the 2386 core checks that many bytes against the CS limit before
+   running it. */
+int opcode_min_length[256] = { 2, 2, 2, 2, 2, 3, 1, 1, 2, 2, 2, 2, 2, 3, 1, 2,   /* 0x0x */
+                           2, 2, 2, 2, 2, 3, 1, 1, 2, 2, 2, 2, 2, 3, 1, 1,   /* 0x1x */
+                           2, 2, 2, 2, 2, 3, 1, 1, 2, 2, 2, 2, 2, 3, 1, 1,   /* 0x2x */
+                           2, 2, 2, 2, 2, 3, 1, 1, 2, 2, 2, 2, 2, 3, 1, 1,   /* 0x3x */
+                           1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,   /* 0x4x */
+                           1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,   /* 0x5x */
+                           1, 1, 2, 2, 1, 1, 1, 1, 3, 3, 2, 3, 1, 1, 1, 1,   /* 0x6x */
+                           2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,   /* 0x7x */
+                           3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,   /* 0x8x */
+                           1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1,   /* 0x9x */
+                           3, 3, 3, 3, 1, 1, 1, 1, 2, 3, 1, 1, 1, 1, 1, 1,   /* 0xax */
+                           2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,   /* 0xbx */
+                           3, 3, 3, 1, 2, 2, 3, 3, 3, 1, 3, 1, 1, 2, 1, 1,   /* 0xcx */
+                           2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,   /* 0xdx */
+                           2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 2, 1, 1, 1, 1,   /* 0xex */
+                           1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 2, 2 }; /* 0xfx */
 
 /* 0 = no, 1 = always, 2 = depends on second opcode, 3 = depends on mod/rm */
 int lock_legal[256]    = { 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 2,   /* 0x0x */
@@ -639,6 +661,12 @@ smm_seg_load(x86seg *s)
         else
             cpu_cur_status |= CPU_STATUS_NOTFLATDS;
     }
+    if (s == &cpu_state.seg_es) {
+        if (s->base == 0 && s->limit_low == 0 && s->limit_high == 0xffffffff)
+            cpu_cur_status &= ~CPU_STATUS_NOTFLATES;
+        else
+            cpu_cur_status |= CPU_STATUS_NOTFLATES;
+    }
 
     if (s == &cpu_state.seg_ss) {
         if (s->base == 0 && s->limit_low == 0 && s->limit_high == 0xffffffff)
@@ -757,9 +785,11 @@ smram_restore_state_p5(uint32_t *saved_state)
 
     cr0   = saved_state[SMRAM_FIELD_P5_CR0];
     cr3   = saved_state[SMRAM_FIELD_P5_CR3];
+    pae_load_pdptes(); /* used only with PAE paging */
     cr4   = saved_state[SMRAM_FIELD_P5_CR4];
     dr[6] = saved_state[SMRAM_FIELD_P5_DR6];
     dr[7] = saved_state[SMRAM_FIELD_P5_DR7];
+    cpu_dr7_update();
 
     /* TR */
     tr.seg     = saved_state[SMRAM_FIELD_P5_TR_SELECTOR];
@@ -953,9 +983,11 @@ smram_restore_state_p6(uint32_t *saved_state)
 
     cr0   = saved_state[SMRAM_FIELD_P6_CR0];
     cr3   = saved_state[SMRAM_FIELD_P6_CR3];
+    pae_load_pdptes(); /* used only with PAE paging */
     cr4   = saved_state[SMRAM_FIELD_P6_CR4];
     dr[6] = saved_state[SMRAM_FIELD_P6_DR6];
     dr[7] = saved_state[SMRAM_FIELD_P6_DR7];
+    cpu_dr7_update();
 
     /* TR */
     tr.seg     = saved_state[SMRAM_FIELD_P6_TR_SELECTOR];
@@ -1147,9 +1179,11 @@ smram_restore_state_amd_k(uint32_t *saved_state)
     cr0   = saved_state[SMRAM_FIELD_AMD_K_CR0];
     cr2   = saved_state[SMRAM_FIELD_AMD_K_CR2];
     cr3   = saved_state[SMRAM_FIELD_AMD_K_CR3];
+    pae_load_pdptes(); /* used only with PAE paging */
     cr4   = saved_state[SMRAM_FIELD_AMD_K_CR4];
     dr[6] = saved_state[SMRAM_FIELD_AMD_K_DR6];
     dr[7] = saved_state[SMRAM_FIELD_AMD_K_DR7];
+    cpu_dr7_update();
 
     /* TR */
     tr.seg     = saved_state[SMRAM_FIELD_AMD_K_TR_SELECTOR];
@@ -1237,7 +1271,9 @@ smram_save_state_cyrix(uint32_t *saved_state, int in_hlt)
     saved_state[0] = dr[7];
     saved_state[1] = cpu_state.flags | (cpu_state.eflags << 16);
     saved_state[2] = cr0;
-    saved_state[3] = cpu_state.oldpc;
+    /* Out of a HLT, CURRENT_IP and NEXT_IP both point past it (Cyrix SMM
+       guide 94211, Appendix B), which a handler uses to tell the case. */
+    saved_state[3] = in_hlt ? cpu_state.pc : cpu_state.oldpc;
     saved_state[4] = cpu_state.pc;
     saved_state[5] = CS | (CPL << 21);
     saved_state[6] = 0x00000000;
@@ -1276,6 +1312,7 @@ static void
 smram_restore_state_cyrix(uint32_t *saved_state)
 {
     dr[7]            = saved_state[0];
+    cpu_dr7_update();
     cpu_state.flags  = saved_state[1] & 0xffff;
     cpu_state.eflags = saved_state[1] >> 16;
     cr0              = saved_state[2];
@@ -1366,6 +1403,7 @@ enter_smm(int in_hlt)
     cr4 = 0;
 
     dr[7] = 0x400;
+    cpu_dr7_update();
 
     if (is_cxsmm) {
         cpu_state.pc = 0x0000;
@@ -1563,6 +1601,8 @@ leave_smm(void)
         smram_restore_state_p6(saved_state);
         restart = saved_state[SMRAM_FIELD_P6_AUTOHALT_RESTART] & 0xffff;
     }
+    /* RSM reloads CR0, CD with it. */
+    cpu_car_update();
 
     /* An auto HALT restart re-enters the HALT state, EIP past the HLT again
        (Intel SDM vol. 3, 34.10). A latched SMI is taken there, at once, so
@@ -1621,13 +1661,34 @@ leave_smm(void)
     x386_common_log("leave_smm()\n");
 }
 
+/* #NM delivered while a block was being recorded (an x87 or MMX
+   instruction with CR0.TS set): the block is cut short by the lazy FPU
+   switch, not by its code, and must not be kept that way (386_dynarec.c).
+   Any other exception belongs to the code -- #UD from the ARPL Windows 9x
+   uses as a V86 breakpoint, #DE, #BR -- and the block ends there for good,
+   as it always did: discarding those recorded them afresh on every run. */
+int codegen_record_faulted;
+
 void
 x86_int(int num)
 {
     uint32_t addr;
 
+    /* A fault did not retire the instruction being stepped. Drop its
+       pending debug trap before entering the handler; a task switch may
+       establish a new task-switch trap during delivery. */
+    trap = 0;
+#ifdef USE_DYNAREC
+    if (codegen_in_recompile && (num == 7))
+        codegen_record_faulted = 1;
+#endif
     flags_rebuild();
     cpu_state.pc = cpu_state.oldpc;
+
+    /* Entering the debug exception handler clears DR7.GD, so the handler
+       can reach the debug registers */
+    if (num == 1)
+        dr[7] &= ~0x2000;
 
     if (msw & 1)
         cpu_use_exec ? pmodeint(num, 0) : pmodeint_2386(num, 0);
@@ -1643,7 +1704,7 @@ x86_int(int num)
                 x386_common_log("Triple fault in real mode - reset\n");
 #endif
             } else
-                x86_int(8);
+                x86_int((is_p6 && (num != 0x08) && (num != 0x0d)) ? 0x0d : 0x08);
         } else {
             if (stack32) {
                 writememw(ss, ESP - 2, cpu_state.flags);
@@ -1659,9 +1720,6 @@ x86_int(int num)
 
             cpu_state.flags &= ~I_FLAG;
             cpu_state.flags &= ~T_FLAG;
-#ifndef USE_NEW_DYNAREC
-            oxpc = cpu_state.pc;
-#endif
             cpu_state.pc = readmemw(0, addr);
             cpu_use_exec ? loadcs(readmemw(0, addr + 2)) : loadcs_2386(readmemw(0, addr + 2));
         }
@@ -1670,6 +1728,10 @@ x86_int(int num)
     cycles -= 70;
     CPU_BLOCK_END();
 }
+
+/* INT3 and INTO: software interrupts, but not IOPL-sensitive in V86 mode
+   (only INT n is) */
+int x86_int_sw_iopl_exempt = 0;
 
 void
 x86_int_sw(int num)
@@ -1684,8 +1746,10 @@ x86_int_sw(int num)
     else {
         addr = (num << 2) + idt.base;
 
+        /* Beyond the IDT limit: double fault on the 386 to the P5,
+           #GP on the P6 (the same for every source) */
         if ((num << 2UL) + 3UL > idt.limit)
-            x86_int(0x0d);
+            x86_int(is_p6 ? 0x0d : 0x08);
         else {
             if (stack32) {
                 writememw(ss, ESP - 2, cpu_state.flags);
@@ -1701,23 +1765,16 @@ x86_int_sw(int num)
 
             cpu_state.flags &= ~I_FLAG;
             cpu_state.flags &= ~T_FLAG;
-#ifndef USE_NEW_DYNAREC
-            oxpc = cpu_state.pc;
-#endif
             cpu_state.pc = readmemw(0, addr);
             cpu_use_exec ? loadcs(readmemw(0, addr + 2)) : loadcs_2386(readmemw(0, addr + 2));
             cycles -= timing_int_rm;
         }
     }
 
-#ifdef USE_DEBUG_REGS_486
-    trap &= ~1;
-#else
-    if (cpu_use_exec)
+    if (cpu_use_exec && !cpu_debug_regs_486)
         trap = 0;
     else
         trap &= ~1;
-#endif
     CPU_BLOCK_END();
 }
 
@@ -1755,19 +1812,12 @@ x86_int_sw_rm(int num)
     cpu_state.flags &= ~T_FLAG;
     cpu_state.pc = new_pc;
     cpu_use_exec ? loadcs(new_cs) : loadcs_2386(new_cs);
-#ifndef USE_NEW_DYNAREC
-    oxpc = cpu_state.pc;
-#endif
 
     cycles -= timing_int_rm;
-#ifdef USE_DEBUG_REGS_486
-    trap &= ~1;
-#else
-    if (cpu_use_exec)
+    if (cpu_use_exec && !cpu_debug_regs_486)
         trap = 0;
     else
         trap &= ~1;
-#endif
     CPU_BLOCK_END();
 
     return 0;
@@ -1834,7 +1884,12 @@ idivl(int32_t val)
         return 1;
     }
 
-    num   = (((uint64_t) EDX) << 32) | EAX;
+    num = (((uint64_t) EDX) << 32) | EAX;
+    /* The one quotient that doesn't fit 64 bits either: the host would trap. */
+    if ((val == -1) && (num == INT64_MIN)) {
+        divexcp();
+        return 1;
+    }
     quo   = num / val;
     rem   = num % val;
     quo32 = (int32_t) (quo & 0xFFFFFFFF);
@@ -1860,6 +1915,23 @@ void
 cpu_386_flags_rebuild(void)
 {
     flags_rebuild();
+}
+
+/* While a breakpoint is armed no page is entered into the read and write
+   lookup tables, so every data access takes the slow path, which makes the
+   check. The memory access macros and the effective-address fast path then
+   need no test of their own, and cost nothing with the option off. The tables
+   are flushed as a breakpoint gets armed. */
+void
+cpu_dr7_update(void)
+{
+    int armed = cpu_debug_regs_486 && is386 && (dr[7] & 0xff);
+
+    if (armed && !cpu_dr_armed) {
+        cpu_dr_armed = 1;
+        flushmmucache_nopc();
+    } else
+        cpu_dr_armed = armed;
 }
 
 extern uint64_t mmutranslate_noabrt_2386(uint32_t addr, int rw);
@@ -1908,7 +1980,7 @@ sysenter(UNUSED(uint32_t fetchdat))
         return cpu_state.abrt;
     }
 
-    if (!(msr.sysenter_cs & 0xFFF8)) {
+    if (!msr.sysenter_cs) { /* #GP only if the MSR is zero (Intel SDM 1999, SYSENTER/SYSEXIT) */
 #ifdef ENABLE_386_COMMON_LOG
         x386_common_log("SYSENTER: CS MSR is zero");
 #endif
@@ -1980,7 +2052,7 @@ sysexit(UNUSED(uint32_t fetchdat))
     x386_common_log("SYSEXIT called\n");
 #endif
 
-    if (!(msr.sysenter_cs & 0xFFF8)) {
+    if (!msr.sysenter_cs) { /* #GP only if the MSR is zero (Intel SDM 1999, SYSENTER/SYSEXIT) */
 #ifdef ENABLE_386_COMMON_LOG
         x386_common_log("SYSEXIT: CS MSR is zero");
 #endif
@@ -2150,7 +2222,7 @@ sysret(UNUSED(uint32_t fetchdat))
     cpu_state.seg_ss.limit      = 0xffffffff;
     cpu_state.seg_ss.limit_high = 0xffffffff;
     cpu_state.seg_ss.access     = 0xf3;
-    cpu_state.seg_cs.ar_high    = 0xcf;
+    cpu_state.seg_ss.ar_high    = 0xcf;
     cpu_state.seg_ss.checked    = 1;
 #ifdef USE_DYNAREC
     codegen_flat_ss = 0;

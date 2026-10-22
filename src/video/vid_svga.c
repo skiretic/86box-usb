@@ -1417,13 +1417,13 @@ svga_do_render(svga_t *svga)
     if (svga->dpms) {
         if (svga->dpms_render != NULL)
             svga->dpms_render(svga);
-        else
+        else if (svga->crtc[0x17] & 0x80)
             svga_render_blank(svga);
 
         return;
     }
 
-    if (!svga->override) {
+    if (!svga->override && (svga->crtc[0x17] & 0x80)) {
         svga->render_line_offset = svga->start_retrace_latch - svga->crtc[0x4];
         svga->render(svga);
     }
@@ -1453,7 +1453,7 @@ svga_do_render(svga_t *svga)
             svga->hwcursor_on--;
     }
 
-    if (!svga->override) {
+    if (!svga->override && (svga->crtc[0x17] & 0x80)) {
         svga->x_add = svga->left_overscan;
         svga_render_overscan_left(svga);
         svga_render_overscan_right(svga);
@@ -2375,7 +2375,7 @@ svga_doblit(int wx, int wy, svga_t *svga)
     video_blit_memtoscreen_monitor(x_start, y_start, svga->monitor->mon_xsize + x_add, svga->monitor->mon_ysize + y_add, svga->monitor_index);
 
     if (svga->vertical_linedbl)
-        svga->vertical_linedbl >>= 1;
+        svga->y_add >>= 1;
 }
 
 void

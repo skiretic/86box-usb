@@ -79,6 +79,11 @@ static int16_t  irq_vector_override[8] = {
     -1, -1, -1, -1, -1, -1, -1, -1
 };
 
+/* Lines a device has taken over for a controller of its own: the interrupt
+   controller must not deliver them, whatever the guest writes to its mask
+   register, so those bits are held set here. */
+static uint16_t pic_pinned_irqs = 0x0000;
+
 static void (*update_pending)(void);
 
 #ifdef USE_VFIO
@@ -302,11 +307,22 @@ pic_update_pending_at(void)
 #endif
     if (!(pic.interrupt & 0x20)) {
         pic2.int_pending = (find_best_interrupt(&pic2) != -1);
- 
-        if (pic2.int_pending)
-            pic.irr |= (1 << pic2.icw3);
-        else
-            pic.irr &= ~(1 << pic2.icw3);
+
+        /* The slave's INT output is hard-wired to the master's IR2 (see
+           pic.slaves[2]), regardless of the cascade ID programmed into the
+           slave's ICW3 - firmware that never initializes the slave (eg. the
+           Tandy VIS) would otherwise have its IRQ 0 cleared here. */
+        if (machines[machine].init == machine_at_tandy_vis_init) {
+            if (pic2.int_pending)
+                pic.irr |= 0x04;
+            else
+                pic.irr &= ~0x04;
+        } else {
+            if (pic2.int_pending)
+                pic.irr |= (1 << pic2.icw3);
+            else
+                pic.irr &= ~(1 << pic2.icw3);
+        }
 
         pic.int_pending = (find_best_interrupt(&pic) != -1);
     }
@@ -355,6 +371,10 @@ pic_reset(void)
 #ifdef USE_VFIO
     pic_acked = 0x0000;
 #endif
+
+    /* A line a device has taken over stays out of delivery across a reset. */
+    pic.imr  = (uint8_t) pic_pinned_irqs;
+    pic2.imr = (uint8_t) (pic_pinned_irqs >> 8);
 }
 
 void
@@ -386,6 +406,37 @@ pic_set_vector_override(uint8_t irq, int vector)
 {
     if (irq < 8)
         irq_vector_override[irq] = (vector >= 0) ? (vector & 0xff) : -1;
+}
+
+/* Keep a line out of the controller's delivery for good, or hand it back when
+   the device that claimed it goes away. The line is still reported to whoever
+   watches the controller, it is only the delivery that is held off. */
+void
+pic_set_line_pinned(int irq, int pinned)
+{
+    uint16_t bit;
+    uint8_t  b;
+    pic_t   *dev;
+
+    if ((irq < 0) || (irq > 15))
+        return;
+
+    dev = (irq < 8) ? &pic : &pic2;
+    bit = (uint16_t) (1u << irq);
+    b   = (uint8_t) (1u << (irq & 7));
+
+    if (pinned)
+        pic_pinned_irqs |= bit;
+    else
+        pic_pinned_irqs &= (uint16_t) ~bit;
+
+    if (pic_pinned_irqs & bit)
+        dev->imr |= b;
+    else
+        dev->imr &= (uint8_t) ~b;
+
+    if (update_pending != NULL)
+        update_pending();
 }
 
 static uint8_t
@@ -636,7 +687,7 @@ pic_read(uint16_t addr, void *priv)
     return dev->data_bus;
 }
 
-static void
+void
 pic_write(uint16_t addr, uint8_t val, void *priv)
 {
     pic_t *dev = (pic_t *) priv;
@@ -667,7 +718,7 @@ pic_write(uint16_t addr, uint8_t val, void *priv)
                     update_pending();
                 break;
             case STATE_NONE:
-                dev->imr = val;
+                dev->imr = (uint8_t) (val | (uint8_t) ((dev == &pic2) ? (pic_pinned_irqs >> 8) : pic_pinned_irqs));
                 if ((dev->flags & PIC_IBM5140) || (is286 && !force_xt_imr_timing) || dev->zenith)
                     update_pending();
                 else if (force_xt_imr_timing)
@@ -935,6 +986,14 @@ picint_common(uint16_t num, int level, int set, uint8_t *irq_state)
     }
 
     uint16_t lines = level ? 0x0000 : num;
+
+    /* The Tandy VIS firmware leaves the master's ICW3 at 0 and never
+       initializes the slave, but the slave is still wired to the master's
+       IR2 and its IRQ's still reach its IRR - Modular Windows probes IRQ 9
+       through the IRR's at startup, and the VIS reboots in a loop if the
+       probe fails. */
+    if (!slaves && (machines[machine].init == machine_at_tandy_vis_init))
+        slaves = 1;
 
     if (!slaves)
         max = 8;

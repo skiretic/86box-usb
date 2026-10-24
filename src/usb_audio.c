@@ -6,10 +6,20 @@
  *
  *          This file is part of the 86Box distribution.
  *
- *          USB speaker, written from the USB Device Class Definition for
- *          Audio Devices 1.0, Audio Data Formats 1.0 and Terminal Types
- *          1.0: 16-bit stereo PCM on an adaptive isochronous endpoint,
- *          resampled to the mixer rate.
+ *          USB speaker: 16-bit stereo PCM on an adaptive isochronous
+ *          endpoint, resampled to the mixer rate.
+ *
+ *          Written from:
+ *          - USB Device Class Definition for Audio Devices, Release 1.0,
+ *            March 18, 1998 ("Audio 1.0").
+ *          - USB Device Class Definition for Audio Data Formats,
+ *            Release 1.0, March 18, 1998 ("Audio Formats 1.0").
+ *          - USB Device Class Definition for Terminal Types, Release 1.0,
+ *            March 18, 1998.
+ *          - Universal Serial Bus Specification, Revision 1.1,
+ *            September 23, 1998.
+ *          - Universal Host Controller Interface (UHCI) Design Guide,
+ *            Revision 1.1, March 1996.
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -41,7 +51,8 @@
 #define AUD_FU_ID 2
 #define AUD_OT_ID 3
 
-/* Requests, control selectors (Audio 1.0 A.9, A.10). */
+/* Request codes and control selectors (Audio 1.0 Table A-9, p. 101 /
+   PDF 101; Tables A-11 and A-19, p. 102-104 / PDF 102-104). */
 #define AUD_SET_CUR 0x01
 #define AUD_GET_CUR 0x81
 #define AUD_GET_MIN 0x82
@@ -52,11 +63,13 @@
 #define AUD_VOLUME_CONTROL  0x02
 #define AUD_SAMPLING_FREQ   0x01
 
-/* Volume in 1/256 dB. */
+/* Volume in 1/256 dB; 8000h means silence and is valid for CUR only
+   (Audio 1.0 s5.2.2.4.3.2, p. 76-77 / PDF 76-77). This device offers
+   -60 dB to 0 dB in 1 dB steps. */
 #define AUD_VOL_MIN (-60 * 256)
 #define AUD_VOL_MAX 0
 #define AUD_VOL_RES 256
-#define AUD_VOL_SILENCE (-32768) /* 8000h: -infinity dB */
+#define AUD_VOL_SILENCE (-32768)
 
 /* Queue in source frames; playback starts once 30 ms is in, and at most
    200 ms is kept. */
@@ -64,12 +77,14 @@
 #define AUD_START_MS 30
 #define AUD_MAX_MS   200
 
-/* Adaptive sink (USB 1.1 5.10.4.1.3 p63): the step follows the received
-   rate, read as the queue fill drifting from where playback started. A
-   fill off by the whole target would move the step 5%; the step moves at
-   most 1%, past UHCI's SOFMOD range (12000 +/- 64 bit times) and the
-   +/-1000 ppm Audio Formats 2.2.5 asks for. The fill is smoothed over
-   about 10 mixer calls. */
+/* An adaptive sink takes its rate from the data it receives (USB 1.1
+   s5.10.4.1.3, p. 63 / PDF 79). Here the resampling step follows the queue
+   fill as it drifts from the fill playback started at. A fill off by the
+   whole target would move the step 5%; the step moves at most 1%, which
+   covers both UHCI's frame length range (11936 to 12063 bit times, UHCI 1.1
+   s2.1.6, p. 15 / PDF 21) and the +/-1000 ppm an adaptive endpoint must
+   tolerate (Audio Formats 1.0 s2.2.5, p. 11 / PDF 11). The fill is
+   smoothed over about 10 mixer calls. */
 #define AUD_ADAPT_GAIN 0.05
 #define AUD_ADAPT_MAX  0.01
 #define AUD_FILL_ALPHA 0.1
@@ -77,7 +92,8 @@
 static const uint32_t aud_rates[] = { 8000, 11025, 16000, 22050, 32000, 44100, 48000 };
 #define AUD_N_RATES (sizeof(aud_rates) / sizeof(aud_rates[0]))
 
-/* 49 frames of 4 bytes: 48 kHz plus the one extra an adaptive source may send. */
+/* 49 frames of 4 bytes. At 48 kHz a 1 ms packet may hold one sample more
+   than the average of 48 (Audio Formats 1.0 s2.2.1, p. 9 / PDF 9). */
 #define AUD_MPS 196
 
 static const uint8_t aud_dev_desc[18] = {
@@ -104,30 +120,36 @@ static const uint8_t aud_cfg_desc[AUD_CFG_LEN] = {
     0x80, /* bus powered */
     50,   /* 100 mA */
 
-    /* AudioControl interface (Audio 1.0 4.3.1) */
+    /* AudioControl interface (Audio 1.0 s4.3.1, p. 36 / PDF 36) */
     9, 0x04, AUD_IF_CONTROL, 0, 0, 0x01, 0x01, 0x00, 0,
-    /* Header: ADC 1.00, one streaming interface (Table 4-2) */
+    /* Header: ADC 1.00, one streaming interface (Table 4-2, p. 37 / PDF 37) */
     9, 0x24, 0x01, 0x00, 0x01, AUD_AC_CS_LEN, 0x00, 1, AUD_IF_STREAM,
-    /* Input Terminal: USB streaming, 2 channels, left and right (Table 4-3) */
+    /* Input Terminal: USB streaming (0101h), 2 channels, left and right
+       (Table 4-3, p. 39 / PDF 39; Terminal Types 1.0 s2.1, p. 7 / PDF 7) */
     12, 0x24, 0x02, AUD_IT_ID, 0x01, 0x01, 0, 2, 0x03, 0x00, 0, 0,
-    /* Feature Unit: master Mute and Volume, none per channel (Table 4-7) */
+    /* Feature Unit: master Mute and Volume, none per channel (Table 4-7,
+       p. 43 / PDF 43) */
     10, 0x24, 0x06, AUD_FU_ID, AUD_IT_ID, 1, 0x03, 0x00, 0x00, 0,
-    /* Output Terminal: Speaker (Table 4-4) */
+    /* Output Terminal: Speaker (0301h) (Table 4-4, p. 40 / PDF 40; Terminal
+       Types 1.0 s2.3, p. 8 / PDF 8) */
     9, 0x24, 0x03, AUD_OT_ID, 0x01, 0x03, 0, AUD_FU_ID, 0,
 
-    /* AudioStreaming interface, setting 0: zero bandwidth (4.5.1) */
+    /* AudioStreaming interface, setting 0: no endpoint, so zero bandwidth
+       (Audio 1.0 s3.7.2, p. 31 / PDF 31) */
     9, 0x04, AUD_IF_STREAM, 0, 0, 0x01, 0x02, 0x00, 0,
     /* Setting 1: one isochronous endpoint */
     9, 0x04, AUD_IF_STREAM, 1, 1, 0x01, 0x02, 0x00, 0,
-    /* AS_GENERAL: from the Input Terminal, one frame of delay, PCM (Table 4-19) */
+    /* AS_GENERAL: from the Input Terminal, one frame of delay, PCM (Table 4-19,
+       p. 60 / PDF 60) */
     7, 0x24, 0x01, AUD_IT_ID, 1, 0x01, 0x00,
-    /* Type I: 2 channels, 2-byte subframes, 16 bits, discrete rates (Formats 2.2.5) */
+    /* Type I: 2 channels, 2-byte subframes, 16 bits, discrete rates (Audio
+       Formats 1.0 s2.2.5, p. 10-11 / PDF 10-11) */
     AUD_TYPE_I_LEN, 0x24, 0x02, 0x01, 2, 2, 16, AUD_N_RATES,
     AUD_RATE(8000), AUD_RATE(11025), AUD_RATE(16000), AUD_RATE(22050),
     AUD_RATE(32000), AUD_RATE(44100), AUD_RATE(48000),
-    /* Endpoint 1 OUT, isochronous adaptive, 1 ms (Table 4-20) */
+    /* Endpoint 1 OUT, isochronous adaptive, 1 ms (Table 4-20, p. 61 / PDF 61) */
     9, 0x05, AUD_EP_OUT, 0x09, AUD_MPS & 0xff, AUD_MPS >> 8, 1, 0, 0,
-    /* EP_GENERAL: Sampling Frequency Control (Table 4-21) */
+    /* EP_GENERAL: Sampling Frequency Control (Table 4-21, p. 62 / PDF 62) */
     7, 0x25, 0x01, 0x01, 0, 0, 0
 };
 
@@ -183,8 +205,11 @@ usb_audio_put16(uint8_t *p, int v)
     p[1] = (v >> 8) & 0xff;
 }
 
-/* Feature Unit Mute and Volume on the master channel, first form and the
-   0xFF second form, which here addresses that one control (5.2.2.4). */
+/* Mute and Volume of the Feature Unit, which exist on the master channel
+   (0) only. A request may name channel 0 (first form) or FFh, all channels
+   (second form); with one Control of each type, both forms address the same
+   Control and carry the same parameter block (Audio 1.0 s5.2.2.4,
+   p. 74-75 / PDF 74-75). Any other channel or selector is stalled. */
 static int
 usb_audio_fu_request(usb_audio_t *dev, const uint8_t *setup, uint8_t *data)
 {
@@ -202,7 +227,8 @@ usb_audio_fu_request(usb_audio_t *dev, const uint8_t *setup, uint8_t *data)
                 data[0] = dev->mute;
                 return 1;
             }
-            /* One available Mute Control: one byte in either form (Table 5-16). */
+            /* Mute has CUR only. One byte in either form (Tables 5-16 and
+               5-17, p. 75-76 / PDF 75-76). */
             if ((setup[1] == AUD_SET_CUR) && (wlength == 1)) {
                 dev->mute = !!data[0];
                 return 0;
@@ -224,11 +250,13 @@ usb_audio_fu_request(usb_audio_t *dev, const uint8_t *setup, uint8_t *data)
                     usb_audio_put16(data, AUD_VOL_RES);
                     return 2;
                 case AUD_SET_CUR:
-                    /* One available Volume Control: two bytes in either form (Table 5-18). */
+                    /* Two bytes in either form (Tables 5-18 and 5-19,
+                       p. 76-77 / PDF 76-77). */
                     if (wlength != 2)
                         return USB_DATA_STALL;
-                    /* 8000h is silence and stays CUR; anything else is rounded to
-                       the closest available setting (5.2.2.4.3.2). */
+                    /* 8000h (silence) is kept as is. Any other value is
+                       rounded to the closest available setting, which GET_CUR
+                       then reports (s5.2.2.4.3.2, p. 76 / PDF 76). */
                     v = (int16_t) (data[0] | (data[1] << 8));
                     if (v == AUD_VOL_SILENCE) {
                         dev->volume = v;
@@ -257,21 +285,27 @@ usb_audio_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     uint16_t     windex  = setup[4] | (setup[5] << 8);
     uint16_t     wlength = setup[6] | (setup[7] << 8);
 
-    /* bRequest bit 7 is the Get bit and must match bmRequestType's direction
-       (Tables 5-1/5-2 p66-67): a Set sent device-to-host would run on stale
-       buffer bytes. Anything else is no request this device supports (5.2). */
+    /* Every Get request is device-to-host and every Set request
+       host-to-device (Audio 1.0 Tables 5-1 and 5-2, p. 66-67 / PDF 66-67).
+       The request codes carry the same split in bit 7, so the two bits must
+       agree; a Set sent device-to-host would otherwise act on a data buffer
+       the host never filled. An unsupported request is stalled (s5.2, p. 65
+       / PDF 65). */
     if ((setup[0] ^ setup[1]) & 0x80)
         return USB_DATA_STALL;
 
-    /* Class requests to the AudioControl interface: only the Feature Unit
-       has Controls (5.2.1: unknown entities STALL). */
+    /* Class requests to the AudioControl interface name the entity in the
+       high byte of wIndex. Only the Feature Unit has Controls; a request to
+       any other entity is stalled (s5.2.1.1-s5.2.1.2, p. 66-67 / PDF 66-67). */
     if (((setup[0] == 0x21) || (setup[0] == 0xa1)) && ((windex & 0xff) == AUD_IF_CONTROL)) {
         if ((windex >> 8) == AUD_FU_ID)
             return usb_audio_fu_request(dev, setup, data);
         return USB_DATA_STALL;
     }
 
-    /* Sampling Frequency Control of the streaming endpoint (5.2.3.2.3.1). */
+    /* Sampling Frequency Control of the streaming endpoint: a rate not in
+       the descriptor's list is rounded to the closest listed rate, which
+       GET_CUR then reports (s5.2.3.2.3.1, p. 96 / PDF 96). */
     if (((setup[0] == 0x22) || (setup[0] == 0xa2)) && (windex == AUD_EP_OUT) && (setup[3] == AUD_SAMPLING_FREQ) &&
         (setup[2] == 0)) {
         if (setup[1] == AUD_GET_CUR) {
@@ -385,7 +419,8 @@ usb_audio_set_interface(usb_dev_t *usb, int intf, int alt)
     if (intf != AUD_IF_STREAM)
         return;
 
-    /* Setting 0 is zero bandwidth: the stream stops and its queue goes. */
+    /* Any SET_INTERFACE empties the queue; setting 0 has no endpoint, so the
+       stream also stops. */
     usb_audio_stop(dev);
     dev->streaming = (alt == 1);
     usb_trace(USB_LOG_SCHED, -1, "Speaker streaming setting %i, %u Hz", alt, dev->rate);

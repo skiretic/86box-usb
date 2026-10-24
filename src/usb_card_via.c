@@ -6,9 +6,14 @@
  *
  *          This file is part of the 86Box distribution.
  *
- *          VIA VT83C572 PCI to USB controller on a PCI add-in card, written
- *          from the VT83C572 Preliminary Release 0.65 (January 1997): one
- *          UHCI 1.1 function with two root ports, on the lane's UHCI.
+ *          VIA VT83C572 PCI to USB controller on a PCI add-in card: one
+ *          UHCI 1.1 function with two root ports, using the UHCI in usb.c.
+ *
+ *          Written from:
+ *          - VIA VT83C572 PCI to USB Controller, Preliminary Release 0.65,
+ *            January 1997 ("data sheet").
+ *          - Universal Host Controller Interface (UHCI) Design Guide,
+ *            Revision 1.1, March 1996.
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -29,8 +34,10 @@
 #include <86box/usb_log.h>
 #include <86box/plat_unused.h>
 
-#define LEGSUP_USBIRQS    0x10 /* C1h bit 4 = LEGSUP bit 12 */
-#define LEGSUP_USBPIRQDEN 0x20 /* C1h bit 5 = LEGSUP bit 13 */
+/* LEGSUP (C0h-C1h) bits 12 and 13, as bits of C1h (UHCI 1.1 s5.2.1,
+   p. 39-40 / PDF 45-46). */
+#define LEGSUP_USBIRQS    0x10
+#define LEGSUP_USBPIRQDEN 0x20
 
 typedef struct vt83c572_t {
     usb_t  *usb;
@@ -41,10 +48,11 @@ typedef struct vt83c572_t {
     uint8_t irq_state;
 } vt83c572_t;
 
-/* INTA# carries the UHCI interrupt while LEGSUP USBPIRQDEN is set (UHCI 1.1
-   s5.2.1 bit 13). USBSMIEN and the 60h/64h trap enables only drive SMI#
-   (pin 51, DS p.6), which has no line on a PCI slot: they are kept as
-   register bits with no effect. */
+/* USBIRQS follows the UHCI interrupt. The interrupt reaches INTA# only
+   while LEGSUP USBPIRQDEN is set (UHCI 1.1 s5.2.1 bit 13, p. 40 / PDF 46,
+   where the line is PIIX's PIRQD). USBSMIEN and the 60h/64h trap enables
+   only drive SMI# (pin 51, data sheet p. 4 / PDF 6), which has no line on
+   a PCI slot, so they are kept as register bits with no effect. */
 static void
 vt83c572_update_irq(vt83c572_t *dev)
 {
@@ -84,8 +92,8 @@ vt83c572_update_io(vt83c572_t *dev)
 }
 
 /* Configuration space at its defaults, as at power-on and on PCIRST#
-   (DS p.3-5). The Revision ID is not in the datasheet: 00h, VIA's first
-   silicon of the 3038h UHCI. */
+   (data sheet p. 1-3 / PDF 3-5). The data sheet gives no Revision ID
+   value; 00h is used. */
 static void
 vt83c572_reset_regs(vt83c572_t *dev)
 {
@@ -122,9 +130,11 @@ vt83c572_read(int func, int addr, UNUSED(int len), void *priv)
     return dev->regs[addr & 0xff];
 }
 
-/* Read-only and reserved bytes keep their value; 00h-03h, 08h-0Bh, 0Eh,
-   0Fh, 3Dh and 60h are fixed (DS p.3-5). The BAR decodes AD[15:5]: 32
-   bytes of I/O, bits 31-16 reserved. */
+/* Read-only and reserved bytes keep their value. The data sheet marks
+   00h-03h, 08h-0Bh, 0Eh, 0Fh and 60h fixed (p. 1-3 / PDF 3-5); 3Dh, for
+   which it gives only a default, is kept read-only as PCI defines the
+   Interrupt Pin register. The BAR decodes AD[15:5], 32 bytes of I/O;
+   bits 31-16 are reserved. */
 static void
 vt83c572_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 {
@@ -135,12 +145,14 @@ vt83c572_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
 
     switch (addr & 0xff) {
         case 0x04:
-            /* Bit 3 fixed at 0, bits 6-5 reserved; bit 1 enables nothing. */
+            /* Bit 3 fixed at 0, bits 6-5 reserved; bit 1 latches but there
+               is no memory BAR for it to enable. */
             dev->regs[0x04] = val & 0x97;
             vt83c572_update_io(dev);
             break;
         case 0x07:
-            /* Bits 14-11 are the PCI error statuses, write 1 to clear. */
+            /* Status bits 14-11 are the PCI error flags; writing 1 clears
+               one. */
             dev->regs[0x07] &= ~(val & 0x78);
             break;
 
@@ -160,12 +172,14 @@ vt83c572_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             break;
 
         case 0x40:
-            /* Bit 4 reserved. Bit 6: a port babbling at EOF is not disabled. */
+            /* Bit 4 reserved. Bit 6 set: a port babbling at EOF is not
+               disabled (data sheet p. 2 / PDF 4). */
             dev->regs[0x40] = val & 0xef;
             uhci_set_babble_keep_port(dev->usb, val & 0x40);
             break;
         case 0x41:
-            /* Bit 2 trap status option, bit 1 A20GATE pass-through option. */
+            /* Bit 2 trap status option, bit 1 A20GATE pass-through option
+               (p. 3 / PDF 5); both concern SMI# only. */
             dev->regs[0x41] = val & 0x06;
             break;
 
@@ -173,7 +187,8 @@ vt83c572_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             uhci_legsup_write_c0(&dev->regs[0xc0], val);
             break;
         case 0xc1:
-            /* Bits 7 and 3-0 are write-1-to-clear, bit 4 read-only, bit 6 reserved. */
+            /* LEGSUP bits 15 and 11-8 are write-1-to-clear, bit 12 read-only,
+               bit 14 reserved (UHCI 1.1 s5.2.1, p. 39-40 / PDF 45-46). */
             dev->regs[0xc1] = (dev->regs[0xc1] & 0x9f & ~(val & 0x8f)) | (val & 0x20);
             vt83c572_update_irq(dev);
             break;

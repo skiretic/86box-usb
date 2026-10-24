@@ -6,9 +6,15 @@
  *
  *          This file is part of the 86Box distribution.
  *
- *          USB mass storage, written from the USB Mass Storage Class
- *          Bulk-Only Transport 1.0: a bridge to one 86Box SCSI bus
- *          whose drives are its logical units.
+ *          USB mass storage: a bridge to one 86Box SCSI bus whose drives
+ *          are its logical units.
+ *
+ *          Written from:
+ *          - Universal Serial Bus Mass Storage Class Bulk-Only Transport,
+ *            Revision 1.0, September 31, 1999 ("BOT 1.0"; the date is
+ *            as printed).
+ *          - Universal Serial Bus Mass Storage Class Specification
+ *            Overview, Revision 1.4, February 19, 2010.
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -50,13 +56,14 @@ enum {
     MSD_DATA_OUT, /* taking the host's data */
     MSD_IN_STALL, /* data ended short of the host's length: Bulk-In STALLs, then the CSW */
     MSD_CSW,      /* the CSW is next on Bulk-In */
-    MSD_INVALID   /* after an invalid CBW both pipes stall until a Bulk-Only Mass Storage Reset */
+    MSD_INVALID   /* after an invalid CBW: both pipes stall; the Bulk-Only Mass
+                     Storage Reset of a Reset Recovery ends this state */
 };
 
 static const uint8_t usb_msd_dev_desc[18] = {
     18, 0x01,   /* bLength, DEVICE */
     0x10, 0x01, /* bcdUSB 1.10 */
-    0x00, 0x00, 0x00, /* class in the interface (BOT 4.1) */
+    0x00, 0x00, 0x00, /* class in the interface (BOT 1.0 s4.1, p. 9 / PDF 9) */
     64,         /* bMaxPacketSize0 */
     0x00, 0x00, /* idVendor */
     0x03, 0x00, /* idProduct */
@@ -72,9 +79,11 @@ static const uint8_t usb_msd_cfg_desc[USB_MSD_CFG_LEN] = {
     9, 0x02, USB_MSD_CFG_LEN, 0x00, 1, 1, 0,
     0x80, /* bus powered */
     50,   /* 100 mA */
-    /* Interface 0: mass storage, SCSI transparent command set, Bulk-Only (Overview 1.4, BOT 4.3) */
+    /* Interface 0: mass storage, SCSI transparent command set (06h), Bulk-Only
+       (50h) (Overview 1.4 Tables 1 and 2, p. 3-4 / PDF 11-12; BOT 1.0 s4.3,
+       p. 11 / PDF 11) */
     9, 0x04, 0, 0, 2, 0x08, 0x06, 0x50, 0,
-    /* Bulk IN EP1 and bulk OUT EP2, 64 bytes (BOT 4.4) */
+    /* Bulk IN EP1 and bulk OUT EP2, 64 bytes (BOT 1.0 s4.4, p. 11 / PDF 11) */
     7, 0x05, 0x80 | MSD_EP_IN, 0x02, 64, 0x00, 0,
     7, 0x05, MSD_EP_OUT, 0x02, 64, 0x00, 0
 };
@@ -111,7 +120,8 @@ usb_msd_put_le32(uint8_t *p, uint32_t v)
     p[3] = v >> 24;
 }
 
-/* The drives on the bus are LUN 0..n-1 in SCSI ID order. */
+/* The drives on the bus are LUN 0..n-1 in SCSI ID order, so the LUNs are
+   contiguous from 0 as BOT 1.0 s3.2 requires (p. 7 / PDF 7). */
 static scsi_device_t *
 usb_msd_lun(const usb_msd_t *dev, int lun)
 {
@@ -139,8 +149,8 @@ usb_msd_n_luns(const usb_msd_t *dev)
     return n;
 }
 
-/* The target's command ends: phase 1 finishes a completed data stage,
-   anything else is stopped. */
+/* End the target's command: phase 1 runs it to completion after a full
+   data stage; otherwise it is stopped. */
 static void
 usb_msd_close_command(usb_msd_t *dev, int complete)
 {
@@ -172,8 +182,11 @@ usb_msd_buf_len(const usb_msd_t *dev)
     return (uint32_t) dev->sd->sc->temp_buffer_sz;
 }
 
-/* Host expectation (direction, dCBWDataTransferLength) against the device's
-   intent: the thirteen cases of BOT 6.7. */
+/* Match the host's expectation (direction bit and dCBWDataTransferLength)
+   against the target's intent, as in the thirteen cases of BOT 1.0 s6.7
+   (Table 6.1, p. 19 / PDF 19; cases in s6.7.1-s6.7.3, p. 19-22 / PDF 19-22).
+   Hn/Hi/Ho: the host expects no data, data in, data out; Dn/Di/Do: the
+   same for the target. A Phase Error stops the target's command. */
 static void
 usb_msd_plan(usb_msd_t *dev, int host_in, int dev_dir)
 {
@@ -183,7 +196,7 @@ usb_msd_plan(usb_msd_t *dev, int host_in, int dev_dir)
     dev->residue  = 0;
 
     if (dev->host_len == 0) {
-        /* (1) Hn = Dn; (2), (3) the device had data: Phase Error. */
+        /* (1) Hn = Dn; (2), (3) the target had data: Phase Error. */
         if (dev_dir != 0) {
             usb_msd_close_command(dev, 0);
             dev->status = CSW_PHASE_ERROR;
@@ -194,7 +207,8 @@ usb_msd_plan(usb_msd_t *dev, int host_in, int dev_dir)
 
     if (host_in) {
         if (dev_dir > 0) {
-            /* (5), (6): the relevant data; (7) Hi < Di: the host's length, Phase Error. */
+            /* (5) Hi > Di, (6) Hi = Di: send the target's data, residue is
+               the rest; (7) Hi < Di: send the host's length, Phase Error. */
             if (dev->dev_len > dev->host_len) {
                 dev->dev_len = dev->host_len;
                 dev->status  = CSW_PHASE_ERROR;
@@ -203,8 +217,9 @@ usb_msd_plan(usb_msd_t *dev, int host_in, int dev_dir)
             dev->state = MSD_DATA_IN;
             return;
         }
-        /* (4) Hi > Dn: nothing to send; (8) Hi <> Do: Phase Error. The Bulk-In
-           pipe STALLs where the data would be. */
+        /* (4) Hi > Dn: nothing to send; (8) Hi <> Do: Phase Error. Either
+           way no data moves, and the device must STALL Bulk-In when it sends
+           less than the host asked for (s6.7.2, p. 20-21 / PDF 20-21). */
         if (dev_dir < 0) {
             usb_msd_close_command(dev, 0);
             dev->status = CSW_PHASE_ERROR;
@@ -214,9 +229,11 @@ usb_msd_plan(usb_msd_t *dev, int host_in, int dev_dir)
         return;
     }
 
-    /* The host sends dCBWDataTransferLength bytes, all accepted: (11), (12) the
-       target takes the first dev_len; (9) Ho > Dn: none; (10) Ho <> Di and
-       (13) Ho < Do: none, Phase Error. */
+    /* All dCBWDataTransferLength bytes from the host are accepted, which the
+       device may do instead of stalling Bulk-Out (s6.7.3, p. 21-22 /
+       PDF 21-22). (11) Ho > Do, (12) Ho = Do: the target takes the first
+       dev_len; (9) Ho > Dn: it takes none; (10) Ho <> Di and (13) Ho < Do:
+       it takes none, Phase Error. */
     n = 0;
     if (dev_dir < 0) {
         if (dev->dev_len <= dev->host_len)
@@ -244,8 +261,9 @@ usb_msd_cbw(usb_msd_t *dev, const uint8_t *buf, int len)
     int     cb_len;
     int     dev_dir = 0;
 
-    /* Valid (6.2.1): 31 bytes starting with the signature. Otherwise both pipes
-       STALL until a Reset Recovery (6.6.1). */
+    /* A valid CBW is 31 bytes and starts with the signature (BOT 1.0 s6.2.1,
+       p. 17 / PDF 17). After one that is not, Bulk-In stalls and Bulk-Out
+       stalls too until a Reset Recovery (s6.6.1, p. 18 / PDF 18). */
     if ((len != 31) || (usb_msd_le32(buf) != CBW_SIGNATURE)) {
         usb_trace(USB_LOG_SCHED, -1, "MSD invalid CBW (%i bytes), both pipes stall until reset", len);
         dev->state                       = MSD_INVALID;
@@ -262,8 +280,10 @@ usb_msd_cbw(usb_msd_t *dev, const uint8_t *buf, int len)
     lun           = buf[13] & 0x0f;
     cb_len        = buf[14] & 0x1f;
 
-    /* Meaningful (6.2.2): no reserved bits, an existing LUN, a 1-16 byte
-       command block. A CBW that is not is failed with no data. */
+    /* A meaningful CBW has no reserved bit set, names an existing LUN and
+       carries a 1 to 16 byte command block (s6.2.2, p. 17 / PDF 17; s5.1,
+       p. 14 / PDF 14). The spec leaves the answer to one that is not open
+       (s6.4, p. 18 / PDF 18); here it fails with no data. */
     dev->sd = NULL;
     if (!(buf[12] & 0x7f) && !(buf[13] & 0xf0) && !(buf[14] & 0xe0) && (cb_len >= 1) && (cb_len <= 16))
         dev->sd = usb_msd_lun(dev, lun);
@@ -274,12 +294,15 @@ usb_msd_cbw(usb_msd_t *dev, const uint8_t *buf, int len)
         memset(cdb, 0x00, sizeof(cdb));
         memcpy(cdb, buf + 15, cb_len);
 
-        /* A SCSI-2 host also puts the LUN in CDB byte 1 bits 7-5; the bridge
-           routes by bCBWLUN and every target is a single-LUN device. */
+        /* Hosts following SCSI-2 also put the LUN in CDB byte 1 bits 7-5.
+           The bridge routes by bCBWLUN, and each target is LUN 0 at its own
+           SCSI ID and rejects a command with those bits set, so they are
+           cleared when they repeat bCBWLUN. */
         if ((lun != 0) && ((cdb[1] >> 5) == lun))
             cdb[1] &= 0x1f;
 
-        /* No host limit: the target's own length is its intent (6.7). */
+        /* No length limit is passed to the target, so the length it wants is
+           its intent in the s6.7 sense, compared with the host's later. */
         dev->sd->buffer_length = -1;
         scsi_device_command_phase0(dev->sd, cdb);
         dev->open = 1;
@@ -325,7 +348,8 @@ usb_msd_data_in(usb_dev_t *usb, int ep, uint8_t *buf, int maxlen)
             dev->host_pos += n;
             if (dev->host_pos >= dev->dev_len) {
                 usb_msd_close_command(dev, dev->status != CSW_PHASE_ERROR);
-                /* Less than the host asked for: a short packet (or none), then STALL (6.7.2). */
+                /* Less than the host asked for: the data may end in a short
+                   packet, and Bulk-In then stalls (s6.7.2, p. 20 / PDF 20). */
                 dev->state = (dev->dev_len < dev->host_len) ? MSD_IN_STALL : MSD_CSW;
             }
             return n;
@@ -382,7 +406,8 @@ usb_msd_data_out(usb_dev_t *usb, int ep, const uint8_t *buf, int len)
             return USB_DATA_STALL;
 
         default:
-            /* No CBW before the CSW of the last one is read (3.4). */
+            /* The host may not send a CBW until it has read the CSW of the
+               last one (s3.4, p. 8 / PDF 8). */
             return USB_DATA_NAK;
     }
 }
@@ -399,15 +424,16 @@ usb_msd_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if ((windex != 0) || (wvalue != 0))
         return USB_DATA_STALL;
 
-    /* Bulk-Only Mass Storage Reset (3.1): ready for the next CBW; toggles and
-       halts stay as they are. */
+    /* Bulk-Only Mass Storage Reset: ready for the next CBW; data toggles and
+       endpoint halts stay as they are (BOT 1.0 s3.1, p. 7 / PDF 7). */
     if ((setup[0] == 0x21) && (setup[1] == MSD_RESET) && (wlength == 0)) {
         usb_trace(USB_LOG_SCHED, -1, "MSD Bulk-Only Mass Storage Reset");
         usb_msd_abort(dev);
         return 0;
     }
 
-    /* Get Max LUN (3.2). */
+    /* Get Max LUN: the highest LUN, 0 when there is none (s3.2, p. 7 /
+       PDF 7). */
     if ((setup[0] == 0xa1) && (setup[1] == MSD_GET_MAX_LUN) && (wlength == 1)) {
         n       = usb_msd_n_luns(dev);
         data[0] = (n > 0) ? (n - 1) : 0;
@@ -445,7 +471,9 @@ usb_msd_init(UNUSED(const device_t *info))
     /* It takes a SCSI bus like any host adapter. */
     dev->bus = scsi_get_bus();
 
-    /* At least 12 hex digits, unique per product (BOT 4.1.1). */
+    /* At least 12 characters from 0-9 and A-F, the last 12 unique for this
+       vendor and product ID (BOT 1.0 s4.1.1-s4.1.2, p. 9-10 / PDF 9-10).
+       The SCSI bus number keeps two drives in one machine apart. */
     snprintf(dev->serial, sizeof(dev->serial), "86B00000%04X", dev->bus);
     dev->strings[0] = "86Box";
     dev->strings[1] = "USB Mass Storage";

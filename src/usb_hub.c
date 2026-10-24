@@ -6,10 +6,15 @@
  *
  *          This file is part of the 86Box distribution.
  *
- *          USB 1.1 hub, written from USB 1.1 chapter 11: a full-speed,
- *          self-powered hub with four downstream ports, per-port power
- *          switching and per-port over-current reporting, on the USB
- *          device core.
+ *          USB 1.1 hub: a full-speed, self-powered hub with four
+ *          downstream ports, per-port power switching and per-port
+ *          over-current reporting, on the USB device core.
+ *
+ *          Written from:
+ *          - Universal Serial Bus Specification, Revision 1.1,
+ *            September 23, 1998 (chapters 7, 9 and 11).
+ *          - Universal Serial Bus Specification, Revision 1.0,
+ *            January 15, 1996 (the hub descriptor type).
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -33,7 +38,8 @@
 
 #define HUB_PORTS 4
 
-/* Class requests (Table 11-11) and feature selectors (Table 11-12). */
+/* Class request codes and feature selectors (USB 1.1 Tables 11-11 and
+   11-12, p. 268 / PDF 284). */
 #define HUB_GET_STATUS     0x00
 #define HUB_CLEAR_FEATURE  0x01
 #define HUB_SET_FEATURE    0x03
@@ -54,7 +60,9 @@
 #define C_PORT_OVER_CURRENT 19
 #define C_PORT_RESET        20
 
-/* wPortStatus (Table 11-15). A wPortChange bit is its C_PORT_ selector - 16. */
+/* wPortStatus bits (USB 1.1 Table 11-15, p. 274 / PDF 290) and wPortChange
+   bits (Table 11-16, p. 277 / PDF 293). A wPortChange bit number is its
+   C_PORT_ feature selector minus 16. */
 #define PS_CONNECTION 0x0001
 #define PS_ENABLE     0x0002
 #define PS_SUSPEND    0x0004
@@ -67,9 +75,12 @@
 #define PC_SUSPEND    0x0004
 #define PC_RESET      0x0010
 
-#define HUB_PWRON2PWRGOOD 50      /* 2 ms units: 100 ms */
-#define HUB_RESET_US      10000.0 /* 10 ms is preferred (11.5.1.5) */
-#define HUB_RESUME_US     20000.0 /* 11.5.1.9 */
+/* bPwrOn2PwrGood is in 2 ms units (USB 1.1 Table 11-8, p. 264 / PDF 280):
+   50 = 100 ms. Resetting lasts 10 to 20 ms, 10 ms preferred (s11.5.1.5,
+   p. 242 / PDF 258); Resuming lasts 20 ms (s11.5.1.9, p. 243 / PDF 259). */
+#define HUB_PWRON2PWRGOOD 50
+#define HUB_RESET_US      10000.0
+#define HUB_RESUME_US     20000.0
 
 enum {
     HUB_TIMER_NONE = 0,
@@ -95,10 +106,15 @@ typedef struct usb_hub_t {
 
 int usb_hub_type = 0;
 
+/* Device and configuration descriptors. The hub class fixes the class
+   codes, the single Status Change endpoint (interrupt IN) and its bInterval
+   of FFh (USB 1.1 s11.15.1, p. 263 / PDF 279). MaxPower is what the hub
+   draws from VBUS (s11.14, p. 262 / PDF 278); this hub is self-powered and
+   draws nothing. */
 static const uint8_t hub_dev_desc[18] = {
     18, 0x01,   /* bLength, DEVICE */
     0x10, 0x01, /* bcdUSB 1.10 */
-    0x09, 0x00, /* bDeviceClass HUB_CLASSCODE, bDeviceSubClass (11.15.1) */
+    0x09, 0x00, /* bDeviceClass 09h (hub), bDeviceSubClass 0 */
     0x00,       /* bDeviceProtocol */
     64,         /* bMaxPacketSize0 */
     0x00, 0x00, /* idVendor */
@@ -112,13 +128,16 @@ static const uint8_t hub_cfg_desc[25] = {
     9, 0x02, 25, 0, /* CONFIGURATION, wTotalLength */
     1, 1, 0,        /* bNumInterfaces, bConfigurationValue, iConfiguration */
     0xc0,           /* bmAttributes: self-powered */
-    0,              /* MaxPower: nothing from VBUS (Table 11-7) */
+    0,              /* MaxPower */
     9, 0x04, 0, 0, 1, 0x09, 0x00, 0x00, 0, /* INTERFACE: one endpoint, hub class */
-    7, 0x05, 0x81, 0x03, 1, 0, 0xff        /* Status Change endpoint: EP1 IN, interrupt, 1 byte, FFh */
+    7, 0x05, 0x81, 0x03, 1, 0, 0xff        /* ENDPOINT: EP1 IN, interrupt, 1 byte, bInterval FFh */
 };
 
-/* Table 11-8. wHubCharacteristics 0009h: per-port power switching,
-   not compound, per-port over-current. All ports removable. */
+/* Hub descriptor (USB 1.1 Table 11-8, p. 264-265 / PDF 280-281).
+   wHubCharacteristics 0009h: per-port power switching, not part of a
+   compound device, per-port over-current reporting. DeviceRemovable 0:
+   every port is removable. PortPwrCtrlMask is kept only for USB 1.0
+   software and is all ones (s11.11, p. 255 / PDF 271). */
 static const uint8_t hub_desc[9] = {
     9, 0x29, HUB_PORTS,
     0x09, 0x00,
@@ -153,7 +172,10 @@ hub_port_timer_start(usb_hub_port_t *p, int op, double us)
     timer_on_auto(&p->timer, us);
 }
 
-/* Attach detection, once the port has power and a device (7.1.7.1). */
+/* A powered port with a device on it detects the attach: PORT_CONNECTION
+   and C_PORT_CONNECTION are set (USB 1.1 s11.16.2.6.1.1, p. 275 / PDF 291;
+   s11.16.2.6.2.1, p. 277 / PDF 293). PORT_LOW_SPEED is set at the same
+   time; the host reads it only once the port is enabled. */
 static void
 hub_port_connect(usb_hub_port_t *p)
 {
@@ -162,15 +184,24 @@ hub_port_connect(usb_hub_port_t *p)
     hub_port_trace(p, "connect detected");
 }
 
+/* Power is good bPwrOn2PwrGood after SetPortFeature(PORT_POWER). Until
+   then the port sees no device, so a connect is reported no earlier than
+   the host is told to wait. */
 static int
 hub_port_power_good(const usb_hub_port_t *p)
 {
     return (p->status & PS_POWER) && (p->timer_op != HUB_TIMER_POWER);
 }
 
-/* Powered-off and Not Configured: no power, every status and change bit 0
-   (11.16.2.6.1-2). The device loses power with its address and
-   configuration and answers nothing until powered and reset (9.1.1.2). */
+/* Powered-off (and Not Configured, which this hub treats the same way):
+   the port has no power and every wPortStatus and wPortChange bit reads 0
+   (USB 1.1 s11.16.2.6.1-s11.16.2.6.2, p. 274-278 / PDF 290-294; this hub
+   never sets the over-current bits). A device that loses power drops back
+   to the Powered state, without address or configuration (Figure 9-1,
+   p. 176 / PDF 192), and answers nothing until it sees a reset (s9.1.1.3,
+   p. 178 / PDF 194). usb_dev_bus_reset() clears the address and
+   configuration; clearing powered_reset makes the device ignore traffic
+   until the next port reset. */
 static void
 hub_port_power_off(usb_hub_port_t *p)
 {
@@ -198,14 +229,20 @@ hub_port_timer(void *priv)
             break;
 
         case HUB_TIMER_RESET:
-            /* End of Resetting: enabled at once (11.16.2.9). */
+            /* At the end of reset signaling the hub sets C_PORT_RESET and
+               enables the port at once (USB 1.1 s11.16.2.9, p. 279 /
+               PDF 295). */
             p->status = (p->status & ~PS_RESET) | PS_ENABLE;
             p->change |= PC_RESET;
             hub_port_trace(p, "reset done");
             break;
 
         case HUB_TIMER_RESUME:
-            /* Resuming -> SendEOP -> Enabled (11.5.1.9-10, 11.16.2.6.2.3). */
+            /* Resuming -> SendEOP -> Enabled in one step (USB 1.1
+               s11.5.1.9-s11.5.1.10, p. 242-243 / PDF 258-259). PORT_SUSPEND
+               reads 1 until here, as it means "suspended or resuming"
+               (Table 11-15, p. 274 / PDF 290). C_PORT_SUSPEND is set as
+               Resuming ends (s11.16.2.6.2.3, p. 278 / PDF 294). */
             p->status &= ~PS_SUSPEND;
             p->change |= PC_SUSPEND;
             hub_port_trace(p, "resume done");
@@ -216,7 +253,9 @@ hub_port_timer(void *priv)
     }
 }
 
-/* Leaving the Enabled states also ends a reset or resume in progress. */
+/* Clearing PORT_ENABLE also clears PORT_SUSPEND (USB 1.1 s11.16.2.6.1.3,
+   p. 275 / PDF 291) and stops a reset or resume in progress: a disabled
+   port drives no signaling. */
 static void
 hub_port_disable(usb_hub_port_t *p)
 {
@@ -230,7 +269,10 @@ hub_set_port_feature(usb_hub_port_t *p, int feature)
 {
     switch (feature) {
         case PORT_RESET:
-            /* A no-operation when Powered-off or Disconnected (11.5.1.5). */
+            /* A no-operation when Powered-off or Disconnected (USB 1.1
+               s11.5.1.5, p. 242 / PDF 258). A port still waiting for power
+               good has no connection yet, so it falls under Disconnected.
+               A reset already in progress is not restarted. */
             if (!hub_port_power_good(p) || !(p->status & PS_CONNECTION) || (p->status & PS_RESET))
                 return 0;
             hub_port_disable(p);
@@ -240,6 +282,9 @@ hub_set_port_feature(usb_hub_port_t *p, int feature)
             hub_port_trace(p, "reset start");
             return 0;
 
+        /* A no-operation unless the port is Enabled; the same goes for
+           PORT_POWER unless it is Powered-off (USB 1.1 s11.16.2.9, p. 280 /
+           PDF 296). */
         case PORT_SUSPEND:
             if ((p->status & (PS_ENABLE | PS_SUSPEND | PS_RESET)) == PS_ENABLE) {
                 p->status |= PS_SUSPEND;
@@ -255,8 +300,12 @@ hub_set_port_feature(usb_hub_port_t *p, int feature)
             }
             return 0;
 
-        /* Not set by software, no-operations (11.16.2.6.1). Setting a change
-           bit is optional (11.16.2.9); this hub ignores it. */
+        /* Software must not set PORT_CONNECTION, PORT_OVER_CURRENT or
+           PORT_LOW_SPEED, and the hub treats them as no-operations (USB 1.1
+           s11.16.2.6.1.1-s11.16.2.6.1.7, p. 275-276 / PDF 291-292).
+           Setting a change bit is optional; a hub that does not support it
+           may ignore the request (s11.16.2.6.2, p. 277 / PDF 293), as this
+           one does. */
         case PORT_CONNECTION:
         case PORT_OVER_CURRENT:
         case PORT_LOW_SPEED:
@@ -267,7 +316,10 @@ hub_set_port_feature(usb_hub_port_t *p, int feature)
         case C_PORT_RESET:
             return 0;
 
-        /* SetPortFeature(PORT_ENABLE): a Request Error is preferred (11.16.2.6.1.2). */
+        /* SetPortFeature(PORT_ENABLE) is not specified; a Request Error is
+           preferred (USB 1.1 s11.16.2.6.1.2, p. 275 / PDF 291). A selector
+           missing from Table 11-12 is a Request Error (s11.16.2.9, p. 280 /
+           PDF 296). */
         default:
             return USB_DATA_STALL;
     }
@@ -277,6 +329,8 @@ static int
 hub_clear_port_feature(usb_hub_port_t *p, int feature)
 {
     switch (feature) {
+        /* Clearing PORT_ENABLE disables the port; it is a no-operation when
+           Powered-off (USB 1.1 s11.16.2.2, p. 269 / PDF 285). */
         case PORT_ENABLE:
             if (p->status & PS_POWER) {
                 hub_port_disable(p);
@@ -285,7 +339,8 @@ hub_clear_port_feature(usb_hub_port_t *p, int feature)
             return 0;
 
         case PORT_SUSPEND:
-            /* Host-initiated resume; a no-operation unless suspended (11.16.2.2). */
+            /* Host-initiated resume; a no-operation unless suspended (USB 1.1
+               s11.16.2.2, p. 269 / PDF 285). */
             if ((p->status & PS_SUSPEND) && (p->timer_op != HUB_TIMER_RESUME)) {
                 hub_port_timer_start(p, HUB_TIMER_RESUME, HUB_RESUME_US);
                 hub_port_trace(p, "resume start");
@@ -305,6 +360,8 @@ hub_clear_port_feature(usb_hub_port_t *p, int feature)
             p->change &= ~(1 << (feature - C_PORT_CONNECTION));
             return 0;
 
+        /* No-operations, as on the SetPortFeature side (USB 1.1
+           s11.16.2.6.1.1-s11.16.2.6.1.7, p. 275-276 / PDF 291-292). */
         case PORT_CONNECTION:
         case PORT_OVER_CURRENT:
         case PORT_RESET:
@@ -316,8 +373,12 @@ hub_clear_port_feature(usb_hub_port_t *p, int feature)
     }
 }
 
-/* Hub class requests (11.16.2). GetBusState and SetHubDescriptor are
-   optional and not implemented: STALL. */
+/* Hub class requests (USB 1.1 s11.16.2, p. 267 / PDF 283); standard requests
+   are handled by the device core. A request whose wValue, wIndex or wLength
+   is not one the spec allows is a Request Error, answered with STALL.
+   GetBusState and SetHubDescriptor are optional and not implemented, so
+   they STALL as well (s11.16.2.3, p. 270 / PDF 286; s11.16.2.7, p. 278 /
+   PDF 294). */
 static int
 hub_control(usb_dev_t *udev, const uint8_t *setup, uint8_t *data)
 {
@@ -329,7 +390,9 @@ hub_control(usb_dev_t *udev, const uint8_t *setup, uint8_t *data)
 
     switch ((setup[0] << 8) | setup[1]) {
         case 0xa000 | HUB_GET_STATUS:
-            /* Local power good, no over-current: per-port reporting (Table 11-13). */
+            /* wHubStatus 0: local power good, and no hub over-current, which
+               a hub that reports over-current per port always reads as 0
+               (USB 1.1 Table 11-13, p. 272 / PDF 288). wHubChange 0. */
             if ((wvalue != 0) || (windex != 0) || (wlen != 4))
                 return USB_DATA_STALL;
             memset(data, 0x00, 4);
@@ -345,9 +408,12 @@ hub_control(usb_dev_t *udev, const uint8_t *setup, uint8_t *data)
             return 4;
 
         case 0xa000 | HUB_GET_DESCRIPTOR:
-            /* USB 1.0 used descriptor type 0; USB 1.1 changed it to 29h
-               (Table 11-8, 11.16.2.4). BIOSes of the period, e.g. Intel's,
-               still send type 0. Accept either with descriptor index 0. */
+            /* USB 1.0 names the hub descriptor by type 0 (USB 1.0
+               s11.12.2.4, p. 258 / PDF 258); USB 1.1 uses 29h (USB 1.1
+               Table 11-8, p. 264 / PDF 280). BIOSes written to USB 1.0
+               still ask for type 0; the Intel AN430TX BIOS is one. Either
+               type is accepted, with descriptor index 0. The device core
+               cuts the reply to wLength (s11.16.2.4, p. 271 / PDF 287). */
             if (((wvalue != 0x0000) && (wvalue != 0x2900)) || (windex != 0))
                 return USB_DATA_STALL;
             memcpy(data, hub_desc, sizeof(hub_desc));
@@ -355,7 +421,10 @@ hub_control(usb_dev_t *udev, const uint8_t *setup, uint8_t *data)
 
         case 0x2000 | HUB_CLEAR_FEATURE:
         case 0x2000 | HUB_SET_FEATURE:
-            /* Neither hub change bit is ever set; setting them is optional (11.16.2.5). */
+            /* Neither hub change bit is ever set. Setting them is optional,
+               and a hub may treat SetHubFeature for them as a no-operation;
+               clearing a clear bit is not an error (USB 1.1 Table 11-14,
+               p. 272 / PDF 288). */
             if ((windex != 0) || (wlen != 0) || ((wvalue != C_HUB_LOCAL_POWER) && (wvalue != C_HUB_OVER_CURRENT)))
                 return USB_DATA_STALL;
             return 0;
@@ -375,8 +444,10 @@ hub_control(usb_dev_t *udev, const uint8_t *setup, uint8_t *data)
     }
 }
 
-/* Status Change endpoint: the Hub and Port Status Change Bitmap, NAK while
-   no change bit is set (11.13.1, 11.13.4). Bit 0, the hub, stays 0. */
+/* The Status Change endpoint returns the Hub and Port Status Change Bitmap,
+   bit N for port N, and NAKs while no change bit is set (USB 1.1 s11.13.1,
+   p. 257 / PDF 273; s11.13.4, p. 259-260 / PDF 275-276). Bit 0 is the hub's
+   own change bit; this hub never sets one, so it stays 0. */
 static int
 hub_data_in(usb_dev_t *udev, int ep, uint8_t *buf, UNUSED(int maxlen))
 {
@@ -397,8 +468,12 @@ hub_data_in(usb_dev_t *udev, int ep, uint8_t *buf, UNUSED(int maxlen))
     return 1;
 }
 
-/* Reset from upstream (11.10.1) and SetConfiguration (11.5.1.1-2) both
-   leave every port without power; a configured hub waits for PORT_POWER. */
+/* A reset on the upstream port leaves every port Not Configured (USB 1.1
+   s11.10.1, p. 254-255 / PDF 270-271). SetConfiguration puts every port
+   in Not Configured (value 0) or Powered-off (any other value)
+   (s11.5.1.1-s11.5.1.2, p. 240-241 / PDF 256-257). Either way the port has
+   no power (s11.11, p. 255 / PDF 271), and the host powers it with
+   SetPortFeature(PORT_POWER). */
 static void
 hub_all_ports_off(usb_hub_t *hub)
 {
@@ -418,9 +493,11 @@ hub_configured(usb_dev_t *udev, UNUSED(int config))
     hub_all_ports_off((usb_hub_t *) udev->priv);
 }
 
-/* Full-speed traffic reaches enabled full-speed ports; low-speed traffic
-   after a PRE reaches enabled low-speed ports; a full-speed device cannot
-   decode low-speed data (11.8.4). */
+/* A token reaches a device only through an enabled, unsuspended port, and
+   only at the device's speed. A low-speed port gets nothing but packets
+   that follow a PRE PID; those packets go to full-speed ports too, but no
+   low-speed bit pattern decodes as a full-speed PID (USB 1.1 s11.8.4,
+   p. 252-253 / PDF 268-269). */
 static usb_dev_t *
 hub_route(usb_dev_t *udev, int addr, int low_speed)
 {
@@ -462,8 +539,9 @@ hub_attach(usb_dev_t *udev, usb_dev_t *dev)
     return 0;
 }
 
-/* Disconnect detection disables the port; C_PORT_ENABLE is for port errors
-   only (11.16.2.6.1.2, 11.16.2.6.2.2). */
+/* A detach sets C_PORT_CONNECTION and disables the port. C_PORT_ENABLE is
+   not set: it marks a Port Error only (USB 1.1 s11.16.2.6.1.2, p. 275 /
+   PDF 291; s11.16.2.6.2.2, p. 277 / PDF 293). */
 static void
 hub_detach(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
 {
@@ -482,9 +560,11 @@ hub_detach(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
     hub_port_trace(p, "device detached");
 }
 
-/* A device still sending at EOF2 is a Port Error: Enabled -> Disabled with
-   C_PORT_ENABLE (11.8.1, 11.16.2.6.2.2). The hub's own EOP at EOF1 keeps
-   its upstream port from being disabled (11.2.2). */
+/* A device still sending at EOF2 is a Port Error: the port goes from
+   Enabled to Disabled and C_PORT_ENABLE is set (USB 1.1 s11.8.1, p. 251 /
+   PDF 267; s11.16.2.6.2.2, p. 277 / PDF 293). Only this port is disabled.
+   The hub ends the packet upstream with its own EOP at EOF1, so the port
+   above the hub is not disabled (s11.2.2, p. 234 / PDF 250). */
 static void
 hub_eof_babble(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
 {
@@ -498,8 +578,11 @@ hub_eof_babble(UNUSED(usb_dev_t *udev), usb_dev_t *dev)
     hub_port_trace(p, "disabled: babble at EOF2");
 }
 
-/* A disabled or suspended port blocks all traffic (11.5.1.4, 11.5.1.8); an
-   enabled one is idle when the hub itself is suspended. */
+/* Whether the device on this port sees an idle bus, which suspends it. A
+   disabled or suspended port passes no traffic (USB 1.1 s11.5.1.4,
+   p. 241-242 / PDF 257-258; s11.16.2.6.1.3, p. 275 / PDF 291). An enabled
+   port is idle when the hub itself is suspended. An unpowered or empty port,
+   a port in reset (SE0) and a port driving resume (K) are not idle. */
 static int
 hub_port_idle(const usb_dev_t *udev, const usb_dev_t *dev)
 {
@@ -513,10 +596,19 @@ hub_port_idle(const usb_dev_t *udev, const usb_dev_t *dev)
     return usb_dev_suspended(udev);
 }
 
-/* Resume signaling from a device (11.5.1.6-11, 11.9). A suspended hub
-   repeats it upstream, Restart_S/E -> Transmit, and only Restart_S sets
-   C_PORT_SUSPEND (11.16.2.6.2.3); an awake hub resumes a suspended port for
-   20 ms itself. A disabled port ignores it (11.1.2.2). */
+/* Resume signaling (K) from the device on this port. A disabled port does
+   not pass it (USB 1.1 s11.5.1.4, p. 242 / PDF 258).
+
+   A suspended hub repeats it upstream (s11.1.2.2, p. 232 / PDF 248). The
+   port goes Restart_S (from Suspended) or Restart_E (from Enabled) ->
+   Transmit (s11.5.1.11, p. 243 / PDF 259); only the Restart_S path sets
+   C_PORT_SUSPEND and clears PORT_SUSPEND (s11.16.2.6.2.3, p. 278 / PDF 294;
+   s11.16.2.6.1.3, p. 275 / PDF 291).
+
+   An awake hub resumes a suspended port itself: Suspended -> Resuming for
+   20 ms (s11.5.1.9, p. 242-243 / PDF 258-259). An enabled port on an awake
+   hub is not idle, so its device is not suspended and the request is
+   dropped. */
 static void
 hub_resume(usb_dev_t *udev, usb_dev_t *dev)
 {
@@ -612,7 +704,7 @@ const device_t usb_hub_4port_device = {
     .config        = NULL
 };
 
-/* The Ports page's hub list, in the shape of 86Box's other device lists. */
+/* The hub list on the Ports settings page; entry 0 is none. */
 static const device_t *const usb_hub_devices[] = {
     &device_none,
     &usb_hub_4port_device,
@@ -648,7 +740,9 @@ usb_hub_get_from_internal_name(const char *s)
     return 0;
 }
 
-/* Hard reset: the hub goes on before any other USB device attaches. */
+/* Called on hard reset before any other USB device attaches, so the hub
+   takes a root port and later devices go to its ports once the root ports
+   are full. */
 void
 usb_hub_reset(void)
 {

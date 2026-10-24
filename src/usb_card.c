@@ -8,8 +8,13 @@
  *
  *          PCI USB host controller cards, chosen on the Ports page, and
  *          the OPTi 82C861 FireLink: one OHCI 1.0a controller with two
- *          root ports, written from the OPTi 82C861 data sheet (912-2000-049
- *          Revision 1.0, 1998).
+ *          root ports.
+ *
+ *          Written from:
+ *          - OPTi FireLink 82C861 PCI-to-USB Bridge Data Book,
+ *            912-2000-049, Revision 1.0, May 27, 1998.
+ *          - OPTi 82C861/82C871 FireLink/FireBlast PCI-to-USB Bus
+ *            Bridges (preliminary), 912-2000-022, Revision 2.0.
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -39,10 +44,12 @@ typedef struct opti861_t {
     uint8_t inta;      /* INTA# as driven */
 } opti861_t;
 
-/* The chip has one interrupt pin, INTA#. 51h[4:0] picks where the OHCI
-   interrupt goes (DS PDF p29-30): 00001b is PCIRQ0#, that pin; any other
-   choice is off or an IRQ driveback cycle, which no board decodes from a
-   slot, so INTA# stays high. */
+/* The chip has one PCI interrupt pin, INTA# (data book s3.2.4, p. 11 /
+   PDF 19; 3Dh = 01h). 51h[4:0] picks where the OHCI interrupt goes
+   (Table 5-1, p. 21-22 / PDF 29-30). The default, 00001b = PCIRQ0#, is
+   taken to be INTA#. Every other choice is either off or reaches the host
+   only by OPTi's IRQ driveback cycle, which no 86Box chipset decodes, so
+   INTA# stays high. */
 static void
 opti861_update_inta(opti861_t *dev)
 {
@@ -75,7 +82,8 @@ opti861_update_bar(opti861_t *dev)
     ohci_set_bus_master(dev->usb, dev->conf[0x04] & 0x04);
 }
 
-/* Table 5-1 (DS PDF p27-30) defaults; every register not listed reads 0. */
+/* Defaults from Table 5-1 (data book p. 19-22 / PDF 27-30); every register
+   not listed reads 0. */
 static void
 opti861_conf_reset(opti861_t *dev)
 {
@@ -109,7 +117,8 @@ opti861_read(int func, int addr, UNUSED(int len), void *priv)
         return 0xff;
 
     ret = dev->conf[addr];
-    /* 4Eh bits 3 and 4 read back the I2C clock and data outputs. */
+    /* 4Eh bits 3 and 4 read back the I2C clock and data outputs, bits 1
+       and 2 (Table 5-1, p. 21 / PDF 29). */
     if (addr == 0x4e)
         ret |= (ret & 0x06) << 2;
 
@@ -136,6 +145,8 @@ opti861_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->conf[addr] = val & 0x01;
             break;
 
+        /* Plain read/write registers; Table 5-1 does not mark 3Dh
+           read-only. */
         case 0x0c:
         case 0x0d:
         case 0x3c:
@@ -144,7 +155,8 @@ opti861_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->conf[addr] = val;
             break;
 
-        /* BAR0: a 4 KB memory window, bits 31:12. */
+        /* BAR0: a 4 KB memory window, bits 31:12 (Table 5-1, p. 20 /
+           PDF 28). */
         case 0x11:
             dev->conf[addr] = val & 0xf0;
             opti861_update_bar(dev);
@@ -155,9 +167,11 @@ opti861_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             opti861_update_bar(dev);
             break;
 
-        /* The register text says writable while 50h bit 3 is 0 (PDF p29),
-           as does the 50h table of the 82C861/82C871 data sheet (p21); the
-           1998 50h table alone says 1 = writable. */
+        /* Subsystem IDs. The data book's 2Ch-2Fh text says they are
+           writable while 50h bit 3 is 0, and so does the 50h table of the
+           preliminary 82C861/82C871 sheet (p. 21 / PDF 21). Only the data
+           book's own 50h table says 1 = writable (both on p. 21 / PDF 29).
+           The code follows the two that agree. */
         case 0x2c ... 0x2f:
             if (!(dev->conf[0x50] & 0x08))
                 dev->conf[addr] = val;
@@ -167,7 +181,8 @@ opti861_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->conf[addr] = val & 0x27;
             break;
         case 0x50:
-            /* The port output disables gate the I/O cells only (PDF p29). */
+            /* Bits 0 and 1 turn off the port I/O cells to save power (p. 21 /
+               PDF 29); they do not detach a device, so they only latch. */
             dev->conf[addr] = val & 0x1f;
             break;
         case 0x51:
@@ -214,15 +229,16 @@ opti861_init(UNUSED(const device_t *info))
 
     dev->usb = device_add_inst(&usb_device, -1);
     /* No SMI handler: a PCI slot has no SMI#, IRQ1, IRQ12 or A20 line, so
-       the chip's legacy pins (PDF p19) reach nothing on a card. RWC is
-       hardwired to 0 and HcLSThreshold resets to 0 (PDF p31, p35);
-       HcRhDescriptorA POTPGT is a full R/W byte (PDF p35). */
+       the chip's legacy pins (data book s3.2.4, p. 11 / PDF 19) reach
+       nothing on a card. HcControl RWC is hardwired to 0 (p. 23 / PDF 31),
+       HcLSThreshold resets to 0 and HcRhDescriptorA POTPGT is a read/write
+       byte (p. 27 / PDF 35). */
     ohci_set_chip_flags(dev->usb, OHCI_CHIP_POTPGT_RW);
     ohci_set_irq_handler(dev->usb, opti861_irq, dev);
 
     opti861_conf_reset(dev);
-    /* pci_add_card() adds every type strictly: only PCI_ADD_NORMAL takes an
-       ordinary slot. */
+    /* pci_add_card() marks every card strict, so a card only takes a slot
+       of its own type; PCI_ADD_NORMAL is the type of an ordinary slot. */
     pci_add_card(PCI_ADD_NORMAL, opti861_read, opti861_write, dev, &dev->slot);
 
     return dev;
@@ -242,7 +258,7 @@ const device_t usb_opti_82c861_device = {
     .config        = NULL
 };
 
-/* The Ports page's card list, in the shape of 86Box's other device lists. */
+/* The card list on the Ports settings page; entry 0 is none. */
 static const device_t *const usb_card_devices[] = {
     &device_none,
     &usb_opti_82c861_device,
@@ -282,8 +298,9 @@ usb_card_get_from_internal_name(const char *s)
     return 0;
 }
 
-/* The card the settings dialog shows, saved or not, gives a board that
-   can take it a USB bus. */
+/* Whether machine mch gets a USB bus from a card: the card picked in the
+   settings dialog (usb_card_pending, before it is saved) or else the saved
+   one, if the machine can take it. */
 int
 usb_card_has_bus(int mch)
 {
@@ -292,8 +309,8 @@ usb_card_has_bus(int mch)
     return (card > 0) && (card < usb_card_get_ndev()) && device_is_valid(usb_card_devices[card], mch);
 }
 
-/* Hard reset: after the machine's own controllers, before any USB device
-   attaches. */
+/* Called on hard reset after the machine's own USB controllers exist and
+   before any USB device attaches. */
 void
 usb_card_reset(void)
 {

@@ -4,11 +4,16 @@
  *          PC systems and compatibles from 1981 through fairly recent
  *          system designs based on the PCI bus.
  *
- *          USB HID mouse, keyboard and tablet, written from the HID 1.11
- *          specification and the HID Usage Tables 1.12: a low-speed
+ *          USB HID mouse, keyboard and tablet, written from the Device
+ *          Class Definition for Human Interface Devices (HID) Version
+ *          1.11 (2001), the HID Usage Tables Version 1.12 (October 28,
+ *          2004), the Universal Serial Bus Specification Revision 1.1
+ *          (September 23, 1998) and Microsoft's USB HID to PS/2 Scan
+ *          Code Translation Table (revised April 2, 2004): a low-speed
  *          boot-interface mouse with three buttons and a wheel, a
  *          low-speed boot-interface keyboard, and a full-speed absolute
- *          pointer with three buttons that follows the host pointer.
+ *          pointer with three buttons and a wheel that follows the host
+ *          pointer.
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -38,21 +43,28 @@
 #define HID_SET_IDLE     0x0a
 #define HID_SET_PROTOCOL 0x0b
 
+/* Idle rate state for SET_IDLE and GET_IDLE (HID 1.11 s7.2.4, p. 53 / PDF 63). */
 typedef struct hid_idle_t {
-    uint8_t  rate;    /* 4 ms units, 0 = report only on change */
-    uint8_t  next;    /* a SET_IDLE held until the current period's report */
-    uint8_t  pending;
-    uint64_t last_us; /* the last report on the interrupt pipe */
+    uint8_t  rate;    /* in 4 ms units; 0 = report only on a change */
+    uint8_t  next;    /* a rate that takes effect after the current period's report */
+    uint8_t  pending; /* next is waiting */
+    uint64_t last_us; /* time of the last report on the interrupt pipe */
 } hid_idle_t;
 
+/* Emulated time in microseconds. TIMER_USEC is the number of tsc ticks per
+   microsecond, scaled by 2^32. */
 static uint64_t
 hid_now_us(void)
 {
     return (uint64_t) ((double) tsc * 4294967296.0 / (double) TIMER_USEC);
 }
 
-/* Inside the last 4 ms of a running period the new value waits for that
-   period's report (HID 7.2.4 Latency). */
+/* A new idle rate acts as if it had been set right after the last report,
+   unless it arrives within 4 ms of the end of the running period; then it
+   waits until that period's report has gone out (HID 1.11 s7.2.4, Latency,
+   p. 53 / PDF 63). With rate 0 no period is running. If the time already
+   past the last report exceeds a new, shorter rate, hid_idle_due() is true
+   at the next poll, which gives the immediate report the spec asks for. */
 static void
 hid_idle_set(hid_idle_t *idle, uint8_t rate)
 {
@@ -75,14 +87,19 @@ hid_idle_reported(hid_idle_t *idle)
     }
 }
 
-/* The period ran out with no change: the report is due again (HID 7.2.4). */
+/* True when a full idle period has passed since the last report: the device
+   sends its current report again even though nothing changed (HID 1.11
+   s7.2.4, p. 53 / PDF 63). */
 static int
 hid_idle_due(const hid_idle_t *idle)
 {
     return (idle->rate != 0) && ((hid_now_us() - idle->last_us) >= ((uint64_t) idle->rate * 4000ULL));
 }
 
-/* Boot mouse layout (HID 1.11 B.2): buttons, X, Y; a wheel byte follows. */
+/* The boot mouse report descriptor (HID 1.11 Appendix B.2, p. 61 / PDF 71)
+   with Report Count 3 instead of 2 on the axes, which adds a Wheel byte
+   after X and Y. The first three bytes keep the boot layout, which is all
+   a BIOS reads (HID 1.11 Appendix B, p. 59 / PDF 69). */
 static const uint8_t hid_mouse_report_desc[] = {
     0x05, 0x01, /* Usage Page (Generic Desktop) */
     0x09, 0x02, /* Usage (Mouse) */
@@ -117,7 +134,7 @@ static const uint8_t hid_mouse_dev_desc[18] = {
     18, 0x01,   /* bLength, DEVICE */
     0x10, 0x01, /* bcdUSB 1.10 */
     0x00, 0x00, 0x00,
-    8,          /* bMaxPacketSize0: low speed */
+    8,          /* bMaxPacketSize0: the only size allowed at low speed (USB 1.1 s5.5.3, p. 37 / PDF 53) */
     0x00, 0x00, /* idVendor */
     0x01, 0x00, /* idProduct */
     0x00, 0x01, /* bcdDevice */
@@ -131,12 +148,13 @@ static const uint8_t hid_mouse_cfg_desc[HID_MOUSE_CFG_LEN] = {
     /* Configuration */
     9, 0x02, HID_MOUSE_CFG_LEN, 0x00, 1, 1, 0,
     0x80, /* bus powered, no remote wakeup */
-    50,   /* 100 mA */
-    /* Interface 0: HID, boot subclass, mouse protocol (HID 4.2, 4.3) */
+    50,   /* 100 mA, in 2 mA units */
+    /* Interface 0: HID, boot subclass, mouse protocol (HID 1.11 s4.2-4.3, p. 8-9 / PDF 18-19) */
     9, 0x04, 0, 0, 1, 0x03, 0x01, 0x02, 0,
-    /* HID descriptor, between interface and endpoint (HID 7.1) */
+    /* HID descriptor, between interface and endpoint (HID 1.11 s7.1, p. 48 / PDF 58) */
     9, 0x21, 0x11, 0x01, 0, 1, 0x22, sizeof(hid_mouse_report_desc), 0x00,
-    /* Endpoint 1 IN, interrupt, 4 bytes, 10 ms (the low-speed minimum, 5.7.4) */
+    /* Endpoint 1 IN, interrupt, 4 bytes, 10 ms: the shortest period a
+       low-speed endpoint may ask for (USB 1.1 s5.7.4, p. 45 / PDF 61) */
     7, 0x05, 0x81, 0x03, 4, 0x00, 10
 };
 
@@ -149,7 +167,7 @@ typedef struct hid_mouse_t {
     usb_dev_t  usb;
     uint8_t    protocol; /* 0 boot, 1 report */
     hid_idle_t idle;
-    uint8_t    buttons;
+    uint8_t    buttons;  /* the buttons in the last report */
     int        attached;
 } hid_mouse_t;
 
@@ -162,8 +180,11 @@ hid_mouse_report(hid_mouse_t *dev, uint8_t *buf)
     int ox;
     int oy;
 
-    /* HID Y and the host's Y both grow downward; the wheel grows away from the user.
-       In tablet mode the host wheel belongs to the tablet. */
+    /* HID Y grows as the mouse moves toward the user, which is down the
+       screen, as the host's Y does. Wheel values grow as the wheel rolls away
+       from the user (HID Usage Tables 1.12 s4.2-4.3, p. 29 / PDF 29), as
+       86Box's wheel count does. In tablet mode the host wheel goes to the
+       tablet, so the mouse reports 0. */
     mouse_subtract_coords(&dx, &dy, &ox, &oy, -127, 127, 0, 0);
     dz = 0;
     if (mouse_input_mode == 0)
@@ -177,7 +198,8 @@ hid_mouse_report(hid_mouse_t *dev, uint8_t *buf)
 
     hid_idle_reported(&dev->idle);
 
-    /* Boot protocol: the first three bytes only (HID B.2). */
+    /* Boot protocol sends only the three bytes of the boot layout (HID 1.11
+       Appendix B, p. 59 / PDF 69); report protocol adds the wheel byte. */
     return dev->protocol ? 4 : 3;
 }
 
@@ -188,11 +210,14 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     uint16_t     wvalue = setup[2] | (setup[3] << 8);
     uint16_t     windex = setup[4] | (setup[5] << 8);
 
+    /* Every request here is addressed to interface 0, the only one. */
     if (windex != 0)
         return USB_DATA_STALL;
 
-    /* Class descriptors from the interface (HID 7.1.1), index 0 only: one
-       HID and one report descriptor. */
+    /* GET_DESCRIPTOR for a HID class descriptor, addressed to the interface
+       (HID 1.11 s7.1.1, p. 49 / PDF 59). There is one HID and one Report
+       descriptor, so any index but 0 STALLs. The HID descriptor is the copy
+       inside the configuration descriptor, at offset 18. */
     if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
         if ((wvalue & 0xff) != 0)
             return USB_DATA_STALL;
@@ -211,12 +236,15 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0xa1) {
         switch (setup[1]) {
             case HID_GET_REPORT:
-                /* The one Input report, no report IDs (HID 7.2.1). */
+                /* wValue is report type (high) and report ID (low). The
+                   only report is Input with no report ID: type 1, ID 0
+                   (HID 1.11 s7.2.1, p. 51 / PDF 61). */
                 if (wvalue != 0x0100)
                     return USB_DATA_STALL;
                 return hid_mouse_report(dev, data);
             case HID_GET_IDLE:
-                /* No report IDs: a nonzero ID names no report (HID 7.2.3). */
+                /* The device uses no report IDs, so a nonzero ID names no
+                   report (HID 1.11 s7.2.3, p. 52 / PDF 62). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 data[0] = dev->idle.rate;
@@ -232,7 +260,8 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0x21) {
         switch (setup[1]) {
             case HID_SET_IDLE:
-                /* No report IDs: a nonzero ID names no report (HID 7.2.4). */
+                /* No report IDs, so a nonzero ID names no report; the high
+                   byte is the duration (HID 1.11 s7.2.4, p. 52-53 / PDF 62-63). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 hid_idle_set(&dev->idle, wvalue >> 8);
@@ -243,7 +272,7 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
                 dev->protocol = wvalue;
                 return 0;
             default:
-                /* No Output or Feature reports: SET_REPORT is not supported. */
+                /* SET_REPORT included: the mouse has no Output or Feature report. */
                 return USB_DATA_STALL;
         }
     }
@@ -251,7 +280,8 @@ hid_mouse_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     return USB_DATA_STALL;
 }
 
-/* Interrupt IN: a report on a change, else NAK, unless the idle period ran out (HID 7.2.4). */
+/* Interrupt IN: a report when motion, wheel or buttons changed or when the
+   idle period has run out, otherwise NAK (HID 1.11 s7.2.4, p. 53 / PDF 63). */
 static int
 hid_mouse_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxlen))
 {
@@ -271,7 +301,9 @@ hid_mouse_reset(usb_dev_t *usb)
 {
     hid_mouse_t *dev = (hid_mouse_t *) usb->priv;
 
-    /* Report protocol after initialization (HID 7.2.6); mice idle indefinitely. */
+    /* Devices start in report protocol (HID 1.11 s7.2.6, p. 54 / PDF 64).
+       The recommended default idle rate for mice is infinite, rate 0
+       (s7.2.4, p. 53 / PDF 63). */
     dev->protocol     = 1;
     dev->idle.rate    = 0;
     dev->idle.pending = 0;
@@ -302,7 +334,8 @@ hid_mouse_init(UNUSED(const device_t *info))
     usb_dev_init(&dev->usb);
     hid_mouse_reset(&dev->usb);
 
-    /* Three buttons plus the wheel. */
+    /* Three buttons, but mouse_state_changed() counts wheel motion only when
+       4 or more are declared. */
     mouse_set_buttons(4);
 
     dev->attached = usb_attach(&dev->usb);
@@ -334,8 +367,11 @@ const device_t mouse_usb_device = {
     .config        = NULL
 };
 
-/* Boot keyboard (HID 1.11 B.1). A one-byte FFh extent would read as -1
-   (HID 6.2.2.7), so the array's 255 takes two bytes. */
+/* The boot keyboard report descriptor (HID 1.11 Appendix B.1, p. 59-60 /
+   PDF 69-70). Item data is two's complement by its size, as in the
+   one-byte Logical Minimum 81h = -127 of the spec's own mouse example
+   (Appendix E.10, p. 71 / PDF 81), so a one-byte Logical Maximum FFh would
+   mean -1; the array's 255 is written in two bytes. */
 static const uint8_t hid_kbd_report_desc[] = {
     0x05, 0x01,       /* Usage Page (Generic Desktop) */
     0x09, 0x06,       /* Usage (Keyboard) */
@@ -375,7 +411,7 @@ static const uint8_t hid_kbd_dev_desc[18] = {
     18, 0x01,   /* bLength, DEVICE */
     0x10, 0x01, /* bcdUSB 1.10 */
     0x00, 0x00, 0x00,
-    8,          /* bMaxPacketSize0: low speed */
+    8,          /* bMaxPacketSize0: the only size allowed at low speed (USB 1.1 s5.5.3, p. 37 / PDF 53) */
     0x00, 0x00, /* idVendor */
     0x02, 0x00, /* idProduct */
     0x00, 0x01, /* bcdDevice */
@@ -389,12 +425,13 @@ static const uint8_t hid_kbd_cfg_desc[HID_KBD_CFG_LEN] = {
     /* Configuration */
     9, 0x02, HID_KBD_CFG_LEN, 0x00, 1, 1, 0,
     0x80, /* bus powered, no remote wakeup */
-    50,   /* 100 mA */
-    /* Interface 0: HID, boot subclass, keyboard protocol (HID 4.2, 4.3) */
+    50,   /* 100 mA, in 2 mA units */
+    /* Interface 0: HID, boot subclass, keyboard protocol (HID 1.11 s4.2-4.3, p. 8-9 / PDF 18-19) */
     9, 0x04, 0, 0, 1, 0x03, 0x01, 0x01, 0,
-    /* HID descriptor, between interface and endpoint (HID 7.1) */
+    /* HID descriptor, between interface and endpoint (HID 1.11 s7.1, p. 48 / PDF 58) */
     9, 0x21, 0x11, 0x01, 0, 1, 0x22, sizeof(hid_kbd_report_desc), 0x00,
-    /* Endpoint 1 IN, interrupt, 8 bytes, 10 ms */
+    /* Endpoint 1 IN, interrupt, 8 bytes, 10 ms: the shortest period a
+       low-speed endpoint may ask for (USB 1.1 s5.7.4, p. 45 / PDF 61) */
     7, 0x05, 0x81, 0x03, 8, 0x00, 10
 };
 
@@ -403,9 +440,11 @@ static const char *const hid_kbd_strings[] = {
     "USB Keyboard"
 };
 
-/* 86Box key codes (scan code set 1, E0 xx as 1xx, Pause as 100h) to Keyboard
-   page usages, from Microsoft's "USB HID to PS/2 Scan Code Translation
-   Table" (2004). 0 = no Keyboard page usage. */
+/* 86Box key codes (scan code set 1 make codes, E0 xx as 1xxh, the E1 1D
+   that starts Pause as 100h) to Keyboard/Keypad page usages (HID Usage Tables 1.12 s10, p. 53 /
+   PDF 53), taken from Microsoft's USB HID to PS/2 Scan Code Translation
+   Table (2004). 0 = no Keyboard/Keypad page usage. Two host keys can share
+   a usage: SysRq and Print Screen, Pause and Break. */
 static const uint8_t hid_kbd_usage[0x200] = {
     [0x001] = 0x29, /* Escape */
     [0x002] = 0x1e, /* 1 */
@@ -545,25 +584,27 @@ static const uint8_t hid_kbd_usage[0x200] = {
 
 typedef struct hid_kbd_t {
     usb_dev_t  usb;
-    uint8_t    protocol; /* 0 boot, 1 report; both send the B.1 report */
+    uint8_t    protocol; /* 0 boot, 1 report; both send the Appendix B.1 report */
     hid_idle_t idle;
-    uint8_t    leds;
-    uint8_t    held[256];  /* host keys holding each usage */
+    uint8_t    leds;       /* the last LED Output report */
+    uint8_t    held[256];  /* per usage, the number of host keys down that map to it */
     uint8_t    order[256]; /* non-modifier usages held, in press order */
     int        n_order;
     uint8_t    sent[8];    /* the last report on the interrupt pipe */
-    uint8_t    queue[HID_KBD_QUEUE][8];
+    uint8_t    queue[HID_KBD_QUEUE][8]; /* reports not yet sent, oldest at q_head */
     int        q_head;
     int        q_len;
     int        configured;
-    uint8_t    down[0x200]; /* host keys down; a host repeat is no change */
+    uint8_t    down[0x200]; /* host keys down, so a host typematic repeat is no change */
     int        attached;
     /* Host keys arrive on the GUI thread, polls on the emulation thread. */
     mutex_t   *lock;
 } hid_kbd_t;
 
-/* Modifier byte, reserved byte, six array slots; more keys than slots is
-   the phantom state, ErrorRollOver in every slot (HID Appendix C). */
+/* The 8-byte boot report: modifier byte, reserved byte, six array slots
+   (HID 1.11 Appendix B.1, p. 60 / PDF 70). More than six non-modifier keys
+   is the phantom state: ErrorRollOver (usage 01h) in every slot, with the
+   modifiers still reported (HID 1.11 Appendix C, p. 62-63 / PDF 72-73). */
 static void
 hid_kbd_state(const hid_kbd_t *dev, uint8_t *rep)
 {
@@ -579,8 +620,10 @@ hid_kbd_state(const hid_kbd_t *dev, uint8_t *rep)
         memcpy(rep + 2, dev->order, dev->n_order);
 }
 
-/* Every change queues a report, so a press and release between two polls
-   both reach the host. A full queue folds the change into its last entry. */
+/* Every change queues a report, so a press and a release between two polls
+   both reach the host. A state equal to the newest queued report (or, with
+   an empty queue, the last one sent) queues nothing. A full queue
+   overwrites its newest entry. */
 static void
 hid_kbd_changed(hid_kbd_t *dev)
 {
@@ -618,7 +661,8 @@ hid_kbd_press(hid_kbd_t *dev, uint8_t usage, int down)
     hid_kbd_changed(dev);
 }
 
-/* Every host key, as the machine's keyboard type (keyboard.c key_process). */
+/* Input handler: while installed, key_process() in keyboard.c passes every
+   host key here instead of to the keyboard controller. */
 static void
 hid_kbd_key(uint16_t scan, int down, void *priv)
 {
@@ -643,11 +687,14 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
     uint16_t   windex  = setup[4] | (setup[5] << 8);
     uint16_t   wlength = setup[6] | (setup[7] << 8);
 
+    /* Every request here is addressed to interface 0, the only one. */
     if (windex != 0)
         return USB_DATA_STALL;
 
-    /* Class descriptors from the interface (HID 7.1.1), index 0 only: one
-       HID and one report descriptor. */
+    /* GET_DESCRIPTOR for a HID class descriptor, addressed to the interface
+       (HID 1.11 s7.1.1, p. 49 / PDF 59). There is one HID and one Report
+       descriptor, so any index but 0 STALLs. The HID descriptor is the copy
+       inside the configuration descriptor, at offset 18. */
     if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
         if ((wvalue & 0xff) != 0)
             return USB_DATA_STALL;
@@ -666,7 +713,9 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0xa1) {
         switch (setup[1]) {
             case HID_GET_REPORT:
-                /* No report IDs; Input is the current key state (HID 7.2.1). */
+                /* No report IDs. Input (type 1) is the current key state,
+                   Output (type 2) the LED byte last set (HID 1.11 s7.2.1,
+                   p. 51 / PDF 61). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 switch (wvalue >> 8) {
@@ -680,7 +729,8 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
                         return USB_DATA_STALL;
                 }
             case HID_GET_IDLE:
-                /* No report IDs: a nonzero ID names no report (HID 7.2.3). */
+                /* The device uses no report IDs, so a nonzero ID names no
+                   report (HID 1.11 s7.2.3, p. 52 / PDF 62). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 data[0] = dev->idle.rate;
@@ -696,14 +746,19 @@ hid_kbd_control_locked(hid_kbd_t *dev, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0x21) {
         switch (setup[1]) {
             case HID_SET_REPORT:
-                /* The LED Output report: Num, Caps, Scroll, Compose, Kana (HID B.1). */
+                /* The LED Output report, bits 0-4: Num Lock, Caps Lock,
+                   Scroll Lock, Compose, Kana (HID 1.11 Appendix B.1, p. 60
+                   / PDF 70). The guest owns the lock state (Appendix C,
+                   p. 62 / PDF 72); 86Box's lock flags copy it, as they do
+                   for the LED command of an AT keyboard. */
                 if ((wvalue != 0x0200) || (wlength < 1))
                     return USB_DATA_STALL;
                 dev->leds = data[0] & 0x1f;
                 keyboard_update_states(!!(dev->leds & 0x02), !!(dev->leds & 0x01), !!(dev->leds & 0x04), !!(dev->leds & 0x10));
                 return 0;
             case HID_SET_IDLE:
-                /* No report IDs: a nonzero ID names no report (HID 7.2.4). */
+                /* No report IDs, so a nonzero ID names no report; the high
+                   byte is the duration (HID 1.11 s7.2.4, p. 52-53 / PDF 62-63). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 hid_idle_set(&dev->idle, wvalue >> 8);
@@ -734,8 +789,9 @@ hid_kbd_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     return ret;
 }
 
-/* Interrupt IN: the next queued report, else the current one again once the
-   idle period runs out, else NAK (HID 7.2.4). */
+/* Interrupt IN: the oldest queued report; with none queued, the last report
+   again once the idle period has run out (HID 1.11 s7.2.4, p. 53 / PDF 63,
+   and Appendix C, p. 62 / PDF 72); otherwise NAK. */
 static int
 hid_kbd_data_in_locked(hid_kbd_t *dev, uint8_t *buf)
 {
@@ -769,8 +825,9 @@ hid_kbd_configured(usb_dev_t *usb, int config)
 {
     hid_kbd_t *dev = (hid_kbd_t *) usb->priv;
 
-    /* Reports queued for the old configuration are dropped; keys still held
-       show in the first report of the new one. */
+    /* Reports queued under the old configuration are dropped. Keys still
+       held show in the first report of the new one, which is compared
+       against an all-zero report. */
     thread_wait_mutex(dev->lock);
     dev->configured = (config != 0);
     dev->q_head     = 0;
@@ -787,7 +844,9 @@ hid_kbd_reset(usb_dev_t *usb)
 
     thread_wait_mutex(dev->lock);
 
-    /* Report protocol after a reset (HID 7.2.6); keyboards idle 500 ms (7.2.4). */
+    /* Devices start in report protocol (HID 1.11 s7.2.6, p. 54 / PDF 64).
+       The recommended default idle rate for keyboards is 500 ms, 125 in
+       4 ms units (s7.2.4, p. 53 / PDF 63). */
     dev->protocol     = 1;
     dev->idle.rate    = 125;
     dev->idle.pending = 0;
@@ -829,7 +888,9 @@ hid_kbd_init(UNUSED(const device_t *info))
 
     dev->attached = usb_attach(&dev->usb);
 
-    /* The machine's keyboard: every host key comes here, none to the 8042. */
+    /* This is the machine's keyboard: every host key comes here and none
+       goes to the 8042. key_process() drops all keys while keyboard_scan
+       is 0. */
     keyboard_scan = 1;
     keyboard_set_input_handler(hid_kbd_key, dev);
 
@@ -862,13 +923,16 @@ const device_t keyboard_usb_device = {
     .config        = NULL
 };
 
-/* Absolute pointer (HID 1.11 p47, HUT 1.12 p26/p69). The Windows mouse
-   drivers scale by the Physical extent itself, not the Logical one: Win98
-   (v - PhysMin) << 16 / (PhysMax - PhysMin), 2000/XP v * 0FFFFh / PhysMax.
-   With Physical 0/0, which HID 1.11 p48 reads as "same as logical", both
-   post v unscaled (2000/XP divide by (1 << size) - 1), so 0..32767 covers
-   half the screen; Physical must be declared equal to Logical. Values stay
-   under 2^15: the Windows parsers sign-extend by field size whatever the
+/* Absolute pointer: a Generic Desktop Mouse collection with absolute X and Y
+   (HID Usage Tables 1.12 s4, p. 26 / PDF 26) and Buttons 1-3 (s12, p. 67 /
+   PDF 69). The Windows mouse drivers scale X and Y by the Physical extent,
+   not the Logical one: Win98 mouhid.vxd posts (v - PhysMin) << 16 /
+   (PhysMax - PhysMin), Windows 2000/XP mouhid.sys v * 0FFFFh / PhysMax.
+   HID reads Physical 0/0 as equal to Logical (HID 1.11 s6.2.2.7, p. 37-38 /
+   PDF 47-48), but with 0/0 Win98 posts v unscaled and 2000/XP divide by
+   (1 << Report Size) - 1, so 0..32767 would cover half the screen.
+   Physical is therefore declared equal to Logical. Values stay under 2^15
+   because the Windows parsers sign-extend a field by its size whatever the
    Logical Minimum. */
 #define HID_TABLET_MAX 32767
 
@@ -899,9 +963,10 @@ static const uint8_t hid_tablet_report_desc[] = {
     0x75, 0x10,       /*     Report Size (16) */
     0x95, 0x02,       /*     Report Count (2) */
     0x81, 0x02,       /*     Input (Data, Variable, Absolute) */
-    /* A relative wheel, as on the mouse (HUT p29). Physical is global and
-       would carry X/Y's 0..32767 into it: 0/0 means "same as logical"
-       (HID 1.11 p48). */
+    /* A relative wheel, as on the mouse (HID Usage Tables 1.12 s4.3, p. 29
+       / PDF 29). Physical Minimum and Maximum are global items and would
+       carry X and Y's 0..32767 over to it; 0/0 restores "same as Logical"
+       (HID 1.11 s6.2.2.7, p. 38 / PDF 48). */
     0x09, 0x38,       /*     Usage (Wheel) */
     0x15, 0x81,       /*     Logical Minimum (-127) */
     0x25, 0x7f,       /*     Logical Maximum (127) */
@@ -934,12 +999,13 @@ static const uint8_t hid_tablet_cfg_desc[HID_TABLET_CFG_LEN] = {
     /* Configuration */
     9, 0x02, HID_TABLET_CFG_LEN, 0x00, 1, 1, 0,
     0x80, /* bus powered, no remote wakeup */
-    50,   /* 100 mA */
-    /* Interface 0: HID, no boot interface, so subclass and protocol 0 (HID p18-19) */
+    50,   /* 100 mA, in 2 mA units */
+    /* Interface 0: HID, no boot interface, so subclass and protocol 0
+       (HID 1.11 s4.2-4.3, p. 8-9 / PDF 18-19) */
     9, 0x04, 0, 0, 1, 0x03, 0x00, 0x00, 0,
-    /* HID descriptor, between interface and endpoint (HID 7.1) */
+    /* HID descriptor, between interface and endpoint (HID 1.11 s7.1, p. 48 / PDF 58) */
     9, 0x21, 0x11, 0x01, 0, 1, 0x22, sizeof(hid_tablet_report_desc), 0x00,
-    /* Endpoint 1 IN, interrupt, 8 bytes, 10 ms (usb11 p220) */
+    /* Endpoint 1 IN, interrupt, 8 bytes, bInterval 10 ms (USB 1.1 s9.6.4, p. 204 / PDF 220) */
     7, 0x05, 0x81, 0x03, 8, 0x00, 10
 };
 
@@ -953,15 +1019,17 @@ typedef struct hid_tablet_t {
     hid_idle_t idle;
     uint8_t    cur[HID_TABLET_REPORT];  /* the latest state */
     uint8_t    sent[HID_TABLET_REPORT]; /* the last report on the interrupt pipe */
-    int        sent_valid;              /* none yet in this configuration */
+    int        sent_valid;              /* 0 = no report sent yet in this configuration */
     int        attached;
 } hid_tablet_t;
 
-/* Host position, 0..1 of the displayed image, to a logical value: the center
-   of the guest pixel under it (size active pixels; 0 = unknown, no snap).
-   A pixel edge would round into the pixel before it in a driver that scales
-   to 0..65535, and the center keeps the far edge off 32767, which the Win98
-   driver scales past 65535 and its 16-bit path wraps to the left edge. */
+/* Converts a host position (0..1 across the guest screen) to a logical
+   value at the center of the guest pixel under it. size is the screen's
+   width or height in pixels; 0 means unknown and skips the snap. A value on
+   a pixel edge can round into the pixel before it in a driver that scales
+   to 0..65535. The center also keeps the last pixel below 32767: Win98
+   scales 32767 to 65536, and its 16-bit path wraps that to the left or top
+   edge. */
 static uint16_t
 hid_tablet_axis(double a, int size)
 {
@@ -970,8 +1038,9 @@ hid_tablet_axis(double a, int size)
     if (a > 1.0)
         a = 1.0;
     if (size > 0) {
-        /* The host divides a whole position by its width: q / w * w can
-           come back a hair under q. */
+        /* The host position is a whole pixel divided by the width, and
+           (q / w) * w can come out slightly below q; the 1e-6 keeps it in
+           pixel q. */
         int p = (int) (a * size + 1e-6);
 
         if (p >= size)
@@ -983,8 +1052,10 @@ hid_tablet_axis(double a, int size)
     return (uint16_t) (a * (HID_TABLET_MAX + 1));
 }
 
-/* Host input counts only in tablet mode; in mouse mode the state holds. A
-   press and release between two polls still shows as pressed (take). */
+/* Samples the host pointer into cur. Host input counts only in tablet mode;
+   in mouse mode cur keeps its last value. With take set, a button pressed
+   and released since the last take still shows as pressed, and the wheel
+   motion is consumed. */
 static void
 hid_tablet_sample(hid_tablet_t *dev, int take)
 {
@@ -1001,14 +1072,16 @@ hid_tablet_sample(hid_tablet_t *dev, int take)
 
     mouse_get_abs_coords(&x, &y);
 
-    /* The monitor the host pointer is over (Qt: index + 1), else the first. */
+    /* The monitor the host pointer is over; the Qt UI stores its index + 1,
+       and 0 when the pointer is over none. Fall back to the first. */
     if ((mouse_tablet_in_proximity > 0) && (mouse_tablet_in_proximity <= MONITORS_NUM))
         m = &monitors[mouse_tablet_in_proximity - 1];
     else
         m = &monitors[0];
 
-    /* With overscan shown, the image carries the border around the active
-       display: the guest's screen is the inner xsize by ysize. */
+    /* With overscan shown, the image adds a border of half the overscan on
+       each side of the active display: the guest's screen is the inner
+       xsize by ysize. */
     if (enable_overscan && (m->mon_xsize > 0) && (m->mon_ysize > 0)) {
         x = (x * (m->mon_xsize + m->mon_overscan_x) - (m->mon_overscan_x / 2.0)) / m->mon_xsize;
         y = (y * (m->mon_ysize + m->mon_overscan_y) - (m->mon_overscan_y / 2.0)) / m->mon_ysize;
@@ -1020,11 +1093,12 @@ hid_tablet_sample(hid_tablet_t *dev, int take)
     dz = 0;
     if (take) {
         b |= tablet_take_pressed();
-        /* The wheel grows away from the user, as on the mouse. */
+        /* Positive is away from the user, as on the mouse. */
         mouse_subtract_z(&dz, -127, 127, 0);
     }
 
-    /* Host bits 0-2 are left, right, middle: Buttons 1-3 (HUT p69). */
+    /* Host bits 0-2 are left, right, middle: Buttons 1-3, primary,
+       secondary, tertiary (HID Usage Tables 1.12 s12, p. 67 / PDF 69). */
     dev->cur[0] = b & 0x07;
     dev->cur[1] = vx & 0xff;
     dev->cur[2] = vx >> 8;
@@ -1040,11 +1114,14 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     uint16_t      wvalue = setup[2] | (setup[3] << 8);
     uint16_t      windex = setup[4] | (setup[5] << 8);
 
+    /* Every request here is addressed to interface 0, the only one. */
     if (windex != 0)
         return USB_DATA_STALL;
 
-    /* Class descriptors from the interface (HID 7.1.1), index 0 only: one
-       HID and one report descriptor. */
+    /* GET_DESCRIPTOR for a HID class descriptor, addressed to the interface
+       (HID 1.11 s7.1.1, p. 49 / PDF 59). There is one HID and one Report
+       descriptor, so any index but 0 STALLs. The HID descriptor is the copy
+       inside the configuration descriptor, at offset 18. */
     if ((setup[0] == 0x81) && (setup[1] == 0x06)) {
         if ((wvalue & 0xff) != 0)
             return USB_DATA_STALL;
@@ -1060,18 +1137,22 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
         }
     }
 
-    /* GET/SET_PROTOCOL are boot-subclass requests (HID p64): STALL here. */
+    /* GET_PROTOCOL and SET_PROTOCOL are for boot-subclass devices only (HID
+       1.11 s7.2.5-7.2.6, p. 54 / PDF 64), so they STALL here. */
     if (setup[0] == 0xa1) {
         switch (setup[1]) {
             case HID_GET_REPORT:
-                /* The one Input report, no report IDs (HID 7.2.1). */
+                /* wValue is report type (high) and report ID (low). The
+                   only report is Input with no report ID: type 1, ID 0
+                   (HID 1.11 s7.2.1, p. 51 / PDF 61). */
                 if (wvalue != 0x0100)
                     return USB_DATA_STALL;
                 hid_tablet_sample(dev, 0);
                 memcpy(data, dev->cur, HID_TABLET_REPORT);
                 return HID_TABLET_REPORT;
             case HID_GET_IDLE:
-                /* No report IDs: a nonzero ID names no report (HID 7.2.3). */
+                /* The device uses no report IDs, so a nonzero ID names no
+                   report (HID 1.11 s7.2.3, p. 52 / PDF 62). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 data[0] = dev->idle.rate;
@@ -1084,13 +1165,14 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     if (setup[0] == 0x21) {
         switch (setup[1]) {
             case HID_SET_IDLE:
-                /* No report IDs: a nonzero ID names no report (HID 7.2.4). */
+                /* No report IDs, so a nonzero ID names no report; the high
+                   byte is the duration (HID 1.11 s7.2.4, p. 52-53 / PDF 62-63). */
                 if ((wvalue & 0xff) != 0)
                     return USB_DATA_STALL;
                 hid_idle_set(&dev->idle, wvalue >> 8);
                 return 0;
             default:
-                /* No Output or Feature reports. */
+                /* SET_REPORT included: the tablet has no Output or Feature report. */
                 return USB_DATA_STALL;
         }
     }
@@ -1098,8 +1180,10 @@ hid_tablet_control(usb_dev_t *usb, const uint8_t *setup, uint8_t *data)
     return USB_DATA_STALL;
 }
 
-/* Interrupt IN: a report on a change (and the first one in a configuration),
-   else the same report once the idle period runs out, else NAK (HID 7.2.4). */
+/* Interrupt IN. In tablet mode: a report when the state changed or when none
+   was sent yet in this configuration. In either mode: the current state
+   again once the idle period has run out (HID 1.11 s7.2.4, p. 53 / PDF 63).
+   Otherwise NAK. */
 static int
 hid_tablet_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxlen))
 {
@@ -1112,8 +1196,9 @@ hid_tablet_data_in(usb_dev_t *usb, UNUSED(int ep), uint8_t *buf, UNUSED(int maxl
         memcpy(dev->sent, dev->cur, HID_TABLET_REPORT);
         dev->sent_valid = 1;
         memcpy(buf, dev->cur, HID_TABLET_REPORT);
-        /* The wheel is relative: a delta goes out once, an idle repeat
-           carries 0, and a nonzero delta always differs from sent. */
+        /* The wheel is relative: a delta goes out once and an idle repeat
+           carries 0. Clearing it in sent too makes any later nonzero delta
+           count as a change. */
         dev->cur[5]  = 0;
         dev->sent[5] = 0;
         hid_idle_reported(&dev->idle);
@@ -1136,7 +1221,8 @@ hid_tablet_reset(usb_dev_t *usb)
 {
     hid_tablet_t *dev = (hid_tablet_t *) usb->priv;
 
-    /* Pointers idle indefinitely by default (HID 7.2.4). */
+    /* The recommended default idle rate for mice is infinite, rate 0 (HID
+       1.11 s7.2.4, p. 53 / PDF 63). */
     dev->idle.rate    = 0;
     dev->idle.pending = 0;
     dev->sent_valid   = 0;

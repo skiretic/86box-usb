@@ -8,7 +8,12 @@
  *
  *          Definitions for the USB device core: the device side of one
  *          bus transaction, the default control pipe and the standard
- *          requests of USB 1.1 chapter 9.
+ *          requests, written from the Universal Serial Bus Specification
+ *          Revision 1.1 (September 23, 1998), with the host-controller
+ *          differences from the Universal Host Controller Interface
+ *          (UHCI) Design Guide Revision 1.1 (March 1996) and the Open
+ *          Host Controller Interface Specification for USB Release 1.0a
+ *          (September 14, 1999).
  *
  * Authors: skiretic, <skiretic@proton.me>
  *
@@ -22,6 +27,8 @@
 extern "C" {
 #endif
 
+/* Token PID bytes: packet type in bits 0-3, its complement in bits 4-7
+   (USB 1.1 s8.3.1, Table 8-1, p. 155-156 / PDF 171-172). */
 #define USB_PID_OUT   0xe1
 #define USB_PID_IN    0x69
 #define USB_PID_SETUP 0x2d
@@ -37,10 +44,12 @@ enum {
     USB_RET_OVERRUN          /* IN data longer than the host allowed, ACKed: the excess is lost */
 };
 
-/* Class hooks return this for "NAK the IN" or "STALL". */
+/* Class hooks return these to NAK or STALL the transaction. */
 #define USB_DATA_NAK   (-1)
 #define USB_DATA_STALL (-2)
 
+/* Largest Data stage the default control pipe takes; a control write with
+   a longer wLength is STALLed. */
 #define USB_CTRL_BUF 1024
 
 typedef struct usb_dev_t usb_dev_t;
@@ -56,20 +65,25 @@ typedef struct usb_packet_t {
        past len (OVERRUN, BABBLE); 0 when it sent no data. */
     int      bus_len;
     /* IN: the host ACKs data past len (OVERRUN) instead of leaving it
-       unanswered (BABBLE). OHCI does, UHCI does not. */
+       unanswered (BABBLE). An OHCI does: on a data overrun the toggle has
+       advanced (OpenHCI 1.0a s4.3.1.3.6.2, p. 24 / PDF 38). A UHCI does
+       not: data past MaxLen is babble (UHCI 1.1 s3.2.3, p. 24 / PDF 30). */
     uint8_t  ack_overrun;
     /* IN: the host answers nothing the device sends, even a packet within
-       len (UHCI: cut off at EOF), so the device keeps it (BABBLE). */
+       len (a UHCI cutting the packet off at the end of the frame), so the
+       device keeps the packet pending (BABBLE). */
     uint8_t  no_ack;
-    /* IN: len was cut short at a hub's EOF1, where the hub's EOP turns what
-       runs past it into a CRC error for the host, not a babble (UHCI behind
-       a hub). The device acts the same; only the debug capture differs. */
+    /* IN: len was cut short at a hub's EOF1 (a UHCI behind a hub). There
+       the hub sends an EOP upstream (USB 1.1 s11.2.2, p. 234 / PDF 250),
+       so the host sees the truncated packet as a CRC error, not babble. The
+       device acts the same; only the debug capture differs. */
     uint8_t  hub_cut;
 } usb_packet_t;
 
 typedef struct usb_dev_ops_t {
-    /* Class/vendor request, and standard requests to an interface the core
-       does not know. Returns the Data-IN length, 0, or USB_DATA_STALL. */
+    /* Class and vendor requests, and standard requests to an interface that
+       the core does not handle. Returns the Data-IN length, 0, or
+       USB_DATA_STALL. */
     int (*control)(usb_dev_t *dev, const uint8_t *setup, uint8_t *data);
     /* Next packet for IN endpoint ep, at most maxlen bytes, or USB_DATA_NAK/STALL. */
     int (*data_in)(usb_dev_t *dev, int ep, uint8_t *buf, int maxlen);
@@ -80,12 +94,14 @@ typedef struct usb_dev_ops_t {
     /* SET_INTERFACE selected alternate setting alt of interface intf. */
     void (*set_interface)(usb_dev_t *dev, int intf, int alt);
     /* Hubs only. route: the device behind the hub that a token for addr at
-       this speed reaches, or NULL. attach: take udev on a free downstream
-       port, 1 if it did. detach: udev leaves its port on this hub. */
+       this speed reaches, or NULL. attach: put udev on a free downstream
+       port; returns 1 if it did. detach: udev leaves its port on this hub. */
     usb_dev_t *(*route)(usb_dev_t *dev, int addr, int low_speed);
     int (*attach)(usb_dev_t *dev, usb_dev_t *udev);
     void (*detach)(usb_dev_t *dev, usb_dev_t *udev);
-    /* Hubs only: udev, on a port of this hub, was still sending at EOF2. */
+    /* Hubs only: udev, on a port of this hub, was still sending at EOF2,
+       where the hub disables the port as a babbler (USB 1.1 s11.2.2,
+       p. 234 / PDF 250). */
     void (*eof_babble)(usb_dev_t *dev, usb_dev_t *udev);
     /* Hubs only. port_idle: no traffic, reset or resume reaches udev's port,
        so udev is suspended. resume: udev drives resume signaling (K). */
@@ -104,6 +120,9 @@ typedef struct usb_ep_t {
     uint8_t  halt;
     uint8_t  pending;   /* IN packet sent but not yet ACKed: resent unchanged */
     int      pend_len;
+    /* 64 bytes is the largest control, interrupt or bulk packet (USB 1.1
+       s5.5.3, p. 37 / PDF 53; s5.7.3, p. 43 / PDF 59; s5.8.3, p. 47 /
+       PDF 63). Isochronous IN does not use this buffer. */
     uint8_t  pend_buf[64];
 } usb_ep_t;
 
@@ -118,11 +137,11 @@ struct usb_dev_t {
     const usb_dev_ops_t  *ops;
     void                 *priv;
 
-    /* Chapter 9 state. */
+    /* Device state (USB 1.1 chapter 9). */
     uint8_t               powered_reset; /* has seen a bus reset since attach */
     uint8_t               addr;
-    uint8_t               new_addr;
-    uint8_t               set_addr;
+    uint8_t               new_addr;      /* SET_ADDRESS value, applied after its Status stage */
+    uint8_t               set_addr;      /* new_addr is waiting */
     uint8_t               config;
     uint8_t               remote_wakeup;
     uint8_t               alt[USB_DEV_INTERFACES]; /* alternate setting of each interface */
@@ -134,9 +153,9 @@ struct usb_dev_t {
     uint8_t               ctl_stage;
     uint8_t               ctl_setup[8];
     uint8_t               ctl_buf[USB_CTRL_BUF];
-    int                   ctl_len;
-    int                   ctl_pos;
-    int                   ctl_zlp;
+    int                   ctl_len; /* Data stage length */
+    int                   ctl_pos; /* bytes of the Data stage done so far */
+    int                   ctl_zlp; /* a zero-length packet still ends the Data stage */
     uint64_t              ctl_urb; /* debug pcap: open control URB id, 0 = none */
 
     /* Port the device sits on and its bus number, set by the host controller
@@ -149,9 +168,10 @@ struct usb_dev_t {
 extern void usb_dev_init(usb_dev_t *dev);
 extern void usb_dev_bus_reset(usb_dev_t *dev);
 extern int  usb_dev_packet(usb_dev_t *dev, usb_packet_t *p);
-/* The data packet a non-isochronous IN endpoint answers its next token with,
-   made pending so that transaction sends exactly it. Returns its length and
-   sets data and toggle, or returns -1 when the answer carries no data. */
+/* The data packet a non-isochronous IN endpoint will answer its next token
+   with, made pending so that the transaction sends exactly this packet.
+   Returns its length and sets data and toggle, or returns -1 when the
+   answer is not a data packet (NAK, STALL, no response). */
 extern int  usb_dev_in_peek(usb_dev_t *dev, int ep, const uint8_t **data, int *toggle);
 /* Remote wakeup: a suspended device with DEVICE_REMOTE_WAKEUP set drives
    resume signaling upstream. Returns 1 if it did. Emulation thread only. */
@@ -161,7 +181,8 @@ extern int  usb_dev_remote_wakeup(usb_dev_t *dev);
    to the first free port of a hub on one. */
 extern int  usb_attach(usb_dev_t *dev);
 extern void usb_detach(usb_dev_t *dev);
-/* Whether nothing reaches dev from upstream (idle bus), so it is suspended. */
+/* Whether nothing reaches dev from upstream (idle bus), so that it is
+   suspended. */
 extern int  usb_dev_suspended(const usb_dev_t *dev);
 /* Resume signaling (K) from dev reaches the port it sits on. */
 extern void usb_resume_upstream(usb_dev_t *dev);

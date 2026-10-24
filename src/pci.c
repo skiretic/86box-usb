@@ -192,16 +192,28 @@ pci_set_irq_routing(int pci_int, int irq)
         return;
 
     /* Every source asserted through the PIRQ moves from the old IRQ input to
-       the new one. */
+       the new one, on the same side pci_irq() drove it: where the board
+       wires the PIRQ to an I/O APIC input of its own, only the 8259 side
+       follows the steering, and the PIRQ's own input stays as it is. */
+    int wired = ioapic_pirq_intin(pci_int - 1) != PCI_APIC_INTIN_INVALID;
+
     for (int i = 0; i < pci_pirq_srcs[pci_int - 1]; i++) {
         uint8_t *irq_state = pci_pirq_src[pci_int - 1][i];
 
         if (irq_state == NULL)
             continue;
-        if (old <= PCI_IRQ_MAX)
-            picintclevel(1 << old, irq_state);
-        if (new <= PCI_IRQ_MAX)
-            picintlevel(1 << new, irq_state);
+        if (old <= PCI_IRQ_MAX) {
+            if (wired)
+                picint_steered(1 << old, PIC_IRQ_LEVEL, 0, irq_state);
+            else
+                picintclevel(1 << old, irq_state);
+        }
+        if (new <= PCI_IRQ_MAX) {
+            if (wired)
+                picint_steered(1 << new, PIC_IRQ_LEVEL, 1, irq_state);
+            else
+                picintlevel(1 << new, irq_state);
+        }
     }
 }
 

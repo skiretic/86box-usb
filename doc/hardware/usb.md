@@ -1,7 +1,7 @@
 # USB host controllers and devices
 
-86Box emulates the USB 1.1 host controllers built into the chipsets of its Pentium-class and
-later boards, and a set of USB devices that attach to them. Both host controller types are
+86Box emulates the USB 1.1 host controllers built into the chipsets of many of its boards, and
+a set of USB devices that attach to them. Both host controller types are
 covered: the Universal Host Controller Interface (UHCI) used by Intel and VIA southbridges, and
 the Open Host Controller Interface (OHCI) used by ALi, SiS, SMSC and STMicroelectronics parts.
 Two PCI USB cards bring USB to boards without it.
@@ -31,19 +31,21 @@ halt, the default control pipe and the standard requests (USB 1.1 chapters 8 and
 | Intel PIIX3, PIIX4, PIIX4E | UHCI | 2 |
 | VIA VT82C586B, VT82C596A/B | UHCI | 2 |
 | VIA VT82C686A/B | two UHCIs | 4 |
-| ALi M1533, M1543, M1543C (M5237) | OHCI | 2 or 3 (strap) |
+| ALi M1543 (M5237) | OHCI | 2 |
+| ALi M1543C (M5237) | OHCI | 2, or 3 when the BIOS enables the third port |
 | SiS 5571, 5582, 5595 | OHCI | 2 |
 | SMSC SLC90E66 | OHCI | 2 |
 | ST STPC Atlas | OHCI | 2 |
 
 Each chipset's glue routes the controller's interrupt the way that southbridge does, honors its
-function-disable bits, and wires its legacy USB SMI. On Intel and VIA southbridges the UHCI
+function-disable bits, and wires its legacy USB SMI where the chip has one (the STPC Atlas has
+none). On Intel and VIA southbridges the UHCI
 legacy support register traps the keyboard controller ports (60h, 64h) and the A20 gate
 sequence, so a BIOS with USB keyboard support can drive a USB keyboard in DOS
 (`src/usb_legacy.c`). OHCI legacy emulation (OpenHCI appendix B) is not implemented.
 
-Boards whose southbridge has USB carry `MACHINE_BUS_USB`, which is what makes Settings offer USB
-devices. Many board BIOSes ship with the USB controller disabled; it has to be enabled in the
+Boards whose southbridge has USB carry `MACHINE_BUS_USB`; Settings offers USB devices on those
+boards, and on any board once a PCI USB card is chosen. Many board BIOSes ship with the USB controller disabled; it has to be enabled in the
 BIOS setup before an operating system can see it.
 
 ## Devices
@@ -83,5 +85,5 @@ southbridge has USB; where USB did not work, the cause was the board's BIOS (USB
 no setup option, a beta BIOS, or the BIOS turning off the second controller). Windows 98 SE
 ran USB devices on Intel, VIA, ALi, SiS, SMSC and STPC boards (it has no mass storage class
 driver). Windows 2000 ran the mouse, keyboard, speaker and mass storage on an Intel and an ALi
-board, and the keyboard on a VIA board. DOS ran with the BIOS USB keyboard support on Intel and
+board. DOS ran with the BIOS USB keyboard support on Intel and
 VIA boards.

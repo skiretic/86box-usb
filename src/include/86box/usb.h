@@ -6,7 +6,8 @@
  *
  *          This file is part of the 86Box distribution.
  *
- *          Definitions for the Distributed DMA emulation.
+ *          Definitions for the Universal Serial Bus host controllers and
+ *          devices.
  *
  * Authors: Miran Grca, <mgrca8@gmail.com>
  *
@@ -69,23 +70,27 @@ extern void            usb_card_reset(void);
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);
 /* The chipset routes the UHCI interrupt; level is the controller's IRQ output. */
 extern void uhci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *priv);
-/* PCICMD Bus Master Enable: with it clear the UHCI makes no memory accesses. */
+/* PCICMD Bus Master Enable: with it clear the UHCI makes no memory accesses
+   (PIIX4 datasheet s6.1.3, p. 103 / PDF 103). */
 extern void uhci_set_bus_master(usb_t *dev, int enable);
-/* A root port whose device is still sending at EOF is disabled, unless the
-   chipset keeps it (VIA Rx40 bit 6). */
+/* A root port whose device is still sending at EOF2 is disabled, unless the
+   chipset keeps it enabled (VIA USB function Rx40 bit 6, Babble Option;
+   VT82C686B datasheet, p. 76 / PDF 82). */
 extern void uhci_set_babble_keep_port(usb_t *dev, int keep);
 extern void ohci_update_mem_mapping(usb_t *dev, uint8_t base1, uint8_t base2, uint8_t base3, int enable);
 /* The chipset routes the OHCI interrupt; level is the controller's INT output. */
 extern void ohci_set_irq_handler(usb_t *dev, void (*set_irq)(void *priv, int level), void *priv);
 /* The chipset takes the OHCI's SMI output; level is the SMI pin. */
 extern void ohci_set_smi_handler(usb_t *dev, void (*set_smi)(void *priv, int level), void *priv);
-/* PCICMD Bus Master Enable: with it clear the OHCI makes no memory accesses. */
+/* PCI COMMAND Bus Master: with it clear the OHCI reads no descriptors and
+   does not write the HCCA (OpenHCI 1.0a Appendix A, p. 134 / PDF 148). */
 extern void ohci_set_bus_master(usb_t *dev, int enable);
 /* For a chipset whose Bus Master bit is hardwired to 1: on now and after
    every reset. */
 extern void ohci_hardwire_bus_master(usb_t *dev);
-/* Where an OHCI differs from the ALi M5237 and SMSC SLC90E66, whose
-   behavior is flags 0. Set once at init; kept through every reset. */
+/* Where an OHCI differs from flags 0, which model the ALi M5237; the SMSC
+   SLC90E66 uses flags 0 as well. Set once at init and kept through every
+   reset. */
 #define OHCI_CHIP_LST_0628H 0x01 /* HcLSThreshold resets to 0628h, not 0 */
 #define OHCI_CHIP_RWC       0x02 /* RemoteWakeupConnected is R/W, not hard 0 */
 #define OHCI_CHIP_NO_SMI    0x04 /* no SMI pin: OwnershipChange is tied to 0 */
@@ -94,13 +99,14 @@ extern void ohci_hardwire_bus_master(usb_t *dev);
 #define OHCI_CHIP_UE_RW     0x20 /* the UnrecoverableError enable is R/W */
 #define OHCI_CHIP_PTRS_RO   0x40 /* HcPeriodCurrentED, HcDoneHead ignore writes */
 extern void ohci_set_chip_flags(usb_t *dev, uint32_t flags);
-/* The root hub has a connector for each of its ports (2 by default); the
-   first ndp are implemented (NumberDownstreamPorts). A chipset strap may
-   change ndp at any time. */
+/* The root hub has ports connectors (2 by default), of which the first ndp
+   are implemented and reported in NumberDownstreamPorts. A chipset strap
+   may change ndp at any time. */
 extern void ohci_set_ndp(usb_t *dev, int ndp, int ports);
 
-/* UHCI legacy keyboard support (UHCI 1.1 s5.2) on a function's LEGSUP
-   bytes, legsup[0] = C0h and legsup[1] = C1h. */
+/* UHCI legacy keyboard support (UHCI 1.1 s5.2, p. 39-41 / PDF 45-47) on a
+   function's LEGSUP bytes, legsup[0] = C0h and legsup[1] = C1h. The opts
+   bits follow VIA USB function Rx41 (VT82C686B datasheet, p. 76 / PDF 82). */
 #define UHCI_LEGSUP_STATUS_ALWAYS  0x01 /* trap status bits set without the enables (VIA Rx41 bit 2) */
 #define UHCI_LEGSUP_A20_FF_TRAPPED 0x02 /* the sequence's final 64h <- FFh is not passed (VIA Rx41 bit 1) */
 /* A cycle at 60h or 64h; returns 1 if it is trapped and must not reach the
@@ -108,9 +114,11 @@ extern void ohci_set_ndp(usb_t *dev, int ndp, int ports);
 extern int  uhci_legsup_kbc_cycle(uint8_t *legsup, uint8_t *a20, uint16_t port, int write, uint8_t val, int opts);
 /* Whether keyboard controller cycles need to be seen at all. */
 extern int  uhci_legsup_kbc_armed(const uint8_t *legsup, int opts);
-/* The legacy USB event sources that are active, one bit each (enabled trap
-   statuses, bits 3-0; the IRQ with USBSMIEN, bit 4; A20PTS with SMIEPTE,
-   bit 7): a source going active is an event (SMI#). irq is the UHCI IRQ. */
+/* The legacy USB event sources that are active, one bit each, at the bit
+   of their LEGSUP enable: the enabled trap statuses in bits 3-0, the IRQ
+   with USBSMIEN in bit 4, A20PTS with SMIEPTE in bit 7 (UHCI 1.1 s5.2.1,
+   p. 39-40 / PDF 45-46). A source going active is an event (SMI#). irq is
+   the UHCI IRQ. */
 extern uint8_t uhci_legsup_event(const uint8_t *legsup, int irq);
 extern void uhci_legsup_write_c0(uint8_t *legsup, uint8_t val);
 

@@ -1040,6 +1040,7 @@ extern int             machine_at_celebris5xx_init(const machine_t *);
 /* m_at_socket5.c */
 /* i430NX */
 extern int             machine_at_p54np4_init(const machine_t *);
+extern int             machine_at_p54np4d_init(const machine_t *);
 extern int             machine_at_586ip_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern const device_t  plato_device;
@@ -1208,6 +1209,8 @@ extern int             machine_at_acerm3a_init(const machine_t *);
 extern int             machine_at_p55t2p4_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern void            machine_at_p65up5_common_init(const machine_t *, const device_t *northbridge);
+/* Validated helper keeps the caller-selected northbridge/CPU-card path. */
+extern void            machine_at_p65up5_validated_up_init(const machine_t *, const device_t *northbridge);
 #endif
 extern int             machine_at_p65up5_cp55t2d_init(const machine_t *);
 extern int             machine_at_rubyusb_init(const machine_t *);
@@ -1348,6 +1351,7 @@ extern const device_t  in530_device;
 #endif
 extern int             machine_at_in530_init(const machine_t *);
 extern int             machine_in530_boot_logo(void);
+extern int             machine_at_compaqms_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern const device_t  ga5smm_device;
 #endif
@@ -1629,6 +1633,7 @@ extern int             machine_at_cuv4xls_init(const machine_t *);
 extern const device_t  ms6318_device;
 #endif
 extern int             machine_at_ms6318_init(const machine_t *);
+extern int             machine_at_m790mr_init(const machine_t *);
 extern int             machine_at_cairo5_init(const machine_t *);
 
 /* m_at_misc.c */

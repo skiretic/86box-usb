@@ -492,6 +492,16 @@ pci_irq(uint8_t slot, uint8_t pci_int, int level, int set, uint8_t *irq_state)
             if (slot > 0x00) {
                 slot = (slot - 1) & PCI_INT_PINS_MAX;
 
+                /* A function inside the south bridge on one of its own
+                   PIRQs (the PIIX's UHCI on PIRQD) is on that PIRQ's wire,
+                   so it reaches the PIRQ's own I/O APIC input the same way
+                   a card on it does. */
+                if (ioapic_pirq_intin(slot) != PCI_APIC_INTIN_INVALID) {
+                    intin              = ioapic_pirq_intin(slot);
+                    direct_intin_route = 1;
+                    pirq_wired         = 1;
+                }
+
                 irq_line    = pci_irqs[slot];
 
                 /* Ignore what was provided to us as a parameter and override it with whatever

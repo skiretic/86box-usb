@@ -322,9 +322,10 @@ RendererStack::wheelEvent(QWheelEvent *event)
         mouse_set_w((short) event->angleDelta().x());
     }
 #else
-    /* Captured, the native filters read the wheel. A tablet is never
-       captured: take Qt's angleDelta, 120 per notch, which the core counts
-       as 120 per notch on Windows and 1 on macOS. */
+    /* While the mouse is captured, the native input filters read the wheel.
+       A tablet is never captured, so its wheel comes from Qt's angleDelta,
+       120 units per notch. The core's WHEEL_DELTA is 120 on Windows and 1
+       on macOS, so macOS passes whole notches and keeps the remainder. */
     if (!mouse_capture) {
 #    ifdef __APPLE__
         static int wheel_rem = 0;

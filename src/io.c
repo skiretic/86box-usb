@@ -62,8 +62,9 @@ io_t   *io[NPORTS];
 io_t   *io_last[NPORTS];
 uint8_t io_turbo_map[NPORTS >> 3];
 
-/* Chipset claims (io_set_claim): few ports, so a small table plus a bitmap
-   that keeps the check off the path of every other port. */
+/* Chipset claims (io_set_claim). Only a few ports are ever claimed, so they
+   live in a small table, and a bitmap of claimed ports lets every other
+   port skip the table lookup. */
 #define IO_CLAIMS 8
 
 typedef struct io_claim_t {

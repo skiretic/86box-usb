@@ -25,10 +25,11 @@ typedef struct
     uint8_t     usb_irq_state;
     void       *usb_priv;      /* the USB function, for its enable */
     uint8_t     usb_smi_level; /* the OHCI's SMI output */
-    /* The chip's legacy USB SMI# receiver for the OHCI's SMI pin. */
+    /* Where the OHCI's SMI output goes: 95h of the 5571/5581 host bridge,
+       or the 5595's ACPI LEG_STS. */
     void      (*usb_smi)(void *priv, int level);
     void       *usb_smi_priv;
-    uint8_t     usb_pme_level; /* enabled INT or SMI, for the ACPI USB event */
+    uint8_t     usb_pme_level; /* INT or SMI active while USB is enabled */
 
     uint8_t    *pmu_regs;
 

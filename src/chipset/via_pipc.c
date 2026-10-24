@@ -209,17 +209,21 @@ pipc_io_trap_glb(UNUSED(const uint16_t size), UNUSED(const uint16_t port), const
     }
 }
 
-/* Function 0 Rx48 bit 2 disables USB function 2 and Rx85 bit 4 function 3;
-   a disabled function decodes no I/O, masters nothing and drives no IRQ. */
+/*
+   Function 0 Rx48 bit 2 disables USB function 2 and Rx85 bit 4 function 3;
+   a disabled function decodes no I/O, masters nothing and drives no IRQ.
+ */
 static int
 pipc_usb_disabled(const pipc_t *dev, int n)
 {
     return n ? !!(dev->pci_isa_regs[0x85] & 0x10) : !!(dev->pci_isa_regs[0x48] & 0x04);
 }
 
-/* The UHCI interrupt goes straight to the ISA IRQ in Interrupt Line Rx3C
-   bits 3-0 (Function 2/3 Offset 3C); 0 is off and 2 reserved, and Fh is
-   IRQ15 on the 586A/B but off on the later parts. */
+/* The UHCI interrupt goes straight to the ISA IRQ named by bits 3-0 of its
+   own Interrupt Line (Rx3C), not through a PIRQ line. 0 is off and 2 is
+   reserved. Fh is IRQ15 on the 586B (VT82C586B p. 38 / PDF 44) and off on
+   the 596B and later (VT82C596B p. 55 / PDF 61; VT82C686A p. 76 / PDF 82);
+   the 586A data sheet does not describe the field. */
 static void
 pipc_usb_update_irq(pipc_t *dev, int n)
 {
@@ -237,10 +241,13 @@ pipc_usb_update_irq(pipc_t *dev, int n)
     dev->usb_irq_line[n] = irq;
 }
 
-/* Legacy Support C1-C0 is the UHCI 1.1 s5.2.1 register: USBIRQS (bit 12)
-   shows the USB IRQ. A legacy USB event (the IRQ with USBSMIEN, an enabled
-   keyboard trap, A20PTS with SMIEPTE) sets PM Global Status LEG_USB_STS
-   (bit 4), SMI# on LEG_USB_EN; none is raised during an A20GATE
+/* The VIA data sheets list Legacy Support C1-C0 only as "UHCI v1.1
+   Compliant", 2000h (VT82C586B p. 39 / PDF 45), so it is the UHCI 1.1
+   s5.2.1 register (p. 39-40 / PDF 45-46): USBIRQS (bit 12) shows the USB
+   interrupt. A new legacy USB event (the interrupt with USBSMIEN, an enabled
+   keyboard trap, or A20PTS with SMIEPTE) sets PM Global Status LEG_USB_STS
+   (bit 4) and asserts SMI# when Global Enable LEG_USB_EN (bit 4) is set
+   (VT82C586B p. 50 / PDF 56). No event is raised during an A20GATE
    pass-through sequence. */
 static void
 pipc_usb_update_legacy(pipc_t *dev, int n)
@@ -263,9 +270,11 @@ pipc_usb_update_legacy(pipc_t *dev, int n)
     dev->usb_smi_level[n] = sources;
 }
 
-/* Rx41 bit 1 keeps the A20GATE sequence's final 64h <- FFh from the 8042;
-   bit 2 "Trap Option" sets the trap statuses without their enables when 0
-   on the 586A/B and when 1 from the 596B on. */
+/* Rx41 bit 1 set keeps the A20GATE sequence's final 64h <- FFh write from
+   the 8042. Bit 2, "Trap Option", sets the 60h/64h trap statuses without
+   checking their enable bits when 0 on the 586A/B (VT82C586A p. 35 /
+   PDF 41; VT82C586B p. 39 / PDF 45) and when 1 on the 596B and later
+   (VT82C596B p. 56 / PDF 62; VT82C686A p. 77 / PDF 83). */
 static int
 pipc_usb_kbc_opts(const pipc_t *dev, int n)
 {
@@ -278,8 +287,9 @@ pipc_usb_kbc_opts(const pipc_t *dev, int n)
     return opts;
 }
 
-/* LEGSUP keyboard controller traps (UHCI 1.1 s5.2.2): a cycle trapped by
-   either UHCI never reaches the 8042; the SMI handler stands in for it. */
+/* LEGSUP keyboard controller traps: a cycle trapped by either UHCI never
+   reaches the 8042, and the SMI handler stands in for it (UHCI 1.1 s5.2.2,
+   p. 41 / PDF 47). */
 static int
 pipc_usb_kbc_claim(uint16_t port, uint8_t write, uint8_t val, void *priv)
 {
@@ -335,8 +345,10 @@ pipc_usb1_irq(void *priv, int level)
     pipc_usb_irq((pipc_t *) priv, 1, level);
 }
 
-/* One UHCI function's configuration space at its defaults, as at power-on
-   and on PCIRST#; LEGSUP back at 2000h disarms the keyboard traps. */
+/*
+   One UHCI function's configuration space at its defaults, as at power-on
+   and on PCIRST#; LEGSUP back at 2000h disarms the keyboard traps.
+ */
 static void
 pipc_usb_reset_regs(pipc_t *dev, int i)
 {
@@ -1085,9 +1097,10 @@ pipc_read(int func, int addr, UNUSED(int len), void *priv)
     int     c;
     uint8_t pm_func = dev->usb[1] ? 4 : 3;
 
-    /* A function disabled in function 0 (48h, 85h) answers no config cycle and
-       reads FFh. Each branch is bounded by function number, so a disabled one
-       cannot fall through into the next branch's register bank. */
+    /* A function disabled through function 0 Rx48 or Rx85 answers no
+       configuration cycle and reads FFh. Each branch tests its own function
+       number, so a disabled function does not fall into the next branch's
+       register bank. */
     if (func > dev->max_func)
         return ret;
     else if (func == 0) {                       /* PCI-ISA bridge */
@@ -1597,7 +1610,8 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 break;
 
             case 0x40:
-                /* Bit 6: a port babbling at EOF is not disabled. */
+                /* Bit 6, Babble Option: when set, a port that babbles at EOF
+                   is not disabled (VT82C586B p. 39 / PDF 45). */
                 dev->usb_regs[func - 2][0x40] = val;
                 uhci_set_babble_keep_port(dev->usb[func - 2], val & 0x40);
                 break;
@@ -1612,7 +1626,9 @@ pipc_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 pipc_usb_update_legacy(dev, func - 2);
                 break;
             case 0xc1:
-                /* Bits 7 and 3-0 are write-1-to-clear, bit 4 read-only, bit 6 reserved. */
+                /* LEGSUP bits 15 and 11-8 are write-1-to-clear, bit 13 is
+                   read/write, bit 12 read-only and bit 14 reserved (UHCI 1.1
+                   s5.2.1, p. 39 / PDF 45). */
                 dev->usb_regs[func - 2][0xc1] = (dev->usb_regs[func - 2][0xc1] & 0x9f & ~(val & 0x8f)) | (val & 0x20);
                 pipc_usb_update_legacy(dev, func - 2);
                 break;

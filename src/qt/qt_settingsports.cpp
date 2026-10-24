@@ -74,7 +74,8 @@ SettingsPorts::~SettingsPorts()
     for (int i = 0; i < SERIAL_MAX_UI; i++)
         delete scCom[i];
 
-    /* The dialog is gone: the saved card counts again. */
+    /* The card picked in the dialog no longer applies once it closes; the
+       saved usb_card_type decides which machines have a USB bus again. */
     usb_card_pending = -1;
 
     delete ui;
@@ -342,8 +343,9 @@ SettingsPorts::onCurrentMachineChanged(int machineId)
         }
     }
 
-    // USB card: selecting it updates the hub list and the other pages, so
-    // the rows in passing while the list is rebuilt are not selections.
+    // USB card: a selection updates the hub list and the other pages, so the
+    // signals are blocked while the list is rebuilt, and only the final
+    // selection counts.
     auto *usbCardModel   = ui->comboBoxUsbCard->model();
     auto  removeRowsCard = usbCardModel->rowCount();
     int   curCard        = (removeRowsCard > 0) ? ui->comboBoxUsbCard->currentData().toInt() : usb_card_type;

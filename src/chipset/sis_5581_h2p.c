@@ -88,7 +88,7 @@ typedef struct sis_5581_host_to_pci_t {
 
     sis_5581_io_trap_t io_traps[10];
 
-    uint8_t            usb_smi_level; /* the OHCI's SMI pin */
+    uint8_t            usb_smi_level; /* last level of the OHCI's SMI output */
 
     sis_55xx_common_t *sis;
 
@@ -507,8 +507,9 @@ sis_5581_host_to_pci_close(void *priv)
     free(dev);
 }
 
-/* The OHCI's SMI pin: with 95h bit 4 (USB SMI enable) set, its assertion
-   sets 95h bit 3 (USB SMI request) and SMI# (SiS82 p137). */
+/* The OHCI's SMI output: with 95h bit 4 (USB SMI enable) set, its rising
+   edge sets 95h bit 3 (USB SMI request) and asserts SMI# (SiS 5581/5582
+   p. 137 / PDF 137). */
 static void
 sis_5581_host_to_pci_usb_smi(void *priv, int level)
 {

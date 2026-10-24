@@ -99,7 +99,7 @@ enum {
     STRING_UNSUPPORTED_MEMORY,
     STRING_UNSUPPORTED_ROM,
     STRING_UNSUPPORTED_RTC,
-    /* A USB device left out at boot. */
+    /* A configured USB device that could not be attached at boot. */
     STRING_USB_NO_PORT,
     STRING_USB_NO_CONTROLLER,
 };

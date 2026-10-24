@@ -106,8 +106,10 @@ sis_5572_usb_unk_read(uint16_t addr, void *priv)
     return ret;
 }
 
-/* The ACPI USB power-management event: a rising edge of the enabled
-   function's INT or SMI# sets USB_STS (SiS82 p53, SiS95 p140). */
+/* The ACPI USB power-management event: a rising edge of the enabled USB
+   function's interrupt or SMI output sets USB_STS (SiS 5581/5582 p. 54 /
+   PDF 54 and ACPI 14h bit 14, p. 163 / PDF 163; SiS 5595 GPE_STS bit 8,
+   p. 141 / PDF 147). */
 static void
 sis_5572_usb_pme(sis_5572_usb_t *dev)
 {
@@ -118,9 +120,11 @@ sis_5572_usb_pme(sis_5572_usb_t *dev)
     dev->sis->usb_pme_level = level;
 }
 
-/* USBIRQ reaches the 8259 through the bridge's USBIRQ remapping register,
-   emulated as MIRQ3 (SiS71 p61, SiS82 p150, SiS95 p105); it is a
-   shareable level request (SiS95 p66). */
+/* USBIRQ reaches the 8259 through the PCI-to-ISA bridge's USBIRQ Remapping
+   Control register, which 86Box models as MIRQ3 (SiS 5571 p. 57 / PDF 61;
+   SiS 5581/5582 p. 150 / PDF 150; SiS 5595 p. 99 / PDF 105). It is a
+   shareable request, so it is driven as a level (SiS 5595 p. 60 /
+   PDF 66). */
 static void
 sis_5572_usb_irq(void *priv, int level)
 {
@@ -136,8 +140,8 @@ sis_5572_usb_irq(void *priv, int level)
         pci_clear_mirq(PCI_MIRQ3, 1, &dev->sis->usb_irq_state);
 }
 
-/* The OHCI's SMI pin goes to the chip's legacy USB SMI# receiver: 95h on
-   the 5571/5581 host bridge, ACPI LEG_STS on the 5595. */
+/* The OHCI's SMI output goes to the chipset's USB SMI# logic: 95h of the
+   5571 or 5581 host bridge, or ACPI LEG_STS bit 6 on the 5595. */
 static void
 sis_5572_usb_smi(void *priv, int level)
 {
@@ -149,12 +153,14 @@ sis_5572_usb_smi(void *priv, int level)
     sis_5572_usb_pme(dev);
 }
 
-/* The integrated USB disable hides the function's config space: no bus
-   master, no USBIRQ, no SMI. Its registers are kept for when it comes
-   back, and the OHCI window stays with its own 04h bit 1 and BAR: the
-   Award BIOS clears the enable and then resets the HC through the window,
-   polling HCR. A held USBIRQ or SMI is dropped and re-driven with the gate,
-   so the PIC source state and the SMI# receiver's edge latch follow. */
+/* Clearing Integrated USB Enable hides the function's configuration space
+   and stops bus mastering, USBIRQ and the SMI output. The registers are
+   kept for when it comes back. The OHCI memory window still follows the
+   function's own 04h bit 1 and BAR: the Award BIOS on the Gigabyte
+   GA-5SG100 clears the enable at the end of POST and then resets the host
+   controller through the window, polling HcCommandStatus HCR. An active
+   USBIRQ or SMI output is dropped when the enable clears and driven again
+   when it sets, so the PIC and the SMI# logic see the edges. */
 void
 sis_5572_usb_apply_enable(void *priv)
 {
@@ -201,7 +207,8 @@ sis_5572_usb_write(int addr, uint8_t val, void *priv)
             ohci_update_mem_mapping(dev->usb,
                                     dev->pci_conf[0x11], dev->pci_conf[0x12],
                                     dev->pci_conf[0x13], dev->pci_conf[0x04] & 0x02);
-            /* Bus Master is bit 2 (SiS71 p70, SiS82 p191). */
+            /* Bus Master is bit 2 (SiS 5571 p. 66 / PDF 70; SiS 5581/5582
+               p. 191 / PDF 191). */
             ohci_set_bus_master(dev->usb, dev->pci_conf[0x04] & 0x04);
             break;
 

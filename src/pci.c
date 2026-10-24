@@ -85,9 +85,10 @@ static uint8_t     pci_bus_number_to_index_mapping[256];
 static uint8_t     pci_irqs[PCI_IRQS_NUM];
 static uint8_t     pci_irq_level[PCI_IRQS_NUM];
 static uint64_t    pci_irq_hold[PCI_IRQS_NUM];
-/* Level sources held through each PIRQ, which a routing change moves to the
-   new IRQ as the router's steering does. Nothing bounds how many devices
-   share one PIRQ, so each list grows in steps of PCI_PIRQ_SRCS. */
+/* The level sources currently asserted through each PIRQ, so that a routing
+   change can move them to the new IRQ the way the router's steering does.
+   Any number of devices can share one PIRQ, so each list grows in steps of
+   PCI_PIRQ_SRCS. */
 #define PCI_PIRQ_SRCS 16
 static uint8_t   **pci_pirq_src[PCI_IRQS_NUM];
 static int         pci_pirq_srcs[PCI_IRQS_NUM];
@@ -161,7 +162,8 @@ pci_set_irq_routing(int pci_int, int irq)
     if (new == old)
         return;
 
-    /* The PIRQ's held level moves from the old IRQ input to the new one. */
+    /* Every source asserted through the PIRQ moves from the old IRQ input to
+       the new one. */
     for (int i = 0; i < pci_pirq_srcs[pci_int - 1]; i++) {
         uint8_t *irq_state = pci_pirq_src[pci_int - 1][i];
 
@@ -480,7 +482,8 @@ pci_reset_hard(void)
         }
     }
 
-    /* The PIC forgets its sources, so the router forgets its held ones. */
+    /* The PIC drops its sources on reset, so the PIRQ source lists are
+       emptied too. */
     for (uint8_t i = 0; i < PCI_IRQS_NUM; i++) {
         if (pci_pirq_src[i] != NULL)
             memset(pci_pirq_src[i], 0x00, pci_pirq_srcs[i] * sizeof(uint8_t *));

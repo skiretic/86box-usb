@@ -1956,8 +1956,8 @@ pc_reset_hard_init(void)
      * that will be a call to device_reset_all() later !
      */
 
-    /* A PCI USB card and then a USB hub go on before any other USB device
-       attaches. */
+    /* The PCI USB card, then the USB hub, so that both exist before any
+       other USB device attaches. */
     usb_card_reset();
     usb_hub_reset();
 
@@ -1985,7 +1985,8 @@ pc_reset_hard_init(void)
      */
     mouse_reset();
 
-    /* A USB keyboard, once the machine's USB controller exists. */
+    /* The USB keyboard goes on here, after the USB controller exists;
+       keyboard_add_device() skips it. */
     if (keyboard_type == KEYBOARD_TYPE_USB)
         device_add(&keyboard_usb_device);
 

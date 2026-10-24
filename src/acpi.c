@@ -284,9 +284,10 @@ acpi_raise_smi(void *priv, int do_smi)
     }
 }
 
-/* SMI# on the VIA blocks is a level: SMI_EN and a status bit with its
-   enable set (VT82C586B p50-51). A status left pending while SMI_EN or
-   its enable was off fires the moment they come back. */
+/* The VIA blocks generate SMI# from the Global Status bits, not from the
+   events: SMI_EN set and a status bit set with its Global Enable bit
+   (VT82C586B p. 50-51 / PDF 56-57). A status left pending while SMI_EN or
+   its enable was clear raises SMI# as soon as both are set again. */
 static int
 acpi_via_smi_level(const acpi_t *dev)
 {
@@ -1200,8 +1201,10 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
         case 0x18:
         case 0x19:
             /* GLBSTS - Global Status Register (IO) */
-            /* LEGACY_USB_STS (bit 1) clears only through its child status bits,
-               except on the SLC90E66, where it is R/WC (SMSC p143). */
+            /* On the PIIX4, LEGACY_USB_STS (bit 1) clears only through its
+               child status bits (PIIX4 7.2.10, p. 143 / PDF 143). On the
+               SLC90E66 the same bit, USB_STS, is write-1-to-clear (SMSC
+               SLC90E66 7.3.10, p. 143 / PDF 143). */
             dev->regs.glbsts &= ~((val << shift16) & (dev->usb_sts_w1c ? 0x0d27 : 0x0d25));
             break;
         case 0x1c:
@@ -1223,6 +1226,9 @@ acpi_reg_write_intel(int size, uint16_t addr, uint8_t val, void *priv)
             /* GLBCTL - Global Control Register (IO) */
             dev->regs.glbctl = ((dev->regs.glbctl & ~(0xff << shift32)) | (val << shift32)) & 0x0701ff07;
             /* Check if there's anything still pending and re-assert SMI# if it is. */
+            /* A pending legacy USB status needs its GLBEN bit 0 only on the
+               SLC90E66; the PIIX4 model raises it without LEGACY_USB_EN, as
+               in intel_piix.c. */
             if (((dev->regs.glbctl & 0x00010001) == 0x00010001) &&
                 (((dev->regs.glbsts & 0x20) && dev->apm->do_smi) ||
                  ((dev->regs.glbsts & 0x01) && (dev->regs.glben & 0x02)) ||
@@ -1715,8 +1721,10 @@ acpi_sis5595_pmu_event(void *priv)
     }
 }
 
-/* USB_STS/USB_EN: ACPI 14h/16h bit 14 on the 5582 (SiS82 p163), GPE bit 30
-   on the 1997 5595 (SiS95 1997 p116), bit 8 on the later one (SiS95 p140). */
+/* USB_STS and USB_EN: ACPI 14h and 16h bit 14 on the 5582 (SiS 5581/5582
+   p. 163 and 165 / PDF 163 and 165); GPE_STS and GPE_EN bit 30 in the
+   December 1997 5595 data sheet (p. 115 and 117 / PDF 115 and 117), bit 8 in
+   the November 1998 one (p. 141 and 143 / PDF 147 and 149). */
 static uint32_t
 acpi_sis_usb_pme_bit(const acpi_t *dev)
 {
@@ -1732,9 +1740,10 @@ acpi_sis_usb_pme_bit(const acpi_t *dev)
     }
 }
 
-/* The USB power-management event: an interrupt or SMI# of the USB function
-   sets USB_STS; with USB_EN it raises SCI, or SMI# with SCI_EN clear
-   (SiS82 p46-47 and p53, SiS95 p26 and p140). */
+/* The USB power-management event: an interrupt or SMI output of the USB
+   function sets USB_STS, and with USB_EN set it raises SCI, or SMI# while
+   SCI_EN is clear (SiS 5581/5582 p. 47 and 54 / PDF 47 and 54; SiS 5595
+   November 1998, p. 26-27 / PDF 32-33). */
 void
 acpi_sis_usb_event(acpi_t *dev)
 {
@@ -1760,9 +1769,10 @@ acpi_sis_usb_event(acpi_t *dev)
         acpi_sis5595_smi_raise(dev);
 }
 
-/* USB SMI#: with USBSMI_EN (LEG_EN bit 6) set, the OHCI's SMI pin sets
-   USBSMI_STS (LEG_STS bit 6) and raises SMI# through SMI_EN (SiS95
-   p150-151). */
+/* USB SMI#: with USBSMI_EN (LEG_EN bit 6) set, a rising edge of the OHCI's
+   SMI output sets USBSMI_STS (LEG_STS bit 6) and raises SMI#, subject to
+   SMI_EN (LEG_EN bit 5) (SiS 5595 November 1998, p. 150-151 /
+   PDF 156-157). */
 void
 acpi_sis5595_usb_smi(void *priv, int level)
 {
@@ -1775,9 +1785,11 @@ acpi_sis5595_usb_smi(void *priv, int level)
     dev->usb_smi_level = !!level;
 }
 
-/* The OHCI's SMI pin is a level (OHCI 1.0a 6.1), and USBSMI_STS is cleared
-   before the handler exits (SiS95 p150): a clear, or an enable written while
-   the pin is still high, sets the status again and raises SMI#. */
+/* The OHCI holds its SMI output while an enabled event is pending (OpenHCI
+   1.0a s6.5, p. 105 / PDF 119), and the handler clears USBSMI_STS before it
+   exits (SiS 5595 November 1998, p. 150 / PDF 156). Clearing USBSMI_STS, or
+   setting SMI_EN (LEG_EN bit 5), while the output is still high sets the
+   status again and raises SMI#. */
 static void
 acpi_sis5595_usb_smi_held(acpi_t *dev, uint8_t old_en)
 {
@@ -2634,9 +2646,11 @@ acpi_reset(void *priv)
     }
 
     if (acpi_power_on) {
-        /* Power on always generates a resume event, except on the SiS 5582:
-           its APC powers the board up from the RTC well, while the PM
-           registers sit in the main 3.3V well and come up cleared. */
+        /* Power on always generates a resume event, except on the SiS 5582.
+           There only the RTC and the APC that powers the board up run from
+           RTCVDD; the ACPI registers are in the 3.3V OVDD well, which is off
+           until power-up, so they come up cleared (SiS 5581/5582 p. 39 and
+           41 / PDF 39 and 41). */
         if (dev->vendor != VEN_SIS_5582)
             dev->regs.pmsts |= 0x8100;
         acpi_power_on = 0;
@@ -2784,7 +2798,9 @@ acpi_init(const device_t *info)
             dev->suspend_types[4] = SUS_SUSPEND;
             dev->suspend_types[5] = SUS_SUSPEND | SUS_RESET_CPU;
             dev->suspend_types[6] = SUS_SUSPEND | SUS_RESET_CPU | SUS_RESET_PCI;
-            dev->suspend_types[7] = SUS_POWER_OFF; /* reserved in the datasheet, used for S4/S5 by ASUS P3V4X ACPI table */
+            /* SLP_TYP 111b is reserved (VT82C596B p. 71 / PDF 77), but the
+               ASUS P3V4X ACPI tables use it for S4 and S5. */
+            dev->suspend_types[7] = SUS_POWER_OFF;
             break;
 
         case VEN_INTEL:

@@ -71,7 +71,7 @@ sis_5571_host_to_pci_log(const char *fmt, ...)
 typedef struct sis_5571_host_to_pci_t {
     uint8_t            pci_conf[256];
     uint8_t            states[7];
-    uint8_t            usb_smi_level; /* the OHCI's SMI pin */
+    uint8_t            usb_smi_level; /* last level of the OHCI's SMI output */
 
     sis_55xx_common_t *sis;
 
@@ -429,8 +429,9 @@ sis_5571_host_to_pci_close(void *priv)
     free(dev);
 }
 
-/* The OHCI's SMI pin: with 95h bit 4 (USB SMI enable) set, its assertion
-   sets 95h bit 3 (USB SMI request) and SMI# (SiS71 p33). */
+/* The OHCI's SMI output: with 95h bit 4 (USB SMI enable) set, its rising
+   edge sets 95h bit 3 (USB SMI request) and asserts SMI# (SiS 5571
+   p. 33 / PDF 37). */
 static void
 sis_5571_host_to_pci_usb_smi(void *priv, int level)
 {

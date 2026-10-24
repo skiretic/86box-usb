@@ -524,8 +524,9 @@ stpc_isab_read(int func, int addr, int len, void *priv)
     return ret;
 }
 
-/* The USB controller uses PCI Interrupt A, routed by index 52h (STPC Atlas
-   PM 22.3.1, 9.5.3). */
+/* The USB controller uses PCI Interrupt A, which index 52h routes to the
+   8259 (STPC Atlas Programming Manual 22.3.1, p. 577 / PDF 577; 9.5.3,
+   p. 172 / PDF 172). */
 static void
 stpc_usb_irq(void *priv, int level)
 {
@@ -965,8 +966,10 @@ stpc_init(const device_t *info)
         pci_add_card(PCI_ADD_SOUTHBRIDGE_USB, stpc_usb_read, stpc_usb_write, dev, &dev->usb_slot);
         ohci_set_irq_handler(dev->usb, stpc_usb_irq, dev);
         ohci_hardwire_bus_master(dev->usb);
-        /* The PM defers the operational registers to the OHCI spec (22.2);
-           no USB SMI source (25.2.14-16). */
+        /* The programming manual gives the operational registers only a
+           one-line summary each (22.2, p. 574-576 / PDF 574-576), so the
+           OpenHCI behavior is used; its SMI registers have no USB source
+           (25.2.14-25.2.16, p. 620-623 / PDF 620-623). */
         ohci_set_chip_flags(dev->usb, OHCI_CHIP_LST_0628H | OHCI_CHIP_RWC | OHCI_CHIP_NO_SMI | OHCI_CHIP_UE_RW | OHCI_CHIP_PTRS_RO |
                                       OHCI_CHIP_POTPGT_RW);
     }

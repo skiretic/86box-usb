@@ -93,8 +93,9 @@ kbc_at_log(const char* fmt, ...)
 void (*keyboard_send)(uint16_t val);
 static void (*keyboard_input_handler)(uint16_t scan, int down, void *priv);
 static void *keyboard_input_priv;
-/* Host keys arrive on the GUI thread while a hard reset on the emulation
-   thread closes the keyboard: unregistering waits for a call in flight. */
+/* Host keys arrive on the GUI thread, while a hard reset on the emulation
+   thread can close the keyboard and unregister its input handler. The lock
+   makes the unregister wait for a call already in progress. */
 static mutex_t *keyboard_input_lock;
 
 static int recv_key[768] = { 0 }; /* keyboard input buffer */
@@ -154,8 +155,8 @@ keyboard_toggle_override(void)
 void
 keyboard_init(void)
 {
-    /* Created once, at startup: a hard reset runs this again while the GUI
-       thread may be using the lock. */
+    /* Created only once: a hard reset runs this function again while the
+       GUI thread may hold the lock. */
     if (keyboard_input_lock == NULL)
         keyboard_input_lock = thread_create_mutex();
 
@@ -652,7 +653,7 @@ keyboard_get_ndev(void)
 }
 
 /* The keyboard on the 8042's keyboard port. A USB keyboard leaves the port
-   empty; it is added once the machine's USB controller exists. */
+   empty; pc_reset_hard_init() adds it after the USB controller exists. */
 void
 keyboard_add_device(void)
 {

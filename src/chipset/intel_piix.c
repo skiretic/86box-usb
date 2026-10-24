@@ -520,9 +520,10 @@ piix_extsmi_raise(void)
         smi_raise();
 }
 
-/* The UHCI IRQ shows in LEGSUP bit 12 and reaches PIRQD only while
-   USBPIRQDEN, LEGSUP bit 13, is set (PIIX4 datasheet 6.1.12). It is the
-   chip's own PIRQD, not the board's slot entry for the south bridge. */
+/* The UHCI interrupt shows in LEGSUP bit 12 (USBIRQS) and reaches PIRQD
+   only while LEGSUP bit 13 (USBPIRQDEN) is set (PIIX3 2.4.14, p. 59 / PDF 59;
+   PIIX4 6.1.12, p. 107 / PDF 107). The line is the chip's own PIRQD input,
+   not the board's slot entry for the south bridge. */
 static void
 piix_usb_update_irq(piix_t *dev)
 {
@@ -540,19 +541,25 @@ piix_usb_update_irq(piix_t *dev)
     else
         pci_clear_iirq(PCI_INTD, &dev->usb_irq_state);
 
-    /* A legacy USB event (the IRQ with USBSMIEN, an enabled keyboard trap, or
-       A20PTS with SMIEPTE), gated by SMIEN bit 8 into SMIREQ bit 8 on the
-       PIIX3 (2.2.19, 2.2.22). On the PIIX4 it sets LEGACY_USB_STS and asserts
-       SMI# without GLBEN LEGACY_USB_EN: shipped PIIX4 BIOSes never set that
-       bit and still rely on the SMI. None is raised while an A20GATE
-       pass-through sequence runs (UHCI 1.1 s5.2.1 bit 5). */
+    /* A legacy USB event is the USB interrupt with USBSMIEN, an enabled
+       keyboard trap, or A20PTS with SMIEPTE; only a source that was not
+       already pending makes a new event. On the PIIX3, SMIEN bit 8 lets it set
+       SMIREQ bit 8 (RLUSB) and assert SMI# (PIIX3 2.2.19 and 2.2.22,
+       p. 44-46 / PDF 44-46). On the PIIX4 it sets GLBSTS LEGACY_USB_STS and
+       asserts SMI# whether or not GLBEN LEGACY_USB_EN is set, although the
+       datasheet makes that bit the enable (PIIX4 7.2.12, p. 144 / PDF 144):
+       the Award BIOS on the ABIT AB-BF6 runs USB legacy keyboard support from
+       this SMI and leaves the bit clear. No event is raised while an A20GATE
+       pass-through sequence runs (UHCI 1.1 s5.2.1 bit 5, p. 40 / PDF 46). */
     sources = uhci_legsup_event(&fregs[0xc0], dev->usb_irq_level);
     smi     = (sources & ~dev->usb_smi_level) && !(fregs[0xc0] & 0x40);
     if (dev->type == 3) {
-        /* RLUSB drops when no enabled legacy source is pending. PIIX3 2.2.22
-           calls it software-cleared, but shipped AMI handlers never clear it
-           on the USB path and reopen CSMIGATE, which only works if RLUSB drops
-           with its sources. */
+        /* RLUSB also clears by itself once no enabled legacy source is
+           pending. The datasheet only names a software write of 0 (PIIX3
+           2.2.22, p. 46 / PDF 46), but the AMI SMI handlers on the Biostar
+           MB-8500TUC and FIC KN-6000 never write SMIREQ on the USB path and
+           end the SMI by toggling SMICNTL CSMIGATE. A sticky RLUSB would
+           re-raise SMI# on every reopen of the gate (see the 0xa0 write). */
         if (smi) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX3 legacy USB SMI event, SMIEN %02x%02x SMICNTL %02x",
                       dev->regs[0][0xa3], dev->regs[0][0xa2], dev->regs[0][0xa0]);
@@ -564,9 +571,10 @@ piix_usb_update_irq(piix_t *dev)
         } else if (!sources)
             dev->regs[0][0xab] &= ~0x01;
     } else if (dev->acpi != NULL) {
-        /* LEGACY_USB_STS clears when no enabled legacy source is pending (PIIX4
-           7.2.10 bit 1). LEGSUP enable bits determine which child statuses
-           can cause an SMI# (6.1.12). */
+        /* LEGACY_USB_STS can only be cleared by clearing its child statuses
+           in LEGSUP (PIIX4 7.2.10 bit 1, p. 143 / PDF 143), so it drops once
+           no enabled legacy source is pending. The LEGSUP enable bits pick
+           which child statuses count (6.1.12, p. 107-108 / PDF 107-108). */
         if (smi)
             dev->acpi->regs.glbsts |= 0x0002;
         else if (!sources)
@@ -574,8 +582,9 @@ piix_usb_update_irq(piix_t *dev)
         if (smi) {
             usb_trace(USB_LOG_IRQ, -1, "PIIX4 legacy USB SMI event, GLBEN %04x GLBCTL %08x",
                       dev->acpi->regs.glben, dev->acpi->regs.glbctl);
-            /* With EOS (GLBCTL bit 16) clear only the status is set; setting
-               EOS asserts SMI# for it then (PIIX4 11.5.1). */
+            /* With GLBCTL EOS (bit 16) clear, only the status is set; the
+               SMI# follows when the handler sets EOS again while the status
+               is still set (PIIX4 11.5.1, p. 262 / PDF 262). */
             if (dev->acpi->regs.glbctl & 0x00010000)
                 acpi_raise_smi(dev->acpi, 1);
         }
@@ -583,8 +592,9 @@ piix_usb_update_irq(piix_t *dev)
     dev->usb_smi_level = sources;
 }
 
-/* LEGSUP keyboard controller traps (UHCI 1.1 s5.2.2): a trapped cycle at
-   60h/64h never reaches the 8042; the SMI handler stands in for it. */
+/* LEGSUP keyboard controller traps: a trapped cycle at 60h/64h never
+   reaches the 8042, and the SMI handler stands in for it (UHCI 1.1 s5.2.2,
+   p. 41 / PDF 47). */
 static int
 piix_usb_kbc_claim(uint16_t port, uint8_t write, uint8_t val, void *priv)
 {
@@ -619,8 +629,8 @@ piix_usb_irq(void *priv, int level)
     piix_usb_update_irq(dev);
 }
 
-/* The SLC90E66's OHCI interrupts on the chip's own nPIRQD (SMSC p24), with
-   no enable of its own. */
+/* The SLC90E66's OHCI interrupts on the chip's own nPIRQD, with no enable
+   of its own (SMSC SLC90E66 pin description, p. 24 / PDF 24). */
 static void
 slc90e66_usb_irq(void *priv, int level)
 {
@@ -632,9 +642,11 @@ slc90e66_usb_irq(void *priv, int level)
         pci_clear_iirq(PCI_INTD, &dev->usb_irq_state);
 }
 
-/* The OHCI's SMI pin is the SLC90E66's legacy USB event: it sets USB_STS
-   (GLBSTS bit 1), an nSMI with USB_EN (GLBEN bit 0) and EOS set; with EOS
-   clear, setting EOS raises it (SMSC p143-144, 11.4.1). */
+/* The OHCI's SMI output is the SLC90E66's legacy USB event. A rising edge
+   sets GLBSTS USB_STS (bit 1) and asserts nSMI when GLBEN USB_EN (bit 0)
+   and GLBCTL EOS are both set; with EOS clear, the nSMI follows when the
+   handler sets EOS (SMSC SLC90E66 7.3.10 and 7.3.12, p. 143-144 /
+   PDF 143-144; 11.4.1, p. 243-244 / PDF 243-244). */
 static void
 slc90e66_usb_smi(void *priv, int level)
 {
@@ -1160,7 +1172,6 @@ piix_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
                 if (dev->type > 4) {
                     fregs[0x04] = (val & 7);
                     ohci_update_mem_mapping(dev->usb, fregs[0x11], fregs[0x12], fregs[0x13], fregs[PCI_REG_COMMAND] & PCI_COMMAND_MEM);
-                    /* Bus Master Enable is bit 2 (SMSC p98). */
                     ohci_set_bus_master(dev->usb, fregs[PCI_REG_COMMAND] & PCI_COMMAND_L_BM);
                 } else {
                     fregs[0x04] = (val & 5);
@@ -1726,7 +1737,9 @@ piix_reset(void *priv)
             piix_write(2, 0x23, 1, 0x00, priv);
 
             piix_write(2, 0xc0, 1, 0x00, priv);
-            /* 2000h: the write-1-to-clear statuses cleared, USBPIRQDEN set. */
+            /* LEGSUP resets to 2000h: the write-1-to-clear statuses cleared,
+               USBPIRQDEN set (PIIX3 2.4.14, p. 59 / PDF 59; PIIX4 6.1.12,
+               p. 107 / PDF 107). */
             piix_write(2, 0xc1, 1, 0xaf, priv);
         }
     }

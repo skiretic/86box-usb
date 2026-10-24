@@ -113,8 +113,9 @@ static void ali5229_write(int func, int addr, int len, uint8_t val, void *priv);
 static void    ali7101_write(int func, int addr, int len, uint8_t val, void *priv);
 static uint8_t ali7101_read(int func, int addr, int len, void *priv);
 
-/* The M5237's INTAJ reaches the 8259 through 74h (ALi-C p80): bits 3:0 pick
-   the IRQ, bit 4 turns the level into an edge. MIRQ4 stands in for it. */
+/* The M5237's INTAJ reaches the 8259 through 74h: bits 3-0 pick the IRQ,
+   and bit 4 turns the level into an edge (M1543C 74h, p. 79 / PDF 80).
+   MIRQ4 carries it. */
 static void
 ali5237_drive_irq(ali1543_t *dev, int set)
 {
@@ -134,9 +135,12 @@ ali5237_irq(void *priv, int level)
         ali5237_drive_irq(dev, dev->usb_irq_level);
 }
 
-/* USB Bus SMI Status, 4Ah bit 5 (ALi-C p133), follows the enabled M5237's
-   request because the BIOS never clears it. A rising request raises SMI
-   when 77h bit 3 (ALi-C p144) is set. */
+/* M7101 USB Bus SMI Status, 4Ah bit 5 (M1543C 4Ah-48h bit 21, p. 132 /
+   PDF 133), is set while the enabled M5237 requests SMI and clear while it
+   does not; writes and reads do not clear it. The BIOS SMI handler on the
+   PC Chips M560 reads the bit but never clears it. A rising request raises
+   SMI# when 77h bit 3, the global SMI enable, is set (77h, p. 143 /
+   PDF 144). */
 static void
 ali5237_smi(void *priv, int level)
 {
@@ -154,8 +158,10 @@ ali5237_smi(void *priv, int level)
     }
 }
 
-/* 53h bit 6 makes the M5237 invisible (ALi-C p64): no window, no bus
-   master, no interrupt. Its registers are kept for when it comes back. */
+/*
+   53h bit 6 makes the M5237 invisible (ALi-C p64): no window, no bus
+   master, no interrupt. Its registers are kept for when it comes back.
+ */
 static void
 ali5237_set_enable(ali1543_t *dev, int enable)
 {
@@ -464,7 +470,8 @@ ali1533_write(int func, int addr, int len, uint8_t val, void *priv)
             break;
 
         case 0x74: /* USB IRQ Routing - we cheat and use MIRQ4 */
-            /* A line held high moves to the new route and trigger mode. */
+            /* An active USB interrupt is dropped from the old IRQ and raised
+               again on the new one, in the new trigger mode. */
             if (dev->usb_irq_level && dev->usb_dev_enable)
                 ali5237_drive_irq(dev, 0);
             dev->pci_conf[addr] = val & 0xdf;
@@ -1006,7 +1013,10 @@ ali5237_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             dev->usb_conf[addr] = val & 0x10;
             break;
         case 0x43:
-            /* M1543C 40h bit 26: the third USB port, NDP 3 (ALi-C p122, p185). */
+            /* M1543C only: 40h bit 26 enables the third USB port, and
+               HcRhDescriptorA NumberDownstreamPorts then reads 3 instead of 2
+               (M1543C 43h-40h, p. 121 / PDF 122; HcRhDescriptorA, p. 184 /
+               PDF 185). */
             if (dev->type == 1) {
                 dev->usb_conf[addr] = val & 0x04;
                 ohci_set_ndp(dev->usb, (val & 0x04) ? 3 : 2, 3);
@@ -1280,7 +1290,9 @@ ali7101_write(int func, int addr, UNUSED(int len), uint8_t val, void *priv)
             ali1543_log("PMU77: %02X\n", val);
             nvr_smi_enable((dev->pmu_conf[0x77] & 0x08) && (dev->pmu_conf[0x40] & 0x08), dev->nvr);
             apm_set_do_smi(dev->acpi->apm, (dev->pmu_conf[0x77] & 0x08) && (dev->pmu_conf[0x41] & 0x10));
-            /* Opening the gate services a live USB request (ALi-C p144). */
+            /* The M7101 makes only level SMIs (77h, p. 143 / PDF 144), so
+               setting the global SMI enable while the USB request is still
+               high raises SMI#. */
             if (!(old & 0x08) && (val & 0x08) && dev->usb_dev_enable && dev->usb_smi_level)
                 smi_raise();
             break;

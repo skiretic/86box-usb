@@ -222,6 +222,8 @@ pipc_usb_disabled(const pipc_t *dev, int n)
     return n ? !!(dev->pci_isa_regs[0x85] & 0x10) : !!(dev->pci_isa_regs[0x48] & 0x04);
 }
 
+static void pipc_apic_irq_set(pipc_t *dev, int src, int set);
+
 /* The UHCI interrupt goes straight to the ISA IRQ named by bits 3-0 of its
    own Interrupt Line (Rx3C), not through a PIRQ line. 0 is off and 2 is
    reserved. Fh is IRQ15 on the 586B (VT82C586B p. 38 / PDF 44) and off on
@@ -231,6 +233,11 @@ static void
 pipc_usb_update_irq(pipc_t *dev, int n)
 {
     uint8_t irq = dev->usb_regs[n][0x3c] & 0x0f;
+
+    /* With Function 0 Rx58 bit n set, the same interrupt also drives
+       APIC[16 + Rx3C bits 2-0] on the 686A/B's own I/O APIC (VT82C686A
+       p. 59 / PDF 65; see pipc_apic_irq_line). */
+    pipc_apic_irq_set(dev, n, dev->usb_irq_level[n] && !pipc_usb_disabled(dev, n));
 
     if (!dev->usb_irq_level[n] || pipc_usb_disabled(dev, n) || (irq == 0x00) || (irq == 0x02) || ((irq == 0x0f) && (dev->local > VIA_PIPC_586B)))
         irq = 0xff;

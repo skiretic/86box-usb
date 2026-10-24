@@ -299,6 +299,16 @@ acpi_via_smi_level(const acpi_t *dev)
     return (dev->regs.glbctl & 0x0001) && (dev->regs.glbsts & dev->regs.glben & 0xffff);
 }
 
+void
+acpi_gp_timer_timeout(void *priv, int n)
+{
+    acpi_t *dev = (acpi_t *) priv;
+
+    dev->regs.glbsts |= (0x04 << n);          /* bit 2 = GP0, bit 3 = GP1 */
+    if (dev->regs.glben & (0x04 << n))
+        acpi_raise_smi(dev, 1);
+}
+
 static uint32_t
 acpi_reg_read_common_regs(UNUSED(int size), uint16_t addr, void *priv)
 {

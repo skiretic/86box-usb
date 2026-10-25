@@ -1368,6 +1368,8 @@ load_ports(void)
     usb_card_type = usb_card_get_from_internal_name(p);
     p             = ini_section_get_string(cat, "usb_hub", "none");
     usb_hub_type  = usb_hub_get_from_internal_name(p);
+    p             = ini_section_get_string(cat, "usb_msd", "none");
+    usb_msd_type  = usb_msd_get_from_internal_name(p);
 
 #if 0
 // TODO: Load
@@ -4052,6 +4054,11 @@ save_ports(void)
         ini_section_delete_var(cat, "usb_hub");
     else
         ini_section_set_string(cat, "usb_hub", usb_hub_get_internal_name(usb_hub_type));
+
+    if (usb_msd_type == 0)
+        ini_section_delete_var(cat, "usb_msd");
+    else
+        ini_section_set_string(cat, "usb_msd", usb_msd_get_internal_name(usb_msd_type));
 
 #if 0
 // TODO: Save

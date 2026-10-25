@@ -104,6 +104,7 @@ SettingsPorts::changed()
     has_changed |= (jumpered_internal_ecp_dma != ui->comboBoxLptECPDMA->currentData().toInt());
     has_changed |= (usb_card_type != ui->comboBoxUsbCard->currentData().toInt());
     has_changed |= (usb_hub_type != ui->comboBoxUsbHub->currentData().toInt());
+    has_changed |= (usb_msd_type != ui->comboBoxUsbMsd->currentData().toInt());
 
     for (int i = 0; i < PARALLEL_MAX; i++) {
         auto *checkBox = findChild<QCheckBox *>(QString("checkBoxParallel%1").arg(i + 1));
@@ -179,6 +180,13 @@ SettingsPorts::save(int soft)
     jumpered_internal_ecp_dma = ui->comboBoxLptECPDMA->currentData().toInt();
     usb_card_type             = ui->comboBoxUsbCard->currentData().toInt();
     usb_hub_type              = ui->comboBoxUsbHub->currentData().toInt();
+    usb_msd_type              = ui->comboBoxUsbMsd->currentData().toInt();
+}
+
+int
+SettingsPorts::usbMsd() const
+{
+    return (ui->comboBoxUsbMsd->count() > 0) ? ui->comboBoxUsbMsd->currentData().toInt() : usb_msd_type;
 }
 
 /* The character devices, for the parallel and serial port lists alike. */
@@ -409,7 +417,69 @@ SettingsPorts::on_comboBoxUsbCard_currentIndexChanged(int index)
 
     usb_card_pending = ui->comboBoxUsbCard->currentData().toInt();
     updateUsbHubList();
+    updateUsbMsdList();
     emit usbBusChanged(machineId);
+}
+
+/* USB mass storage is offered like the hub. It holds no drives of its own:
+   they sit on the SCSI bus it bridges, set up on the drive pages, which the
+   two buttons under it open. */
+void
+SettingsPorts::updateUsbMsdList()
+{
+    auto *usbMsdModel   = ui->comboBoxUsbMsd->model();
+    auto  removeRowsMsd = usbMsdModel->rowCount();
+    int   curMsd        = (removeRowsMsd > 0) ? ui->comboBoxUsbMsd->currentData().toInt() : usb_msd_type;
+    int   selectedRow   = 0;
+
+    Models::Batch usbMsdRows(usbMsdModel);
+    for (int i = 0; i < usb_msd_get_ndev(); ++i) {
+        const device_t *dev = usb_msd_get_device(i);
+
+        if (device_is_valid(dev, machineId) == 0)
+            continue;
+
+        int row = usbMsdRows.add(DeviceConfig::DeviceName(dev, usb_msd_get_internal_name(i), 0), i);
+        if (i == curMsd)
+            selectedRow = row - removeRowsMsd;
+    }
+    usbMsdRows.commit();
+    usbMsdModel->removeRows(0, removeRowsMsd);
+    ui->comboBoxUsbMsd->setEnabled(usbMsdModel->rowCount() > 1);
+    ui->comboBoxUsbMsd->setCurrentIndex(-1);
+    ui->comboBoxUsbMsd->setCurrentIndex(selectedRow);
+}
+
+void
+SettingsPorts::on_comboBoxUsbMsd_currentIndexChanged(int index)
+{
+    if (index < 0)
+        return;
+
+    const bool on = (ui->comboBoxUsbMsd->currentData().toInt() > 0);
+
+    ui->labelUsbMsdDrives->setEnabled(on);
+    ui->pushButtonUsbMsdHardDisks->setEnabled(on);
+    ui->pushButtonUsbMsdCdrom->setEnabled(on);
+    ui->pushButtonUsbMsdRemovable->setEnabled(on);
+}
+
+void
+SettingsPorts::on_pushButtonUsbMsdHardDisks_clicked()
+{
+    emit drivePageRequested(DrivePage::HardDisks);
+}
+
+void
+SettingsPorts::on_pushButtonUsbMsdCdrom_clicked()
+{
+    emit drivePageRequested(DrivePage::Cdrom);
+}
+
+void
+SettingsPorts::on_pushButtonUsbMsdRemovable_clicked()
+{
+    emit drivePageRequested(DrivePage::Removable);
 }
 
 void

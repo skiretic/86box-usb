@@ -13,6 +13,9 @@ class SettingsPorts : public QWidget {
     Q_OBJECT
 
 public:
+    /* The drive pages that can hold a USB mass storage device's drives. */
+    enum class DrivePage { HardDisks, Cdrom, Removable };
+
     explicit SettingsPorts(QWidget *parent = nullptr);
     ~SettingsPorts();
 
@@ -21,15 +24,24 @@ public:
     void restore();
     void save(int soft);
 
+    /* The USB mass storage choice in the dialog. */
+    int usbMsd() const;
+
 public slots:
     void onCurrentMachineChanged(int machineId);
 
 signals:
     /* The USB card choice changed which USB devices the machine can take. */
     void usbBusChanged(int machineId);
+    /* A button under USB mass storage asked for a drive page. */
+    void drivePageRequested(DrivePage page);
 
 private slots:
     void on_comboBoxUsbCard_currentIndexChanged(int index);
+    void on_comboBoxUsbMsd_currentIndexChanged(int index);
+    void on_pushButtonUsbMsdHardDisks_clicked();
+    void on_pushButtonUsbMsdCdrom_clicked();
+    void on_pushButtonUsbMsdRemovable_clicked();
 
     void on_comboBoxLpt1_currentIndexChanged(int index);
     void on_pushButtonConfigureLpt1_clicked();
@@ -65,6 +77,7 @@ private:
 
     void updateLptPortTracking(int i);
     void updateUsbHubList();
+    void updateUsbMsdList();
 
     int                lpt_device_cfg_changed[4] = { 0, 0, 0, 0 };
     int                com_device_cfg_changed[SERIAL_MAX_UI] = { 0 };

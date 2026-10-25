@@ -36,8 +36,16 @@ typedef struct usb_t {
 
 /* Global variables. */
 extern const device_t usb_device;
-/* A USB mass storage bridge to a SCSI bus, listed with the SCSI controllers. */
+/* A USB mass storage bridge to a SCSI bus. */
 extern const device_t usb_msd_device;
+/* USB mass storage, listed on the Ports page; usb_msd_type 0 is none. */
+extern int            usb_msd_type;
+
+extern int             usb_msd_get_ndev(void);
+extern const device_t *usb_msd_get_device(int msd);
+extern const char     *usb_msd_get_internal_name(int msd);
+extern int             usb_msd_get_from_internal_name(const char *s);
+extern void            usb_msd_hard_reset(void);
 /* A USB speaker, listed with the sound cards. */
 extern const device_t usb_speaker_device;
 /* The VIA VT83C572 PCI to USB controller on an add-in card. */

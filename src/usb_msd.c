@@ -468,8 +468,11 @@ usb_msd_init(UNUSED(const device_t *info))
 {
     usb_msd_t *dev = (usb_msd_t *) calloc(1, sizeof(usb_msd_t));
 
-    /* It takes a SCSI bus like any host adapter. */
+    /* It takes a SCSI bus like any host adapter. It is not on the SCSI
+       controller list, so it counts itself among the other SCSI providers,
+       which makes the Media menu and status bar show the drives on its bus. */
     dev->bus = scsi_get_bus();
+    other_scsi_present++;
 
     /* At least 12 characters from 0-9 and A-F, the last 12 unique for this
        vendor and product ID (BOT 1.0 s4.1.1-s4.1.2, p. 9-10 / PDF 9-10).
@@ -519,3 +522,50 @@ const device_t usb_msd_device = {
     .force_redraw  = NULL,
     .config        = NULL
 };
+
+int usb_msd_type = 0;
+
+/* The mass storage list on the Ports settings page; entry 0 is none. */
+static const device_t *const usb_msd_devices[] = {
+    &device_none,
+    &usb_msd_device,
+    NULL
+};
+
+int
+usb_msd_get_ndev(void)
+{
+    return (int) (sizeof(usb_msd_devices) / sizeof(usb_msd_devices[0])) - 1;
+}
+
+const device_t *
+usb_msd_get_device(int msd)
+{
+    return usb_msd_devices[msd];
+}
+
+const char *
+usb_msd_get_internal_name(int msd)
+{
+    return device_get_internal_name(usb_msd_devices[msd]);
+}
+
+int
+usb_msd_get_from_internal_name(const char *s)
+{
+    for (int c = 0; usb_msd_devices[c] != NULL; c++) {
+        if (!strcmp(usb_msd_devices[c]->internal_name, s))
+            return c;
+    }
+
+    return 0;
+}
+
+/* Called on hard reset right after the SCSI cards, so the device takes the
+   SCSI bus after theirs, as scsi_plan() counts it. */
+void
+usb_msd_hard_reset(void)
+{
+    if (usb_msd_type != 0)
+        device_add(usb_msd_devices[usb_msd_type]);
+}

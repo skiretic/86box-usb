@@ -55,7 +55,7 @@ BIOS setup before an operating system can see it.
 | USB Mouse | Input devices, mouse | `usb_mouse` | Low-speed HID boot mouse, three buttons and a wheel |
 | USB Tablet | Input devices, mouse | `usb_tablet` | Full-speed HID absolute pointer, three buttons and a wheel; follows the host pointer without capture |
 | USB Keyboard | Input devices, keyboard | `usb_keyboard` | Low-speed HID boot keyboard; the keyboard controller's keyboard port is left empty |
-| USB Mass Storage | Storage, SCSI controller | `usb_msd` | Bulk-Only Transport, SCSI transparent command set; the drives on its SCSI bus are its logical units, in SCSI ID order |
+| USB Mass Storage | Ports, USB, Mass storage | `usb_msd` | Bulk-Only Transport, SCSI transparent command set; it bridges one SCSI bus, taken after the SCSI controllers', and the hard disks, CD-ROM drives and other removable devices put on that bus (channels named "USB Mass Storage") are its logical units, in SCSI ID order |
 | USB Speaker | Sound card | `usb_speaker` | USB Audio 1.0: 16-bit stereo PCM, 8 to 48 kHz, volume and mute; resampled to the mixer rate |
 | 4-port USB 1.1 hub | Ports, USB, Hub | `usb_hub_4port` | Full-speed, self-powered, per-port power switching |
 | OPTi 82C861 FireLink | Ports, USB, Card | `opti_82c861` | PCI card, one OHCI with two ports |

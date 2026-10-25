@@ -43,8 +43,9 @@ none). On Intel and VIA southbridges the UHCI
 legacy support register traps the keyboard controller ports (60h, 64h) and the A20 gate
 sequence, so a BIOS with USB keyboard support can drive a USB keyboard in DOS
 (`src/usb_legacy.c`). The OHCI legacy support registers (OpenHCI appendix B) can be read and
-written, but they do not trap the keyboard controller ports, so a BIOS cannot run a USB keyboard
-in DOS on an OHCI board.
+written, but they do not trap the keyboard controller ports. No OHCI board BIOS seen in testing
+uses them: those BIOSes route the controller's interrupt to SMI and handle the keyboard in their
+own SMI code.
 
 Boards whose southbridge has USB carry `MACHINE_BUS_USB`, except the Siemens Simatic OP47 and the
 Microsoft Virtual PC 2007, which have no USB connector; Settings offers USB devices on those

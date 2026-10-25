@@ -101,7 +101,6 @@ typedef struct usb_hub_port_t {
 typedef struct usb_hub_t {
     usb_dev_t      usb;
     usb_hub_port_t port[HUB_PORTS];
-    int            attached;
 } usb_hub_t;
 
 int usb_hub_type = 0;
@@ -515,25 +514,37 @@ hub_route(usb_dev_t *udev, int addr, int low_speed)
     return NULL;
 }
 
+static void
+hub_port_attach(usb_dev_t *udev, usb_hub_port_t *p, usb_dev_t *dev)
+{
+    p->dev      = dev;
+    dev->port   = p;
+    dev->parent = udev;
+    dev->bus    = udev->bus;
+    usb_trace(USB_LOG_REG, -1, "USB hub port %i: %s attached", p->num, dev->name);
+    if (hub_port_power_good(p))
+        hub_port_connect(p);
+}
+
+/* The device's last port on this hub if it is free, else the first free
+   one. */
 static int
 hub_attach(usb_dev_t *udev, usb_dev_t *dev)
 {
     usb_hub_t *hub = (usb_hub_t *) udev->priv;
 
     for (int i = 0; i < HUB_PORTS; i++) {
-        usb_hub_port_t *p = &hub->port[i];
+        if ((dev->home_port == &hub->port[i]) && (hub->port[i].dev == NULL)) {
+            hub_port_attach(udev, &hub->port[i], dev);
+            return 1;
+        }
+    }
 
-        if (p->dev != NULL)
-            continue;
-
-        p->dev      = dev;
-        dev->port   = p;
-        dev->parent = udev;
-        dev->bus    = udev->bus;
-        usb_trace(USB_LOG_REG, -1, "USB hub port %i: %s attached", p->num, dev->name);
-        if (hub_port_power_good(p))
-            hub_port_connect(p);
-        return 1;
+    for (int i = 0; i < HUB_PORTS; i++) {
+        if (hub->port[i].dev == NULL) {
+            hub_port_attach(udev, &hub->port[i], dev);
+            return 1;
+        }
     }
 
     return 0;
@@ -645,7 +656,7 @@ static const usb_dev_ops_t hub_ops = {
 };
 
 static void *
-usb_hub_init(UNUSED(const device_t *info))
+usb_hub_init(const device_t *info)
 {
     usb_hub_t *hub = (usb_hub_t *) calloc(1, sizeof(usb_hub_t));
 
@@ -665,7 +676,7 @@ usb_hub_init(UNUSED(const device_t *info))
     }
 
     usb_dev_init(&hub->usb);
-    hub->attached = usb_attach(&hub->usb);
+    usb_dev_add(&hub->usb, info);
 
     return hub;
 }
@@ -685,8 +696,7 @@ usb_hub_close(void *priv)
         }
     }
 
-    if (hub->attached)
-        usb_detach(&hub->usb);
+    usb_dev_remove(&hub->usb);
     free(hub);
 }
 

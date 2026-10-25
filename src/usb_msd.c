@@ -102,7 +102,6 @@ typedef struct usb_msd_t {
     uint8_t        status;   /* bCSWStatus */
     char           serial[16];
     const char    *strings[3];
-    int            attached;
 } usb_msd_t;
 
 static uint32_t
@@ -464,7 +463,7 @@ static const usb_dev_ops_t usb_msd_ops = {
 };
 
 static void *
-usb_msd_init(UNUSED(const device_t *info))
+usb_msd_init(const device_t *info)
 {
     usb_msd_t *dev = (usb_msd_t *) calloc(1, sizeof(usb_msd_t));
 
@@ -494,7 +493,7 @@ usb_msd_init(UNUSED(const device_t *info))
     usb_dev_init(&dev->usb);
     dev->state = MSD_CBW;
 
-    dev->attached = usb_attach(&dev->usb);
+    usb_dev_add(&dev->usb, info);
 
     return dev;
 }
@@ -504,8 +503,7 @@ usb_msd_close(void *priv)
 {
     usb_msd_t *dev = (usb_msd_t *) priv;
 
-    if (dev->attached)
-        usb_detach(&dev->usb);
+    usb_dev_remove(&dev->usb);
     free(dev);
 }
 

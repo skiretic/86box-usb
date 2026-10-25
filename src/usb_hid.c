@@ -4,6 +4,8 @@
  *          PC systems and compatibles from 1981 through fairly recent
  *          system designs based on the PCI bus.
  *
+ *          This file is part of the 86Box distribution.
+ *
  *          USB HID mouse, keyboard and tablet, written from the Device
  *          Class Definition for Human Interface Devices (HID) Version
  *          1.11 (2001), the HID Usage Tables Version 1.12 (October 28,

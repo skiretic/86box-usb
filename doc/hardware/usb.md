@@ -4,7 +4,7 @@
 a set of USB devices that attach to them. Both host controller types are
 covered: the Universal Host Controller Interface (UHCI) used by Intel and VIA southbridges, and
 the Open Host Controller Interface (OHCI) used by ALi, SiS, SMSC and STMicroelectronics parts.
-Two PCI USB cards bring USB to boards without it.
+Two PCI USB cards bring USB to PCI boards without it.
 
 ## Host controllers
 
@@ -42,10 +42,13 @@ function-disable bits, and wires its legacy USB SMI where the chip has one (the 
 none). On Intel and VIA southbridges the UHCI
 legacy support register traps the keyboard controller ports (60h, 64h) and the A20 gate
 sequence, so a BIOS with USB keyboard support can drive a USB keyboard in DOS
-(`src/usb_legacy.c`). OHCI legacy emulation (OpenHCI appendix B) is not implemented.
+(`src/usb_legacy.c`). The OHCI legacy support registers (OpenHCI appendix B) can be read and
+written, but they do not trap the keyboard controller ports, so a BIOS cannot run a USB keyboard
+in DOS on an OHCI board.
 
-Boards whose southbridge has USB carry `MACHINE_BUS_USB`; Settings offers USB devices on those
-boards, and on any board once a PCI USB card is chosen. Many board BIOSes ship with the USB controller disabled; it has to be enabled in the
+Boards whose southbridge has USB carry `MACHINE_BUS_USB`, except the Siemens Simatic OP47 and the
+Microsoft Virtual PC 2007, which have no USB connector; Settings offers USB devices on those
+boards, and on any PCI board once a PCI USB card is chosen. Many board BIOSes ship with the USB controller disabled; it has to be enabled in the
 BIOS setup before an operating system can see it.
 
 ## Devices
@@ -53,13 +56,13 @@ BIOS setup before an operating system can see it.
 | Device | Where it is chosen | Configuration name | Notes |
 | --- | --- | --- | --- |
 | USB Mouse | Input devices, mouse | `usb_mouse` | Low-speed HID boot mouse, three buttons and a wheel |
-| USB Tablet | Input devices, mouse | `usb_tablet` | Full-speed HID absolute pointer, three buttons and a wheel; follows the host pointer without capture |
+| USB Tablet | Input devices, tablet | `usb_tablet` | Full-speed HID absolute pointer, three buttons and a wheel; follows the host pointer without capture |
 | USB Keyboard | Input devices, keyboard | `usb_keyboard` | Low-speed HID boot keyboard; the keyboard controller's keyboard port is left empty |
-| USB Mass Storage | Ports, USB, Mass storage | `usb_msd` | Bulk-Only Transport, SCSI transparent command set; it bridges one SCSI bus, taken after the SCSI controllers', and the hard disks, CD-ROM drives and other removable devices put on that bus (channels named "USB Mass Storage") are its logical units, in SCSI ID order |
-| USB Speaker | Sound card | `usb_speaker` | USB Audio 1.0: 16-bit stereo PCM, 8 to 48 kHz, volume and mute; resampled to the mixer rate |
-| 4-port USB 1.1 hub | Ports, USB, Hub | `usb_hub_4port` | Full-speed, self-powered, per-port power switching |
-| OPTi 82C861 FireLink | Ports, USB, Card | `opti_82c861` | PCI card, one OHCI with two ports |
-| VIA VT83C572 | Ports, USB, Card | `via_vt83c572` | PCI card, one UHCI with two ports |
+| USB Mass Storage | Ports (COM & LPT), USB, Mass storage | `usb_msd` | Bulk-Only Transport, SCSI transparent command set; it bridges one SCSI bus, taken after every other SCSI bus, and the hard disks, CD-ROM drives and other removable devices put on that bus (channels named "USB Mass Storage") are its logical units, in SCSI ID order; buttons next to the setting open those drive pages |
+| USB Speaker | Sound card | `usb_speaker` | USB Audio 1.0: 16-bit stereo PCM at 8, 11.025, 16, 22.05, 32, 44.1 or 48 kHz, volume and mute; resampled to the mixer rate |
+| 4-port USB 1.1 hub | Ports (COM & LPT), USB, Hub | `usb_hub_4port` | Full-speed, self-powered, per-port power switching |
+| OPTi 82C861 FireLink | Ports (COM & LPT), USB, Card | `opti_82c861` | PCI card, one OHCI with two ports |
+| VIA VT83C572 | Ports (COM & LPT), USB, Card | `via_vt83c572` | PCI card, one UHCI with two ports |
 
 The HID devices follow the HID specification 1.11 and the HID Usage Tables 1.12. Mass storage
 follows the USB Mass Storage Class Bulk-Only Transport 1.0. The speaker follows the USB Device
@@ -74,20 +77,23 @@ Each device can be unplugged and plugged back in while the machine runs, from it
 Media menu (Connected). An unplugged device has lost power: the guest sees a disconnect, and on
 replug a new device to enumerate, on the same port when that port is still free. Unplugging the
 hub takes the devices on it off the bus with it. A device left unplugged stays unplugged when the
-machine is restarted.
+machine is restarted, and when 86Box is closed and opened again. Each device also has a
+status-bar icon, grayed while the device is off the bus; clicking it opens the same menu.
 
 ## Not implemented
 
 - USB 2.0 (EHCI) and later controllers.
-- OHCI legacy keyboard emulation (OpenHCI appendix B).
+- OHCI legacy keyboard emulation (OpenHCI appendix B): the registers exist, but the keyboard
+  controller ports are not trapped.
 - Bus faults that need a physical wire or bus: CRC, bit stuffing and PID errors, FIFO
   underruns, host system errors from a PCI fault, and port over-current.
 
 ## Tested guests
 
 Debian GNU/Linux 4.0 was booted with a USB mouse, mass storage and speaker on the boards whose
-southbridge has USB; where USB did not work, the cause was the board's BIOS (USB disabled with
-no setup option, a beta BIOS, or the BIOS turning off the second controller). Windows 98 SE
+southbridge has USB. Where USB did not work, the cause was the board's BIOS (USB disabled with
+no setup option, a beta BIOS, or the BIOS turning off the second controller); a few boards did
+not boot Debian for reasons unrelated to USB. Windows 98 SE
 ran USB devices on Intel, VIA, ALi, SiS, SMSC and STPC boards (it has no mass storage class
 driver). Windows 2000 ran the mouse, keyboard, speaker and mass storage on an Intel and an ALi
 board. DOS ran with the BIOS USB keyboard support on Intel and

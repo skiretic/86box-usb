@@ -68,8 +68,13 @@ Class Definition for Audio Devices 1.0, Audio Data Formats 1.0 and Terminal Type
 Devices are plugged in when the machine starts. The hub, when one is chosen, is plugged in first.
 Every device takes the first free root port, the board's own controller before a PCI USB card,
 and goes to a hub port once the root ports are full. A device that finds no port, or a board with no USB controller, is reported in a warning
-instead of being dropped silently. Devices cannot be plugged or unplugged while the machine
-runs.
+instead of being dropped silently.
+
+Each device can be unplugged and plugged back in while the machine runs, from its entry in the
+Media menu (Connected). An unplugged device has lost power: the guest sees a disconnect, and on
+replug a new device to enumerate, on the same port when that port is still free. Unplugging the
+hub takes the devices on it off the bus with it. A device left unplugged stays unplugged when the
+machine is restarted.
 
 ## Not implemented
 

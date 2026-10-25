@@ -596,6 +596,7 @@ typedef struct hid_kbd_t {
     int        q_len;
     int        configured;
     uint8_t    down[0x200]; /* host keys down, so a host typematic repeat is no change */
+    uint8_t    pause_tail;  /* the held 045h is the end of Pause, not Num Lock */
     int        attached;
     /* Host keys arrive on the GUI thread, polls on the emulation thread. */
     mutex_t   *lock;
@@ -673,6 +674,20 @@ hid_kbd_key(uint16_t scan, int down, void *priv)
     down = !!down;
 
     thread_wait_mutex(dev->lock);
+    /* The host sends Pause as two keys, 100h and then 045h, because its
+       set 1 make code is E1 1D 45 and 45 on its own is Num Lock. A USB
+       keyboard reports Pause as the single usage 48h, so a 045h that
+       arrives while 100h is down is the rest of Pause: it and its release
+       are dropped, and the guest sees no Num Lock. */
+    if (scan == 0x045) {
+        if (down && dev->down[0x100])
+            dev->pause_tail = 1;
+        if (dev->pause_tail) {
+            if (!down)
+                dev->pause_tail = 0;
+            usage = 0;
+        }
+    }
     if ((usage != 0) && (dev->down[scan] != down)) {
         dev->down[scan] = down;
         hid_kbd_press(dev, usage, down);

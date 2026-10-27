@@ -52,6 +52,7 @@
 #include <86box/usb_dev.h>
 #include <86box/usb_log.h>
 #include <86box/plat.h>
+#include <86box/thread.h>
 #include <86box/ui.h>
 #include "cpu.h"
 #include <86box/plat_unused.h>
@@ -2117,6 +2118,12 @@ usb_attach(usb_dev_t *udev)
     return usb_attach_ex(udev, 0);
 }
 
+int
+usb_attach_quiet(usb_dev_t *udev)
+{
+    return usb_attach_ex(udev, 1);
+}
+
 /* A disconnect clears CCS and PE and sets CSC and PEDC for whichever of
    the two was set (UHCI 1.1 s2.1.7, p. 16-17 / PDF 22-23; Tables 5 and 6,
    p. 18 / PDF 24). */
@@ -2198,8 +2205,7 @@ typedef struct usb_slot_t {
 } usb_slot_t;
 
 static const char *const usb_slot_names[USB_SLOTS] = {
-    "usb_hub_4port", "usb_mouse", "usb_tablet", "usb_keyboard", "usb_speaker", "usb_msd",
-    "usb_flash_1", "usb_flash_2", "usb_flash_3", "usb_flash_4"
+    "usb_hub_4port", "usb_mouse", "usb_tablet", "usb_keyboard", "usb_speaker", "usb_msd"
 };
 
 static usb_slot_t usb_slots[USB_SLOTS];
@@ -2243,6 +2249,200 @@ usb_dev_on_bus(const usb_dev_t *dev)
     return 1;
 }
 
+/* The ports a user can plug a device into: the root ports of every
+   controller the chipset has wired up (a usb_t has a UHCI and an OHCI, and
+   a board connects the interrupt of one of them), then the ports of a hub
+   that sits, or last sat, on one of those root ports. The order follows
+   the controllers, so a port keeps its label from one start to the next. */
+typedef struct usb_port_ref_t {
+    uhci_t    *uhc;
+    ohci_t    *ohc;
+    usb_dev_t *hub;
+    int        i;
+    int        on;
+    void      *port; /* root ports: the port itself, to find a hub's */
+    char       label[USB_PORT_LABEL];
+} usb_port_ref_t;
+
+static usb_dev_t *
+usb_port_ref_dev(const usb_port_ref_t *r)
+{
+    if (r->hub != NULL)
+        return r->hub->ops->port_dev(r->hub, r->i);
+    if (r->uhc != NULL)
+        return r->uhc->port[r->i].usb;
+    return r->ohc->port[r->i].usb;
+}
+
+static int
+usb_ports_enum(usb_port_ref_t *out)
+{
+    int n = 0;
+    int roots;
+
+    memset(out, 0x00, USB_PORTS_MAX * sizeof(usb_port_ref_t));
+
+    for (int h = 0; h < USB_MAX_HC; h++) {
+        usb_t *u = usb_hcs[h];
+
+        if (u == NULL)
+            continue;
+
+        if (u->uhci->set_irq != NULL) {
+            for (int i = 0; (i < UHCI_PORTS) && (n < USB_PORTS_MAX); i++, n++) {
+                out[n].uhc  = u->uhci;
+                out[n].i    = i;
+                out[n].on   = !u->uhci->disabled;
+                out[n].port = &u->uhci->port[i];
+                snprintf(out[n].label, USB_PORT_LABEL, "%i", n + 1);
+            }
+        } else if (u->ohci->set_irq != NULL) {
+            /* Connectors past NumberDownstreamPorts are not implemented. */
+            for (int i = 0; (i < u->ohci->ports) && (n < USB_PORTS_MAX); i++, n++) {
+                out[n].ohc  = u->ohci;
+                out[n].i    = i;
+                out[n].on   = (i < u->ohci->ndp);
+                out[n].port = &u->ohci->port[i];
+                snprintf(out[n].label, USB_PORT_LABEL, "%i", n + 1);
+            }
+        }
+    }
+
+    roots = n;
+    for (int s = 0; s < USB_SLOTS; s++) {
+        usb_dev_t *hub = usb_slots[s].dev;
+        void      *at;
+
+        if ((hub == NULL) || (hub->ops->n_ports == NULL))
+            continue;
+
+        /* A hub unplugged by the user keeps its ports, under its last root
+           port; they are out of order until it is plugged back in. */
+        at = (hub->port != NULL) ? hub->port : hub->home_port;
+        for (int r = 0; r < roots; r++) {
+            if ((at == NULL) || (out[r].port != at) || (hub->parent != NULL) || (hub->home_parent != NULL))
+                continue;
+            for (int i = 0; (i < hub->ops->n_ports(hub)) && (n < USB_PORTS_MAX); i++, n++) {
+                out[n].hub = hub;
+                out[n].i   = i;
+                out[n].on  = out[r].on && usb_dev_on_bus(hub);
+                snprintf(out[n].label, USB_PORT_LABEL, "%s.%i", out[r].label, i + 1);
+            }
+        }
+    }
+
+    return n;
+}
+
+/* The copy the GUI reads, under a lock: the port list changes only on the
+   emulation thread. */
+static usb_port_info_t     usb_port_snap[USB_PORTS_MAX];
+static int                 usb_port_snap_n;
+static _Atomic(mutex_t *)  usb_port_mutex;
+
+static void
+usb_ports_publish(void)
+{
+    usb_port_ref_t   refs[USB_PORTS_MAX];
+    usb_port_info_t *p;
+    mutex_t         *m = atomic_load(&usb_port_mutex);
+    int              n = usb_ports_enum(refs);
+
+    if (m == NULL) {
+        m = thread_create_mutex();
+        atomic_store(&usb_port_mutex, m);
+    }
+
+    thread_wait_mutex(m);
+    for (int k = 0; k < n; k++) {
+        const usb_dev_t *dev = usb_port_ref_dev(&refs[k]);
+
+        p = &usb_port_snap[k];
+        memset(p, 0x00, sizeof(usb_port_info_t));
+        memcpy(p->label, refs[k].label, USB_PORT_LABEL);
+        p->slot = -1;
+        if (!refs[k].on && (dev == NULL))
+            p->state = USB_PORT_OFF;
+        else if (dev == NULL)
+            p->state = USB_PORT_EMPTY;
+        else if (usb_flash_dev_info(dev, p->image, MAX_IMAGE_PATH_LEN, &p->wp))
+            p->state = USB_PORT_FLASH;
+        else {
+            p->state = USB_PORT_DEVICE;
+            snprintf(p->name, sizeof(p->name), "%s", dev->name);
+            for (int s = 0; s < USB_SLOTS; s++) {
+                if (usb_slots[s].dev == dev)
+                    p->slot = s;
+            }
+        }
+    }
+    usb_port_snap_n = n;
+    thread_release_mutex(m);
+}
+
+int
+usb_ports_get(usb_port_info_t *ports, int max)
+{
+    mutex_t *m = atomic_load(&usb_port_mutex);
+    int      n;
+
+    if (m == NULL)
+        return 0;
+
+    thread_wait_mutex(m);
+    n = usb_port_snap_n;
+    memcpy(ports, usb_port_snap, ((n < max) ? n : max) * sizeof(usb_port_info_t));
+    thread_release_mutex(m);
+
+    return n;
+}
+
+int
+usb_port_attach(usb_dev_t *udev, const char *label)
+{
+    usb_port_ref_t refs[USB_PORTS_MAX];
+    int            n = usb_ports_enum(refs);
+
+    for (int k = 0; k < n; k++) {
+        usb_port_ref_t *r = &refs[k];
+
+        if (strcmp(r->label, label) != 0)
+            continue;
+        if (!r->on || (usb_port_ref_dev(r) != NULL))
+            return 0;
+
+        if (r->hub != NULL) {
+            if (!r->hub->ops->attach_port(r->hub, udev, r->i))
+                return 0;
+        } else if (r->uhc != NULL)
+            uhci_port_attach(r->uhc, r->i, udev);
+        else
+            ohci_port_attach(&r->ohc->port[r->i], udev);
+
+        udev->home_port   = udev->port;
+        udev->home_parent = udev->parent;
+        usb_ports_publish();
+        return 1;
+    }
+
+    return 0;
+}
+
+void
+usb_port_label(const usb_dev_t *udev, char *label, int n)
+{
+    usb_port_ref_t refs[USB_PORTS_MAX];
+    int            c = usb_ports_enum(refs);
+
+    label[0] = 0x00;
+    for (int k = 0; k < c; k++) {
+        if ((udev->port != NULL) && (usb_port_ref_dev(&refs[k]) == udev)) {
+            snprintf(label, n, "%s", refs[k].label);
+            return;
+        }
+    }
+}
+
 /* Republishes every slot's state for the GUI: one plug or unplug can change
    the devices on a hub too. */
 static void
@@ -2254,6 +2454,14 @@ usb_slots_update(void)
         atomic_store(&usb_slots[i].connected, (dev != NULL) && (dev->port != NULL));
         atomic_store(&usb_slots[i].online, (dev != NULL) && usb_dev_on_bus(dev));
     }
+
+    usb_ports_publish();
+}
+
+void
+usb_ports_refresh(void)
+{
+    usb_slots_update();
 }
 
 /* Devices are plugged in at power-on, before the BIOS has decided which USB
@@ -2271,8 +2479,10 @@ uhci_set_present(usb_t *dev, int present)
         return;
 
     hc->disabled = !present;
-    if (present)
+    if (present) {
+        usb_ports_publish();
         return;
+    }
 
     for (int i = 0; i < UHCI_PORTS; i++) {
         usb_dev_t *udev = hc->port[i].usb;
@@ -2342,7 +2552,14 @@ usb_hotplug_process(void)
         }
     }
 
+    usb_flash_reconcile(0);
     usb_slots_update();
+}
+
+void
+usb_hotplug_kick(void)
+{
+    atomic_store(&usb_hotplug_pending, 1);
 }
 
 void
@@ -2362,11 +2579,11 @@ usb_dev_add(usb_dev_t *dev, const device_t *info)
     else
         usb_trace(USB_LOG_REG, -1, "USB %s: left unplugged", dev->name);
 
-    if (slot >= 0) {
+    if (slot >= 0)
         usb_slots[slot].dev = dev;
-        usb_slots_update();
+    usb_slots_update();
+    if (slot >= 0)
         atomic_store(&usb_slots[slot].info, info);
-    }
 }
 
 /* A hub that leaves the machine is no longer anyone's last port. */
@@ -4175,6 +4392,8 @@ ohci_set_ndp(usb_t *dev, int ndp, int ports)
         ohci_port_detect(&oc->port[i]);
     }
     ohci_update_irq(oc);
+    /* The ports the user can plug into changed. */
+    usb_ports_publish();
 }
 
 static void

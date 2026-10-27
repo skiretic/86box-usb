@@ -35,6 +35,7 @@
 #include <86box/device.h>
 #include <86box/mem.h>
 #include <86box/plat.h>
+#include <86box/thread.h>
 #include <86box/usb.h>
 #include <86box/usb_dev.h>
 #include <86box/usb_log.h>
@@ -65,8 +66,6 @@
 #define FLASH_ASC_WRITE_PROTECTED   0x27
 #define FLASH_ASC_SAVING_PARAMS     0x39
 
-char    usb_flash_fn[USB_FLASH_MAX][MAX_IMAGE_PATH_LEN];
-uint8_t usb_flash_wp[USB_FLASH_MAX];
 
 static const uint8_t usb_flash_dev_desc[18] = {
     18, 0x01,   /* bLength, DEVICE */
@@ -82,9 +81,10 @@ static const uint8_t usb_flash_dev_desc[18] = {
 
 typedef struct usb_flash_t {
     usb_msd_bot_t bot;
-    int           inst;
+    char          fn[MAX_IMAGE_PATH_LEN];
+    uint8_t       req_wp; /* the user asked for write protection */
     FILE         *fp;
-    int           wp;
+    int           wp;     /* asked for, or the file is read-only */
     uint32_t      blocks;
 
     uint8_t      *buf;
@@ -466,20 +466,22 @@ static const usb_msd_target_ops_t usb_flash_target_ops = {
     .stop        = usb_flash_stop
 };
 
-static void *
-usb_flash_init(const device_t *info)
+/* A new stick on no port yet, or NULL when the image cannot be used. */
+static usb_flash_t *
+usb_flash_new(const char *fn, uint8_t wp)
 {
     usb_flash_t *dev  = (usb_flash_t *) calloc(1, sizeof(usb_flash_t));
-    int          inst = info->local;
     off64_t      size = 0;
+    uint32_t     hash = 0x811c9dc5;
 
-    dev->inst = inst;
-    dev->wp   = usb_flash_wp[inst];
+    snprintf(dev->fn, sizeof(dev->fn), "%s", fn);
+    dev->req_wp = wp;
+    dev->wp     = wp;
     if (!dev->wp)
-        dev->fp = plat_fopen64(usb_flash_fn[inst], "rb+");
+        dev->fp = plat_fopen64(fn, "rb+");
     /* A file the host does not let us write is a write-protected stick. */
     if (dev->fp == NULL) {
-        dev->fp = plat_fopen64(usb_flash_fn[inst], "rb");
+        dev->fp = plat_fopen64(fn, "rb");
         dev->wp = 1;
     }
     if (dev->fp != NULL) {
@@ -489,7 +491,7 @@ usb_flash_init(const device_t *info)
     /* The capacity is the whole blocks in the file; the file is never
        resized. */
     if ((dev->fp == NULL) || (size < FLASH_BLOCK) || ((size / FLASH_BLOCK) > 0xffffffffLL)) {
-        pclog("USB flash drive %i: cannot use image \"%s\"\n", inst + 1, usb_flash_fn[inst]);
+        pclog("USB flash drive: cannot use image \"%s\"\n", fn);
         if (dev->fp != NULL)
             fclose(dev->fp);
         free(dev);
@@ -498,14 +500,18 @@ usb_flash_init(const device_t *info)
     dev->blocks = (uint32_t) (size / FLASH_BLOCK);
 
     /* At least 12 characters from 0-9 and A-F (BOT 1.0 s4.1.1, p. 9 /
-       PDF 9); the drive number keeps the sticks of one machine apart. */
-    snprintf(dev->serial, sizeof(dev->serial), "86B0F1A5%04X", inst + 1);
+       PDF 9). It comes from the image's file name, so the same image is the
+       same stick to the guest every time it is plugged in, and two images
+       are two sticks. */
+    for (const char *p = fn; *p != '\0'; p++)
+        hash = (hash ^ (uint8_t) *p) * 0x01000193;
+    snprintf(dev->serial, sizeof(dev->serial), "86B0%08X", hash);
     dev->strings[0] = "86Box";
     dev->strings[1] = "USB Flash Drive";
     dev->strings[2] = dev->serial;
 
     usb_msd_bot_init(&dev->bot, &usb_flash_target_ops, dev);
-    dev->bot.usb.name      = info->name;
+    dev->bot.usb.name      = "USB Flash Drive";
     dev->bot.usb.low_speed = 0;
     dev->bot.usb.dev_desc  = usb_flash_dev_desc;
     dev->bot.usb.cfg_desc  = usb_msd_cfg_desc;
@@ -514,52 +520,309 @@ usb_flash_init(const device_t *info)
     dev->bot.usb.n_strings = 3;
     usb_dev_init(&dev->bot.usb);
 
-    usb_dev_add(&dev->bot.usb, info);
-
     return dev;
 }
 
+/* Pulled out: the port sees the disconnect and the image file closes, so
+   it is whole and free to use on the host. */
 static void
-usb_flash_close(void *priv)
+usb_flash_free(usb_flash_t *dev)
 {
-    usb_flash_t *dev = (usb_flash_t *) priv;
-
+    usb_trace(USB_LOG_REG, -1, "USB flash drive %s: unplugged", dev->fn);
     usb_dev_remove(&dev->bot.usb);
     fclose(dev->fp);
     free(dev->buf);
     free(dev);
 }
 
-#define USB_FLASH_DEVICE(n)                    \
-    {                                          \
-        .name          = "USB Flash Drive " #n, \
-        .internal_name = "usb_flash_" #n,      \
-        .flags         = DEVICE_USB,           \
-        .local         = (n) - 1,              \
-        .init          = usb_flash_init,       \
-        .close         = usb_flash_close,      \
-        .reset         = NULL,                 \
-        .available     = NULL,                 \
-        .speed_changed = NULL,                 \
-        .force_redraw  = NULL,                 \
-        .config        = NULL                  \
+/* Which image the user wants in which port. The GUI writes it, the
+   emulation thread follows it; the lock covers both. An entry that could
+   not go in when the machine started (its port is gone, say) is parked:
+   it stays in the config, out of the machine, until the user picks that
+   port again. */
+typedef struct usb_flash_cfg_t {
+    char    label[USB_PORT_LABEL];
+    char    fn[MAX_IMAGE_PATH_LEN];
+    uint8_t wp;
+    uint8_t parked;
+} usb_flash_cfg_t;
+
+char usb_flash_history[MAX_PREV_IMAGES][MAX_IMAGE_PATH_LEN];
+
+static usb_flash_cfg_t usb_flash_cfg[USB_PORTS_MAX];
+static usb_flash_cfg_t usb_flash_want_copy[USB_PORTS_MAX];
+static mutex_t        *usb_flash_mutex;
+/* The sticks in the machine; emulation thread only. */
+static usb_flash_t    *usb_flash_sticks[USB_PORTS_MAX];
+
+/* Main thread, when the config is loaded, before the emulation thread
+   runs. */
+void
+usb_flash_cfg_clear(void)
+{
+    if (usb_flash_mutex == NULL)
+        usb_flash_mutex = thread_create_mutex();
+    memset(usb_flash_cfg, 0x00, sizeof(usb_flash_cfg));
+    memset(usb_flash_history, 0x00, sizeof(usb_flash_history));
+}
+
+int
+usb_flash_cfg_get(int i, char *label, char *fn, uint8_t *wp)
+{
+    int ret;
+
+    if ((i < 0) || (i >= USB_PORTS_MAX) || (usb_flash_mutex == NULL))
+        return 0;
+
+    thread_wait_mutex(usb_flash_mutex);
+    ret = (usb_flash_cfg[i].fn[0] != '\0');
+    if (ret) {
+        memcpy(label, usb_flash_cfg[i].label, USB_PORT_LABEL);
+        memcpy(fn, usb_flash_cfg[i].fn, MAX_IMAGE_PATH_LEN);
+        *wp = usb_flash_cfg[i].wp;
+    }
+    thread_release_mutex(usb_flash_mutex);
+
+    return ret;
+}
+
+void
+usb_flash_cfg_set(int i, const char *label, const char *fn, uint8_t wp)
+{
+    if ((i < 0) || (i >= USB_PORTS_MAX) || (usb_flash_mutex == NULL))
+        return;
+
+    thread_wait_mutex(usb_flash_mutex);
+    snprintf(usb_flash_cfg[i].label, USB_PORT_LABEL, "%s", label);
+    snprintf(usb_flash_cfg[i].fn, MAX_IMAGE_PATH_LEN, "%s", fn);
+    usb_flash_cfg[i].wp     = wp;
+    usb_flash_cfg[i].parked = 0;
+    thread_release_mutex(usb_flash_mutex);
+}
+
+/* The newest image goes to the top of the recent list; GUI thread. */
+static void
+usb_flash_history_add(const char *fn)
+{
+    int i;
+
+    for (i = 0; i < (MAX_PREV_IMAGES - 1); i++) {
+        if (!strcmp(usb_flash_history[i], fn))
+            break;
+    }
+    memmove(usb_flash_history[1], usb_flash_history[0], (size_t) i * MAX_IMAGE_PATH_LEN);
+    snprintf(usb_flash_history[0], MAX_IMAGE_PATH_LEN, "%s", fn);
+}
+
+void
+usb_port_flash_want(const char *label, const char *fn, uint8_t wp)
+{
+    int plug = (fn != NULL) && (fn[0] != '\0');
+    int at   = -1;
+
+    if (usb_flash_mutex == NULL)
+        return;
+
+    thread_wait_mutex(usb_flash_mutex);
+    for (int i = 0; i < USB_PORTS_MAX; i++) {
+        usb_flash_cfg_t *e = &usb_flash_cfg[i];
+
+        if (e->fn[0] == '\0')
+            continue;
+        if (!strcmp(e->label, label))
+            at = i;
+        /* One image is one stick: moving it to this port takes it out of
+           the one it was in. */
+        else if (plug && !strcmp(e->fn, fn))
+            memset(e, 0x00, sizeof(usb_flash_cfg_t));
+    }
+    if (plug && (at < 0)) {
+        for (int i = 0; (i < USB_PORTS_MAX) && (at < 0); i++) {
+            if (usb_flash_cfg[i].fn[0] == '\0')
+                at = i;
+        }
+    }
+    if (at >= 0) {
+        memset(&usb_flash_cfg[at], 0x00, sizeof(usb_flash_cfg_t));
+        if (plug) {
+            snprintf(usb_flash_cfg[at].label, USB_PORT_LABEL, "%s", label);
+            snprintf(usb_flash_cfg[at].fn, MAX_IMAGE_PATH_LEN, "%s", fn);
+            usb_flash_cfg[at].wp = wp;
+        }
+    }
+    thread_release_mutex(usb_flash_mutex);
+
+    if (plug)
+        usb_flash_history_add(fn);
+    usb_hotplug_kick();
+}
+
+int
+usb_flash_dev_info(const usb_dev_t *dev, char *fn, int n, uint8_t *wp)
+{
+    for (int i = 0; i < USB_PORTS_MAX; i++) {
+        const usb_flash_t *s = usb_flash_sticks[i];
+
+        if ((s != NULL) && (&s->bot.usb == dev)) {
+            snprintf(fn, n, "%s", s->fn);
+            *wp = s->wp;
+            return 1;
+        }
     }
 
-const device_t usb_flash_devices[USB_FLASH_MAX] = {
-    USB_FLASH_DEVICE(1),
-    USB_FLASH_DEVICE(2),
-    USB_FLASH_DEVICE(3),
-    USB_FLASH_DEVICE(4)
+    return 0;
+}
+
+/* Drops entry e of the config, or parks it, matched by label and image. */
+static void
+usb_flash_cfg_drop(const usb_flash_cfg_t *e, int park)
+{
+    thread_wait_mutex(usb_flash_mutex);
+    for (int i = 0; i < USB_PORTS_MAX; i++) {
+        usb_flash_cfg_t *c = &usb_flash_cfg[i];
+
+        if (!strcmp(c->label, e->label) && !strcmp(c->fn, e->fn)) {
+            if (park)
+                c->parked = 1;
+            else
+                memset(c, 0x00, sizeof(usb_flash_cfg_t));
+        }
+    }
+    thread_release_mutex(usb_flash_mutex);
+}
+
+/* Makes the sticks in the ports match the config: a stick that is no
+   longer wanted where it is comes out, then each wanted image goes into its
+   port. Swapping is both: the old stick leaves, the new one arrives. When
+   the machine starts, a stick whose port is taken or gone goes to any free
+   port, and the config follows it there. */
+void
+usb_flash_reconcile(int at_reset)
+{
+    usb_flash_cfg_t *want = usb_flash_want_copy;
+    char             label[USB_PORT_LABEL];
+
+    if (usb_flash_mutex == NULL)
+        return;
+
+    thread_wait_mutex(usb_flash_mutex);
+    memcpy(want, usb_flash_cfg, sizeof(usb_flash_cfg));
+    thread_release_mutex(usb_flash_mutex);
+
+    for (int k = 0; k < USB_PORTS_MAX; k++) {
+        usb_flash_t *s    = usb_flash_sticks[k];
+        int          keep = 0;
+
+        if (s == NULL)
+            continue;
+        usb_port_label(&s->bot.usb, label, sizeof(label));
+        for (int i = 0; (i < USB_PORTS_MAX) && !keep; i++) {
+            keep = (want[i].fn[0] != '\0') && !want[i].parked && !strcmp(want[i].label, label) &&
+                   !strcmp(want[i].fn, s->fn) && (want[i].wp == s->req_wp);
+        }
+        if (!keep) {
+            usb_flash_sticks[k] = NULL;
+            usb_flash_free(s);
+        }
+    }
+
+    for (int i = 0; i < USB_PORTS_MAX; i++) {
+        usb_flash_cfg_t *e    = &want[i];
+        usb_flash_t     *s;
+        int              have = 0;
+        int              slot = -1;
+
+        if ((e->fn[0] == '\0') || e->parked)
+            continue;
+        for (int k = 0; k < USB_PORTS_MAX; k++) {
+            if (usb_flash_sticks[k] == NULL) {
+                if (slot < 0)
+                    slot = k;
+                continue;
+            }
+            usb_port_label(&usb_flash_sticks[k]->bot.usb, label, sizeof(label));
+            if (!strcmp(label, e->label) && !strcmp(usb_flash_sticks[k]->fn, e->fn))
+                have = 1;
+        }
+        if (have || (slot < 0))
+            continue;
+
+        s = usb_flash_new(e->fn, e->wp);
+        if (s == NULL) {
+            usb_flash_cfg_drop(e, at_reset);
+            continue;
+        }
+        if (usb_port_attach(&s->bot.usb, e->label))
+            usb_trace(USB_LOG_REG, -1, "USB flash drive %s: plugged into port %s", e->fn, e->label);
+        else if (at_reset && usb_attach_quiet(&s->bot.usb)) {
+            usb_port_label(&s->bot.usb, label, sizeof(label));
+            thread_wait_mutex(usb_flash_mutex);
+            for (int c = 0; c < USB_PORTS_MAX; c++) {
+                if (!strcmp(usb_flash_cfg[c].label, e->label) && !strcmp(usb_flash_cfg[c].fn, e->fn))
+                    snprintf(usb_flash_cfg[c].label, USB_PORT_LABEL, "%s", label);
+            }
+            thread_release_mutex(usb_flash_mutex);
+        } else {
+            pclog("USB flash drive %s: port %s is not free\n", e->fn, e->label);
+            usb_dev_remove(&s->bot.usb);
+            fclose(s->fp);
+            free(s);
+            usb_flash_cfg_drop(e, at_reset);
+            continue;
+        }
+        usb_flash_sticks[slot] = s;
+    }
+
+    usb_ports_refresh();
+}
+
+/* The sticks belong to one device, added on every hard reset, so that they
+   go in once the controllers and the other USB devices are there, and come
+   out when the machine closes. */
+static void *
+usb_flash_mgr_init(UNUSED(const device_t *info))
+{
+    if (usb_flash_mutex == NULL)
+        usb_flash_mutex = thread_create_mutex();
+
+    usb_flash_reconcile(1);
+
+    return usb_flash_sticks;
+}
+
+static void
+usb_flash_mgr_close(UNUSED(void *priv))
+{
+    for (int k = 0; k < USB_PORTS_MAX; k++) {
+        if (usb_flash_sticks[k] != NULL) {
+            usb_dev_remove(&usb_flash_sticks[k]->bot.usb);
+            fclose(usb_flash_sticks[k]->fp);
+            free(usb_flash_sticks[k]->buf);
+            free(usb_flash_sticks[k]);
+            usb_flash_sticks[k] = NULL;
+        }
+    }
+}
+
+const device_t usb_flash_device = {
+    .name          = "USB Flash Drives",
+    .internal_name = "usb_flash",
+    .flags         = DEVICE_USB,
+    .local         = 0,
+    .init          = usb_flash_mgr_init,
+    .close         = usb_flash_mgr_close,
+    .reset         = NULL,
+    .available     = NULL,
+    .speed_changed = NULL,
+    .force_redraw  = NULL,
+    .config        = NULL
 };
 
-/* Called on hard reset with the other USB devices. */
+/* Called on hard reset after the other USB devices. */
 void
 usb_flash_hard_reset(void)
 {
-    for (int i = 0; i < USB_FLASH_MAX; i++) {
-        if (usb_flash_fn[i][0] != '\0')
-            device_add(&usb_flash_devices[i]);
-    }
+    device_add(&usb_flash_device);
 }
 
 /* New images. One primary partition starts at LBA 63, the first track of

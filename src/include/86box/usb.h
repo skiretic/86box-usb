@@ -46,9 +46,36 @@ extern const device_t *usb_msd_get_device(int msd);
 extern const char     *usb_msd_get_internal_name(int msd);
 extern int             usb_msd_get_from_internal_name(const char *s);
 extern void            usb_msd_hard_reset(void);
-/* USB flash drives, each a mass storage device of its own with one raw
-   image; a drive with no image file set is not in the machine. */
-#define USB_FLASH_MAX      4
+/* USB ports, as the status bar shows them: the root ports of every
+   controller the chipset has wired up, numbered "1", "2", ... in
+   controller order, then the ports of a hub, "<its root port>.<n>". The
+   GUI reads a copy, which the emulation thread keeps current. */
+#define USB_PORTS_MAX     24
+#define USB_PORT_LABEL    8
+
+enum {
+    USB_PORT_EMPTY = 0,
+    USB_PORT_FLASH,  /* a flash drive */
+    USB_PORT_DEVICE, /* any other device */
+    USB_PORT_OFF     /* the controller or hub port is not working */
+};
+
+typedef struct usb_port_info_t {
+    char    label[USB_PORT_LABEL];
+    int     state;
+    int     slot;          /* USB_PORT_DEVICE: its hot-plug slot, -1 for none */
+    char    name[64];      /* USB_PORT_DEVICE: the device name */
+    char    image[MAX_IMAGE_PATH_LEN]; /* USB_PORT_FLASH: its image file */
+    uint8_t wp;
+} usb_port_info_t;
+
+/* Copies the ports into ports (up to max); returns how many there are. */
+extern int usb_ports_get(usb_port_info_t *ports, int max);
+
+/* USB flash drives: a stick with a raw image, plugged into a port. The
+   user plugs, swaps and unplugs them from the GUI by port; the config
+   keeps which image is in which port, and the sticks go back there on the
+   next start. */
 #define USB_FLASH_MIN_SIZE (8ULL << 20)
 #define USB_FLASH_MAX_SIZE (32ULL << 30)
 enum {
@@ -56,9 +83,18 @@ enum {
     USB_FLASH_FS_FAT16,
     USB_FLASH_FS_FAT32
 };
-extern const device_t usb_flash_devices[USB_FLASH_MAX];
-extern char           usb_flash_fn[USB_FLASH_MAX][MAX_IMAGE_PATH_LEN];
-extern uint8_t        usb_flash_wp[USB_FLASH_MAX];
+extern const device_t usb_flash_device;
+
+/* What the config holds: entry i, image fn in port label. */
+extern void usb_flash_cfg_clear(void);
+extern int  usb_flash_cfg_get(int i, char *label, char *fn, uint8_t *wp);
+extern void usb_flash_cfg_set(int i, const char *label, const char *fn, uint8_t wp);
+/* Images used before, newest first, for the GUI's recent image lists. */
+extern char usb_flash_history[MAX_PREV_IMAGES][MAX_IMAGE_PATH_LEN];
+/* GUI thread: put a stick with fn into port label (swapping out any stick
+   there), or with fn NULL or empty, unplug it. Done on the emulation
+   thread. */
+extern void usb_port_flash_want(const char *label, const char *fn, uint8_t wp);
 
 extern void usb_flash_hard_reset(void);
 /* Creates a raw image of bytes (a multiple of 512, USB_FLASH_MIN_SIZE to
@@ -97,14 +133,12 @@ extern int             usb_card_has_bus(int mch);
 extern void            usb_card_reset(void);
 
 /* Hot plug. Each USB device kind the machine can have (hub, mouse, tablet,
-   keyboard, speaker, mass storage) has one slot, and each flash drive has
-   one, after those (USB_SLOT_FLASH + drive). The user plugs and
+   keyboard, speaker, mass storage) has one slot. The user plugs and
    unplugs a device from the GUI thread with usb_slot_want(); the change is
    made on the emulation thread by usb_hotplug_process(), which runs
    between CPU slices, so no controller or device state is ever touched
    from the GUI. What the user wants is kept in the config. */
-#define USB_SLOT_FLASH 6
-#define USB_SLOTS      (USB_SLOT_FLASH + USB_FLASH_MAX)
+#define USB_SLOTS 6
 
 extern const char     *usb_slot_internal_name(int slot);
 /* The device that holds the slot, NULL when the machine has none. */
@@ -120,6 +154,8 @@ extern void            usb_slot_want(int slot, int connected);
    usb_slot_connected(). */
 extern int             usb_slot_requested(int slot);
 extern void            usb_hotplug_process(void);
+/* A flash drive request is waiting for usb_hotplug_process(). */
+extern void            usb_hotplug_kick(void);
 
 /* Functions. */
 extern void uhci_update_io_mapping(usb_t *dev, uint8_t base_l, uint8_t base_h, int enable);

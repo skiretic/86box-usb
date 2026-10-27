@@ -69,6 +69,7 @@ extern "C" {
 };
 
 #include "qt_newfloppydialog.hpp"
+#include "qt_newflashdialog.hpp"
 #include "qt_util.hpp"
 #include "qt_deviceconfig.hpp"
 #include "qt_mediahistorymanager.hpp"
@@ -311,6 +312,23 @@ MediaMenu::refresh(QMenu *parentMenu)
         connect(menu, &QMenu::aboutToShow, this, [this, slot] { usbUpdateMenu(slot); });
         usbMenus[slot] = menu;
         usbUpdateMenu(slot);
+    }
+
+    /* One submenu per USB port, as for each CD-ROM drive: a flash drive
+       image goes into a port from here. The ports are known once the
+       machine has started; the items are made again each time the submenu
+       opens, from what is in the port then. */
+    usbPortMenus.clear();
+    {
+        static usb_port_info_t ports[USB_PORTS_MAX];
+        const int              n = usb_ports_get(ports, USB_PORTS_MAX);
+
+        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
+            auto *menu = parentMenu->addMenu("");
+            connect(menu, &QMenu::aboutToShow, this, [this, k] { usbPortUpdateMenu(k); });
+            usbPortMenus[k] = menu;
+            usbPortUpdateMenu(k);
+        }
     }
     parentMenu->addAction(tr("Clear image &history"), [this]() { clearImageHistory(); });
 }
@@ -1562,19 +1580,141 @@ MediaMenu::usbUpdateMenu(int slot)
     if (connectedAction != nullptr)
         connectedAction->setChecked(usb_slot_requested(slot));
 
-    QString name = DeviceConfig::DeviceName(dev, dev->internal_name, 0);
+    menu->setTitle(DeviceConfig::DeviceName(dev, dev->internal_name, 0));
+    menu->setToolTip(DeviceConfig::DeviceName(dev, dev->internal_name, 0));
+}
 
-    /* A flash drive is named with its image file. */
-    if (slot >= USB_SLOT_FLASH) {
-        QString fn = QString::fromUtf8(usb_flash_fn[slot - USB_SLOT_FLASH]);
+QString
+MediaMenu::usbPortTitle(const usb_port_info_t &p)
+{
+    QString what;
 
-        menu->setTitle(QString("%1 (%2)").arg(name, QFileInfo(fn).fileName()));
-        menu->setToolTip(QString("%1 (%2)").arg(name, fn));
+    switch (p.state) {
+        case USB_PORT_FLASH:
+            what = QFileInfo(QString::fromUtf8(p.image)).fileName();
+            if (p.wp)
+                what = tr("%1 (write-protected)").arg(what);
+            break;
+        case USB_PORT_DEVICE:
+            what = QString::fromUtf8(p.name);
+            break;
+        case USB_PORT_OFF:
+            what = tr("(not available)");
+            break;
+        default:
+            what = tr("(empty)");
+            break;
+    }
+
+    return tr("USB port %1: %2").arg(QString::fromUtf8(p.label), what);
+}
+
+/* An empty port, or one with a flash drive, takes a new or existing image,
+   or a recent one; a flash drive can be unplugged. A port with another
+   device can unplug that device; it comes back from its own entry above. */
+void
+MediaMenu::usbPortUpdateMenu(int port)
+{
+    static usb_port_info_t ports[USB_PORTS_MAX];
+    const int              n = usb_ports_get(ports, USB_PORTS_MAX);
+
+    if (!usbPortMenus.contains(port))
+        return;
+
+    auto *menu = usbPortMenus[port];
+    menu->clear();
+    if (port >= n) {
+        menu->setTitle(tr("USB port"));
+        menu->addAction(tr("(not available)"))->setEnabled(false);
         return;
     }
 
-    menu->setTitle(name);
-    menu->setToolTip(name);
+    const usb_port_info_t &p     = ports[port];
+    const QString          label = QString::fromUtf8(p.label);
+    const QString          title = usbPortTitle(p);
+    QIcon                  icon(":/settings/qt/icons/usb_msd.ico");
+
+    menu->setTitle(title);
+    menu->setToolTip(title);
+
+    if (p.state == USB_PORT_OFF) {
+        menu->addAction(tr("(not available)"))->setEnabled(false);
+        return;
+    }
+
+    if (p.state == USB_PORT_DEVICE) {
+        const int  slot = p.slot;
+        QAction   *a    = menu->addAction(tr("&Unplug %1").arg(QString::fromUtf8(p.name)), [slot] {
+            usb_slot_want(slot, 0);
+            config_save();
+        });
+        a->setEnabled(slot >= 0);
+        return;
+    }
+
+    menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, New), tr("&New flash drive…"), [this, label] { usbPortNewImage(label); });
+    menu->addSeparator();
+    menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, Browse), tr("&Existing image…"), [this, label] { usbPortSelectImage(label, false); });
+    menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, WriteProtectedBrowse), tr("Existing image (&Write-protected)…"), [this, label] { usbPortSelectImage(label, true); });
+    menu->addSeparator();
+
+    for (int i = 0; i < MAX_PREV_IMAGES; i++) {
+        const QString fn = QString::fromUtf8(usb_flash_history[i]);
+
+        if (fn.isEmpty())
+            continue;
+        auto *a = menu->addAction(icon, QFileInfo(fn).fileName(), [this, label, fn] { usbPortPlug(label, fn, false); });
+        a->setToolTip(fn);
+        a->setCheckable(true);
+        a->setChecked((p.state == USB_PORT_FLASH) && (fn == QString::fromUtf8(p.image)));
+    }
+    menu->addSeparator();
+
+    if (p.state == USB_PORT_FLASH) {
+        menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, Eject),
+                        tr("&Unplug %1").arg(QFileInfo(QString::fromUtf8(p.image)).fileName()),
+                        [label] {
+                            usb_port_flash_want(label.toUtf8().constData(), nullptr, 0);
+                            config_save();
+                        });
+    } else
+        menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, Eject), tr("&Unplug"))->setEnabled(false);
+}
+
+/* The image must be a disk image; it may already be in another port, and
+   then it moves here. */
+void
+MediaMenu::usbPortPlug(const QString &label, const QString &fn, bool wp)
+{
+    QFileInfo fi(fn);
+
+    if (!fi.exists() || (fi.size() < 512)) {
+        QMessageBox::warning(parentWidget, tr("USB flash drive"), tr("%1 is not a disk image.").arg(fn));
+        return;
+    }
+
+    usb_port_flash_want(label.toUtf8().constData(), fn.toUtf8().constData(), wp ? 1 : 0);
+    config_save();
+}
+
+void
+MediaMenu::usbPortNewImage(const QString &label)
+{
+    NewFlashDialog dialog(parentWidget);
+
+    if (dialog.exec() == QDialog::Accepted)
+        usbPortPlug(label, dialog.fileName(), false);
+}
+
+void
+MediaMenu::usbPortSelectImage(const QString &label, bool wp)
+{
+    const QString fn = QFileDialog::getOpenFileName(parentWidget, QString(), getMediaOpenDirectory(),
+                                                    tr("Flash drive images") % util::DlgFilter({ "img", "ima", "bin", "raw" }) %
+                                                    tr("All files") % util::DlgFilter({ "*" }, true));
+
+    if (!fn.isEmpty())
+        usbPortPlug(label, fn, wp);
 }
 
 QString

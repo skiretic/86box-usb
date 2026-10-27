@@ -123,6 +123,8 @@ struct Pixmaps {
     PixmapSetActive      hd;
     PixmapSetEmptyActive net;
     PixmapSetEmpty       usb[USB_SLOTS];
+    PixmapSetEmpty       usb_flash;
+    PixmapSetEmpty       usb_port;
     PixmapSetDisabled    sound;
     PixmapSetDisabled    dynarec;
 };
@@ -357,10 +359,12 @@ struct MachineStatus::States {
         pixmaps.tape.load(QIcon(":/settings/qt/icons/tape.ico"));
         pixmaps.hd.load(QIcon(":/settings/qt/icons/hard_disk.ico"));
         pixmaps.net.load(QIcon(":/settings/qt/icons/network.ico"));
-        /* One icon per USB device kind, named after the device; the flash
-           drives use the mass storage icon. */
+        /* One icon per USB device kind, named after the device; a flash
+           drive shows the mass storage icon, an empty USB port a socket. */
         for (int i = 0; i < USB_SLOTS; i++)
-            pixmaps.usb[i].load(QIcon(QString(":/settings/qt/icons/%1.ico").arg((i >= USB_SLOT_FLASH) ? "usb_msd" : usb_slot_internal_name(i))));
+            pixmaps.usb[i].load(QIcon(QString(":/settings/qt/icons/%1.ico").arg(usb_slot_internal_name(i))));
+        pixmaps.usb_flash.load(QIcon(":/settings/qt/icons/usb_msd.ico"));
+        pixmaps.usb_port.load(QIcon(":/settings/qt/icons/usb_port.ico"));
         pixmaps.sound.load(QIcon(":/settings/qt/icons/sound.ico"));
         pixmaps.dynarec.normal                          = QIcon(":/menuicons/qt/icons/recompiler.ico").pixmap(pixmap_size);
         pixmaps.dynarec.disabled                        = QIcon(":/menuicons/qt/icons/interpreter.ico").pixmap(pixmap_size);
@@ -389,8 +393,32 @@ struct MachineStatus::States {
         for (auto &n : net) {
             n.pixmaps = &pixmaps.net;
         }
-        for (int i = 0; i < USB_SLOTS; i++)
-            usb[i].pixmaps = &pixmaps.usb[i];
+        for (auto &u : usbPort)
+            u.pixmaps = &pixmaps.usb_port;
+    }
+
+    /* A USB port's icon: an empty port is a socket, grayed when the port
+       is not working; otherwise what is in the port, grayed when it cannot
+       reach the host. */
+    void updateUsbPort(int k, const usb_port_info_t &p)
+    {
+        PixmapSetEmpty *set   = &pixmaps.usb_port;
+        bool            empty = (p.state == USB_PORT_OFF);
+
+        if (p.state == USB_PORT_FLASH)
+            set = &pixmaps.usb_flash;
+        else if (p.state == USB_PORT_DEVICE) {
+            set = &pixmaps.usb_flash;
+            if (p.slot >= 0)
+                set = &pixmaps.usb[p.slot];
+            empty = (p.slot >= 0) && !usb_slot_online(p.slot);
+        }
+        if (usbPort[k].pixmaps != set) {
+            usbPort[k].pixmaps = set;
+            usbPort[k].empty   = empty;
+            usbPort[k].refresh();
+        } else
+            usbPort[k].setEmpty(empty);
     }
 
     std::array<StateEmpty, 2>                  cartridge;
@@ -402,7 +430,7 @@ struct MachineStatus::States {
     std::array<StateEmptyActive, TAPE_NUM>     tape;
     std::array<StateActive, HDD_BUS_USB>       hdds;
     std::array<StateEmptyActive, NET_CARD_MAX> net;
-    std::array<StateEmpty, USB_SLOTS>          usb;
+    std::array<StateEmpty, USB_PORTS_MAX>      usbPort;
     std::unique_ptr<ClickableLabel>            sound;
     std::unique_ptr<ClickableLabel>            dynarec;
     std::unique_ptr<QLabel>                    text;
@@ -632,12 +660,29 @@ MachineStatus::refreshIcons()
     if (d->sound)
         d->sound->setPixmapIfChanged((sound_muted || fast_forward) ? d->pixmaps.sound.disabled : d->pixmaps.sound.normal);
 
-    /* A USB device is plugged or unplugged on the emulation thread, and a
-       plug can fail for want of a port, so its icon follows the device. It
-       is grayed whenever the device cannot reach the host, which includes
-       sitting in a hub that is itself unplugged. */
-    for (int i = 0; i < USB_SLOTS; i++)
-        d->usb[i].setEmpty(!usb_slot_online(i));
+    /* USB devices are plugged and unplugged on the emulation thread, so
+       each port's icon, tooltip and Media menu title follow what is in the
+       port now. */
+    {
+        static usb_port_info_t ports[USB_PORTS_MAX];
+        const int              n = usb_ports_get(ports, USB_PORTS_MAX);
+
+        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
+            if (!d->usbPort[k].label)
+                continue;
+            d->updateUsbPort(k, ports[k]);
+            const QString tip = MediaMenu::usbPortTitle(ports[k]);
+            if (d->usbPort[k].label->toolTip() != tip)
+                d->usbPort[k].label->setToolTip(tip);
+            if (MediaMenu::ptr && MediaMenu::ptr->usbPortMenus.contains(k)) {
+                QMenu *menu = MediaMenu::ptr->usbPortMenus[k];
+                if (menu->title() != tip) {
+                    menu->setTitle(tip);
+                    menu->setToolTip(tip);
+                }
+            }
+        }
+    }
 
     if (d->dynarec) {
         d->dynarec->setVisible(cpu_use_dynarec);
@@ -783,9 +828,9 @@ MachineStatus::refresh(QStatusBar *sbar)
     for (size_t i = 0; i < NET_CARD_MAX; i++) {
         sbar->removeWidget(d->net[i].label.get());
     }
-    for (size_t i = 0; i < USB_SLOTS; i++) {
-        sbar->removeWidget(d->usb[i].label.get());
-        d->usb[i].label.reset();
+    for (size_t i = 0; i < USB_PORTS_MAX; i++) {
+        sbar->removeWidget(d->usbPort[i].label.get());
+        d->usbPort[i].label.reset();
     }
     sbar->removeWidget(d->dynarec.get());
     sbar->removeWidget(d->sound.get());
@@ -974,18 +1019,24 @@ MachineStatus::refresh(QStatusBar *sbar)
         sbar->addWidget(d->net[i].label.get());
     });
 
-    for (int i = 0; i < USB_SLOTS; i++) {
-        if (!MediaMenu::ptr->usbMenus.contains(i))
-            continue;
-        d->usb[i].label = std::make_unique<ClickableLabel>();
-        d->usb[i].empty = !usb_slot_online(i);
-        d->usb[i].refresh();
-        d->usb[i].label->setToolTip(MediaMenu::ptr->usbMenus[i]->toolTip());
-        connect((ClickableLabel *) d->usb[i].label.get(), &ClickableLabel::clicked, [i](QPoint pos) {
-            MediaMenu::ptr->usbUpdateMenu(i);
-            MediaMenu::ptr->usbMenus[i]->popup(pos - QPoint(0, MediaMenu::ptr->usbMenus[i]->sizeHint().height()));
-        });
-        sbar->addWidget(d->usb[i].label.get());
+    /* One icon per USB port, which opens that port's menu. */
+    {
+        static usb_port_info_t ports[USB_PORTS_MAX];
+        const int              n = usb_ports_get(ports, USB_PORTS_MAX);
+
+        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
+            if (!MediaMenu::ptr->usbPortMenus.contains(k))
+                continue;
+            d->usbPort[k].label   = std::make_unique<ClickableLabel>();
+            d->usbPort[k].pixmaps = nullptr;
+            d->updateUsbPort(k, ports[k]);
+            d->usbPort[k].label->setToolTip(MediaMenu::usbPortTitle(ports[k]));
+            connect((ClickableLabel *) d->usbPort[k].label.get(), &ClickableLabel::clicked, [k](QPoint pos) {
+                MediaMenu::ptr->usbPortUpdateMenu(k);
+                MediaMenu::ptr->usbPortMenus[k]->popup(pos - QPoint(0, MediaMenu::ptr->usbPortMenus[k]->sizeHint().height()));
+            });
+            sbar->addWidget(d->usbPort[k].label.get());
+        }
     }
 
     auto hdc_name = QString(hdc_get_internal_name(hdc_current[0]));

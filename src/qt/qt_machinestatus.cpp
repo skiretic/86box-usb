@@ -360,10 +360,11 @@ struct MachineStatus::States {
         pixmaps.hd.load(QIcon(":/settings/qt/icons/hard_disk.ico"));
         pixmaps.net.load(QIcon(":/settings/qt/icons/network.ico"));
         /* One icon per USB device kind, named after the device; a flash
-           drive shows the mass storage icon, an empty USB port a socket. */
+           drive shows a stick (the mass storage adapter has its own disk
+           icon), an empty USB port a socket. */
         for (int i = 0; i < USB_SLOTS; i++)
             pixmaps.usb[i].load(QIcon(QString(":/settings/qt/icons/%1.ico").arg(usb_slot_internal_name(i))));
-        pixmaps.usb_flash.load(QIcon(":/settings/qt/icons/usb_msd.ico"));
+        pixmaps.usb_flash.load(QIcon(":/settings/qt/icons/usb_flash.ico"));
         pixmaps.usb_port.load(QIcon(":/settings/qt/icons/usb_port.ico"));
         pixmaps.sound.load(QIcon(":/settings/qt/icons/sound.ico"));
         pixmaps.dynarec.normal                          = QIcon(":/menuicons/qt/icons/recompiler.ico").pixmap(pixmap_size);

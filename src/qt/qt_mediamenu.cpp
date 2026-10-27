@@ -1632,7 +1632,7 @@ MediaMenu::usbPortUpdateMenu(int port)
     const usb_port_info_t &p     = ports[port];
     const QString          label = QString::fromUtf8(p.label);
     const QString          title = usbPortTitle(p);
-    QIcon                  icon(":/settings/qt/icons/usb_msd.ico");
+    QIcon                  icon(":/settings/qt/icons/usb_flash.ico");
 
     menu->setTitle(title);
     menu->setToolTip(title);

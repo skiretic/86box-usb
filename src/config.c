@@ -1504,6 +1504,34 @@ load_image_file(char *dest, char *p, uint8_t *ui_wp)
     return ret;
 }
 
+/* Load "USB flash drives" section. A write-protected drive's image path
+   carries the wp:// prefix, as removable media images do. */
+static void
+load_usb_flash_drives(void)
+{
+    ini_section_t cat = ini_find_section(config, "USB flash drives");
+    char         *p;
+    char          temp[512];
+
+    for (int c = 0; c < USB_FLASH_MAX; c++) {
+        usb_flash_fn[c][0] = 0x00;
+        usb_flash_wp[c]    = 0;
+
+        sprintf(temp, "usb_flash_%02i_fn", c + 1);
+        p = ini_section_get_string(cat, temp, "");
+        if ((p[0] == 0x00) || !strcmp(p, usr_path))
+            continue;
+
+        if (load_image_file(usb_flash_fn[c], p, NULL))
+            fatal("Configuration: Length of usb_flash_%02i_fn is more than %i\n", c + 1, MAX_IMAGE_PATH_LEN - 1);
+
+        if (strstr(usb_flash_fn[c], "wp://") == usb_flash_fn[c]) {
+            memmove(usb_flash_fn[c], usb_flash_fn[c] + 5, strlen(usb_flash_fn[c] + 5) + 1);
+            usb_flash_wp[c] = 1;
+        }
+    }
+}
+
 /* Load "Storage Controllers" section. */
 static void
 load_storage_controllers(void)
@@ -3085,6 +3113,7 @@ config_load(void)
         load_sound();                   /* Sound */
         load_network();                 /* Network */
         load_ports();                   /* Ports (COM & LPT) */
+        load_usb_flash_drives();        /* USB flash drives */
         load_storage_controllers();     /* Storage controllers */
         load_hard_disks();              /* Hard disks */
         load_floppy_and_cdrom_drives(); /* Floppy and CD-ROM drives */
@@ -4177,6 +4206,27 @@ save_image_file(char *cat, char *var, char *src)
         free(above);
 }
 
+/* Save "USB flash drives" section. */
+static void
+save_usb_flash_drives(void)
+{
+    ini_section_t cat = ini_find_or_create_section(config, "USB flash drives");
+    char          temp[512];
+    char          path[MAX_IMAGE_PATH_LEN + 8];
+
+    for (int c = 0; c < USB_FLASH_MAX; c++) {
+        sprintf(temp, "usb_flash_%02i_fn", c + 1);
+        if (usb_flash_fn[c][0] == 0x00)
+            ini_section_delete_var(cat, temp);
+        else {
+            snprintf(path, sizeof(path), "%s%s", usb_flash_wp[c] ? "wp://" : "", usb_flash_fn[c]);
+            save_image_file(cat, temp, path);
+        }
+    }
+
+    ini_delete_section_if_empty(config, cat);
+}
+
 /* Save "Storage Controllers" section. */
 static void
 save_storage_controllers(void)
@@ -5033,6 +5083,7 @@ config_save(void)
     save_sound();                   /* Sound */
     save_network();                 /* Network */
     save_ports();                   /* Ports (COM & LPT) */
+    save_usb_flash_drives();        /* USB flash drives */
     save_storage_controllers();     /* Storage controllers */
     save_hard_disks();              /* Hard disks */
     save_floppy_and_cdrom_drives(); /* Floppy and CD-ROM drives */

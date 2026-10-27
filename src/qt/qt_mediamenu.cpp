@@ -1562,8 +1562,19 @@ MediaMenu::usbUpdateMenu(int slot)
     if (connectedAction != nullptr)
         connectedAction->setChecked(usb_slot_requested(slot));
 
-    menu->setTitle(DeviceConfig::DeviceName(dev, dev->internal_name, 0));
-    menu->setToolTip(DeviceConfig::DeviceName(dev, dev->internal_name, 0));
+    QString name = DeviceConfig::DeviceName(dev, dev->internal_name, 0);
+
+    /* A flash drive is named with its image file. */
+    if (slot >= USB_SLOT_FLASH) {
+        QString fn = QString::fromUtf8(usb_flash_fn[slot - USB_SLOT_FLASH]);
+
+        menu->setTitle(QString("%1 (%2)").arg(name, QFileInfo(fn).fileName()));
+        menu->setToolTip(QString("%1 (%2)").arg(name, fn));
+        return;
+    }
+
+    menu->setTitle(name);
+    menu->setToolTip(name);
 }
 
 QString

@@ -46,6 +46,28 @@ extern const device_t *usb_msd_get_device(int msd);
 extern const char     *usb_msd_get_internal_name(int msd);
 extern int             usb_msd_get_from_internal_name(const char *s);
 extern void            usb_msd_hard_reset(void);
+/* USB flash drives, each a mass storage device of its own with one raw
+   image; a drive with no image file set is not in the machine. */
+#define USB_FLASH_MAX      4
+#define USB_FLASH_MIN_SIZE (8ULL << 20)
+#define USB_FLASH_MAX_SIZE (32ULL << 30)
+enum {
+    USB_FLASH_FS_BLANK = 0,
+    USB_FLASH_FS_FAT16,
+    USB_FLASH_FS_FAT32
+};
+extern const device_t usb_flash_devices[USB_FLASH_MAX];
+extern char           usb_flash_fn[USB_FLASH_MAX][MAX_IMAGE_PATH_LEN];
+extern uint8_t        usb_flash_wp[USB_FLASH_MAX];
+
+extern void usb_flash_hard_reset(void);
+/* Creates a raw image of bytes (a multiple of 512, USB_FLASH_MIN_SIZE to
+   USB_FLASH_MAX_SIZE): partitioned and formatted with fs, or all zeros for
+   USB_FLASH_FS_BLANK. Returns 1 on success. */
+extern int  usb_flash_create(const char *fn, uint64_t bytes, int fs);
+/* Whether a volume of that many bytes can be formatted with fs. */
+extern int  usb_flash_fs_ok(uint64_t bytes, int fs);
+extern int  usb_flash_fs_default(uint64_t bytes);
 /* A USB speaker, listed with the sound cards. */
 extern const device_t usb_speaker_device;
 /* The VIA VT83C572 PCI to USB controller on an add-in card. */
@@ -75,12 +97,14 @@ extern int             usb_card_has_bus(int mch);
 extern void            usb_card_reset(void);
 
 /* Hot plug. Each USB device kind the machine can have (hub, mouse, tablet,
-   keyboard, speaker, mass storage) has one slot. The user plugs and
+   keyboard, speaker, mass storage) has one slot, and each flash drive has
+   one, after those (USB_SLOT_FLASH + drive). The user plugs and
    unplugs a device from the GUI thread with usb_slot_want(); the change is
    made on the emulation thread by usb_hotplug_process(), which runs
    between CPU slices, so no controller or device state is ever touched
    from the GUI. What the user wants is kept in the config. */
-#define USB_SLOTS 6
+#define USB_SLOT_FLASH 6
+#define USB_SLOTS      (USB_SLOT_FLASH + USB_FLASH_MAX)
 
 extern const char     *usb_slot_internal_name(int slot);
 /* The device that holds the slot, NULL when the machine has none. */

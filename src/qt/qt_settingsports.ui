@@ -451,6 +451,16 @@
            </item>
           </layout>
          </item>
+         <item row="5" column="0">
+          <widget class="QLabel" name="labelUsbFlash">
+           <property name="text">
+            <string>Flash drives:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="1">
+          <layout class="QGridLayout" name="gridLayoutUsbFlash"/>
+         </item>
         </layout>
        </item>
        <item>

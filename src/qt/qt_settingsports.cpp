@@ -44,9 +44,18 @@ extern "C" {
 
 #include "qt_settingsports.hpp"
 #include "ui_qt_settingsports.h"
+#include "qt_newflashdialog.hpp"
+#include "qt_util.hpp"
 
+#include <QCheckBox>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QStandardItem>
+#include <QStringBuilder>
 
 SettingsPorts::SettingsPorts(QWidget *parent)
     : QWidget(parent)
@@ -64,6 +73,7 @@ SettingsPorts::SettingsPorts(QWidget *parent)
         com_device_cfg_changed[i] = 0;
     }
 
+    setupUsbFlash();
     onCurrentMachineChanged(machine);
 }
 
@@ -105,6 +115,10 @@ SettingsPorts::changed()
     has_changed |= (usb_card_type != ui->comboBoxUsbCard->currentData().toInt());
     has_changed |= (usb_hub_type != ui->comboBoxUsbHub->currentData().toInt());
     has_changed |= (usb_msd_type != ui->comboBoxUsbMsd->currentData().toInt());
+    for (int i = 0; i < USB_FLASH_MAX; i++) {
+        has_changed |= (flashFn[i] != QString::fromUtf8(usb_flash_fn[i]));
+        has_changed |= (flashWp[i] != !!usb_flash_wp[i]);
+    }
 
     for (int i = 0; i < PARALLEL_MAX; i++) {
         auto *checkBox = findChild<QCheckBox *>(QString("checkBoxParallel%1").arg(i + 1));
@@ -181,6 +195,105 @@ SettingsPorts::save(int soft)
     usb_card_type             = ui->comboBoxUsbCard->currentData().toInt();
     usb_hub_type              = ui->comboBoxUsbHub->currentData().toInt();
     usb_msd_type              = ui->comboBoxUsbMsd->currentData().toInt();
+
+    for (int i = 0; i < USB_FLASH_MAX; i++) {
+        snprintf(usb_flash_fn[i], sizeof(usb_flash_fn[i]), "%s", flashFn[i].toUtf8().constData());
+        usb_flash_wp[i] = flashWp[i] ? 1 : 0;
+    }
+}
+
+/* One row per flash drive: its image file, New… to create one, Existing…
+   to pick one, Remove to take the drive out of the machine (the file
+   stays), and Write-protected. */
+void
+SettingsPorts::setupUsbFlash()
+{
+    static_assert(USB_FLASH_MAX == (sizeof(flashFn) / sizeof(flashFn[0])), "one row per flash drive");
+
+    for (int i = 0; i < USB_FLASH_MAX; i++) {
+        auto *label    = new QLabel(tr("%1:").arg(i + 1), this);
+        auto *lineEdit = new QLineEdit(this);
+        auto *newBtn   = new QPushButton(tr("&New…"), this);
+        auto *existBtn = new QPushButton(tr("&Existing…"), this);
+        auto *rmBtn    = new QPushButton(tr("&Remove"), this);
+        auto *wpBox    = new QCheckBox(tr("&Write-protected"), this);
+
+        lineEdit->setObjectName(QString("lineEditUsbFlash%1").arg(i + 1));
+        lineEdit->setReadOnly(true);
+        lineEdit->setPlaceholderText(tr("None"));
+        rmBtn->setObjectName(QString("pushButtonUsbFlashRemove%1").arg(i + 1));
+        wpBox->setObjectName(QString("checkBoxUsbFlashWp%1").arg(i + 1));
+
+        ui->gridLayoutUsbFlash->addWidget(label, i, 0);
+        ui->gridLayoutUsbFlash->addWidget(lineEdit, i, 1);
+        ui->gridLayoutUsbFlash->addWidget(newBtn, i, 2);
+        ui->gridLayoutUsbFlash->addWidget(existBtn, i, 3);
+        ui->gridLayoutUsbFlash->addWidget(rmBtn, i, 4);
+        ui->gridLayoutUsbFlash->addWidget(wpBox, i, 5);
+
+        flashFn[i] = QString::fromUtf8(usb_flash_fn[i]);
+        flashWp[i] = !!usb_flash_wp[i];
+        lineEdit->setText(flashFn[i]);
+        wpBox->setChecked(flashWp[i]);
+
+        connect(newBtn, &QPushButton::clicked, this, [this, i] {
+            NewFlashDialog dlg(this);
+            if (dlg.exec() == QDialog::Accepted)
+                setUsbFlashImage(i, dlg.fileName());
+        });
+        connect(existBtn, &QPushButton::clicked, this, [this, i] {
+            QString fn = QFileDialog::getOpenFileName(this, tr("Open"), QString(),
+                                                      tr("Raw images") % util::DlgFilter({ "img", "ima", "bin", "raw" }) %
+                                                      tr("All files") % util::DlgFilter({ "*" }, true));
+            if (!fn.isEmpty())
+                setUsbFlashImage(i, fn);
+        });
+        connect(rmBtn, &QPushButton::clicked, this, [this, i] { setUsbFlashImage(i, QString()); });
+        connect(wpBox, &QCheckBox::toggled, this, [this, i](bool on) { flashWp[i] = on; });
+    }
+}
+
+/* One image file can back one drive only: two drives writing one file
+   would wreck it. */
+void
+SettingsPorts::setUsbFlashImage(int drive, const QString &fn)
+{
+    if (!fn.isEmpty()) {
+        for (int i = 0; i < USB_FLASH_MAX; i++) {
+            if ((i != drive) && !flashFn[i].isEmpty() && (QFileInfo(flashFn[i]) == QFileInfo(fn))) {
+                QMessageBox::warning(this, tr("USB flash drive"), tr("%1 is already flash drive %2.").arg(fn).arg(i + 1));
+                return;
+            }
+        }
+        if (QFileInfo(fn).size() < 512) {
+            QMessageBox::warning(this, tr("USB flash drive"), tr("%1 is not a disk image.").arg(fn));
+            return;
+        }
+    }
+
+    flashFn[drive] = fn;
+    findChild<QLineEdit *>(QString("lineEditUsbFlash%1").arg(drive + 1))->setText(fn);
+    updateUsbFlash();
+}
+
+/* Flash drives are offered while the machine, or the USB card chosen, has
+   a USB bus, like the hub. */
+void
+SettingsPorts::updateUsbFlash()
+{
+    const bool bus = device_is_valid(&usb_flash_devices[0], machineId);
+
+    ui->labelUsbFlash->setEnabled(bus);
+    for (int i = 0; i < ui->gridLayoutUsbFlash->count(); i++) {
+        QWidget *w = ui->gridLayoutUsbFlash->itemAt(i)->widget();
+        if (w != nullptr)
+            w->setEnabled(bus);
+    }
+    for (int i = 0; i < USB_FLASH_MAX; i++) {
+        const bool has = bus && !flashFn[i].isEmpty();
+        findChild<QPushButton *>(QString("pushButtonUsbFlashRemove%1").arg(i + 1))->setEnabled(has);
+        findChild<QCheckBox *>(QString("checkBoxUsbFlashWp%1").arg(i + 1))->setEnabled(has);
+    }
 }
 
 int
@@ -418,6 +531,7 @@ SettingsPorts::on_comboBoxUsbCard_currentIndexChanged(int index)
     usb_card_pending = ui->comboBoxUsbCard->currentData().toInt();
     updateUsbHubList();
     updateUsbMsdList();
+    updateUsbFlash();
     emit usbBusChanged(machineId);
 }
 

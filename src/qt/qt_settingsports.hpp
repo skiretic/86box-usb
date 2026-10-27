@@ -78,6 +78,13 @@ private:
     void updateLptPortTracking(int i);
     void updateUsbHubList();
     void updateUsbMsdList();
+    void setupUsbFlash();
+    void updateUsbFlash();
+    void setUsbFlashImage(int drive, const QString &fn);
+
+    /* The flash drives as set in the dialog. */
+    QString            flashFn[4];
+    bool               flashWp[4] = { false, false, false, false };
 
     int                lpt_device_cfg_changed[4] = { 0, 0, 0, 0 };
     int                com_device_cfg_changed[SERIAL_MAX_UI] = { 0 };

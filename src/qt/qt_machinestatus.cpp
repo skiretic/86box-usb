@@ -357,9 +357,10 @@ struct MachineStatus::States {
         pixmaps.tape.load(QIcon(":/settings/qt/icons/tape.ico"));
         pixmaps.hd.load(QIcon(":/settings/qt/icons/hard_disk.ico"));
         pixmaps.net.load(QIcon(":/settings/qt/icons/network.ico"));
-        /* One icon per USB device kind, named after the device. */
+        /* One icon per USB device kind, named after the device; the flash
+           drives use the mass storage icon. */
         for (int i = 0; i < USB_SLOTS; i++)
-            pixmaps.usb[i].load(QIcon(QString(":/settings/qt/icons/%1.ico").arg(usb_slot_internal_name(i))));
+            pixmaps.usb[i].load(QIcon(QString(":/settings/qt/icons/%1.ico").arg((i >= USB_SLOT_FLASH) ? "usb_msd" : usb_slot_internal_name(i))));
         pixmaps.sound.load(QIcon(":/settings/qt/icons/sound.ico"));
         pixmaps.dynarec.normal                          = QIcon(":/menuicons/qt/icons/recompiler.ico").pixmap(pixmap_size);
         pixmaps.dynarec.disabled                        = QIcon(":/menuicons/qt/icons/interpreter.ico").pixmap(pixmap_size);

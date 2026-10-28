@@ -1636,6 +1636,9 @@ MediaMenu::usbPortUpdateMenu(int port)
 
     menu->setTitle(title);
     menu->setToolTip(title);
+    /* A port the chipset has switched off is hidden; the status bar timer
+       shows it again if it is turned on. */
+    menu->menuAction()->setVisible(p.state != USB_PORT_OFF);
 
     if (p.state == USB_PORT_OFF) {
         menu->addAction(tr("(not available)"))->setEnabled(false);

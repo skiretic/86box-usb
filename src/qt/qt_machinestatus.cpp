@@ -398,14 +398,17 @@ struct MachineStatus::States {
             u.pixmaps = &pixmaps.usb_port;
     }
 
-    /* A USB port's icon: an empty port is a socket, grayed when the port
-       is not working; otherwise what is in the port, grayed when it cannot
-       reach the host. */
+    /* A USB port's icon: an empty port is a socket; otherwise what is in
+       the port, grayed when it cannot reach the host. A port the chipset
+       has switched off is hidden, and shows again if it is turned on. */
     void updateUsbPort(int k, const usb_port_info_t &p)
     {
         PixmapSetEmpty *set   = &pixmaps.usb_port;
-        bool            empty = (p.state == USB_PORT_OFF);
+        bool            empty = false;
+        const bool      off   = (p.state == USB_PORT_OFF);
 
+        if (usbPort[k].label->parentWidget() && (usbPort[k].label->isHidden() != off))
+            usbPort[k].label->setHidden(off);
         if (p.state == USB_PORT_FLASH)
             set = &pixmaps.usb_flash;
         else if (p.state == USB_PORT_DEVICE) {
@@ -681,6 +684,9 @@ MachineStatus::refreshIcons()
                     menu->setTitle(tip);
                     menu->setToolTip(tip);
                 }
+                const bool shown = (ports[k].state != USB_PORT_OFF);
+                if (menu->menuAction()->isVisible() != shown)
+                    menu->menuAction()->setVisible(shown);
             }
         }
     }
@@ -1037,6 +1043,7 @@ MachineStatus::refresh(QStatusBar *sbar)
                 MediaMenu::ptr->usbPortMenus[k]->popup(pos - QPoint(0, MediaMenu::ptr->usbPortMenus[k]->sizeHint().height()));
             });
             sbar->addWidget(d->usbPort[k].label.get());
+            d->usbPort[k].label->setHidden(ports[k].state == USB_PORT_OFF);
         }
     }
 

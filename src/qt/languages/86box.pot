@@ -483,6 +483,9 @@ msgstr ""
 msgid "IBM PS/55 Display Adapter Graphics"
 msgstr ""
 
+msgid "PowerVR PCX1/PCX2 Graphics"
+msgstr ""
+
 msgid "SCSI:"
 msgstr ""
 
@@ -1559,6 +1562,12 @@ msgid "Powering off the emulated machine may cause data loss. Are you sure you w
 msgstr ""
 
 msgid "Hard disk (%1)"
+msgstr ""
+
+msgid "Board LED"
+msgstr ""
+
+msgid "Board LED %1"
 msgstr ""
 
 msgid "Custom…"

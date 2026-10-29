@@ -409,9 +409,10 @@ struct MachineStatus::States {
 
         if (usbPort[k].label->parentWidget() && (usbPort[k].label->isHidden() != off))
             usbPort[k].label->setHidden(off);
-        if (p.state == USB_PORT_FLASH)
-            set = &pixmaps.usb_flash;
-        else if (p.state == USB_PORT_DEVICE) {
+        if (p.state == USB_PORT_FLASH) {
+            set   = &pixmaps.usb_flash;
+            empty = !p.online;
+        } else if (p.state == USB_PORT_DEVICE) {
             set = &pixmaps.usb_flash;
             if (p.slot >= 0)
                 set = &pixmaps.usb[p.slot];

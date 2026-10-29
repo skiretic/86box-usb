@@ -2365,8 +2365,12 @@ usb_ports_publish(void)
             p->state = USB_PORT_OFF;
         else if (dev == NULL)
             p->state = USB_PORT_EMPTY;
-        else if (usb_flash_dev_info(dev, p->image, MAX_IMAGE_PATH_LEN, &p->wp))
-            p->state = USB_PORT_FLASH;
+        else if (usb_flash_dev_info(dev, p->image, MAX_IMAGE_PATH_LEN, &p->wp)) {
+            /* A stick in a hub that is off the bus keeps its port, but
+               cannot reach the host until the hub is plugged back in. */
+            p->state  = USB_PORT_FLASH;
+            p->online = refs[k].on;
+        }
         else {
             p->state = USB_PORT_DEVICE;
             snprintf(p->name, sizeof(p->name), "%s", dev->name);

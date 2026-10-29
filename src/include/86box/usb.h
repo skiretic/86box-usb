@@ -67,6 +67,7 @@ typedef struct usb_port_info_t {
     char    name[64];      /* USB_PORT_DEVICE: the device name */
     char    image[MAX_IMAGE_PATH_LEN]; /* USB_PORT_FLASH: its image file */
     uint8_t wp;
+    uint8_t online;        /* USB_PORT_FLASH: the stick can reach the host */
 } usb_port_info_t;
 
 /* Copies the ports into ports (up to max); returns how many there are. */

@@ -60,6 +60,7 @@ BIOS setup before an operating system can see it.
 | USB Tablet | Input devices, tablet | `usb_tablet` | Full-speed HID absolute pointer, three buttons and a wheel; follows the host pointer without capture |
 | USB Keyboard | Input devices, keyboard | `usb_keyboard` | Low-speed HID boot keyboard; the keyboard controller's keyboard port is left empty |
 | USB Mass Storage | Ports (COM & LPT), USB, Mass storage | `usb_msd` | Bulk-Only Transport, SCSI transparent command set; it bridges one SCSI bus, taken after every other SCSI bus, and the hard disks, CD-ROM drives and other removable devices put on that bus (channels named "USB Mass Storage") are its logical units, in SCSI ID order; buttons next to the setting open those drive pages |
+| USB flash drive | Media menu, a USB port's submenu (New flash drive, Existing image) | `[USB flash drives]` section | Bulk-Only Transport, one removable logical unit backed by a raw disk image; one device per drive, see below |
 | USB Speaker | Sound card | `usb_speaker` | USB Audio 1.0: 16-bit stereo PCM at 8, 11.025, 16, 22.05, 32, 44.1 or 48 kHz, volume and mute; resampled to the mixer rate |
 | 4-port USB 1.1 hub | Ports (COM & LPT), USB, Hub | `usb_hub_4port` | Full-speed, self-powered, per-port power switching |
 | OPTi 82C861 FireLink | Ports (COM & LPT), USB, Card | `opti_82c861` | PCI card, one OHCI with two ports |
@@ -78,8 +79,49 @@ Each device can be unplugged and plugged back in while the machine runs, from it
 Media menu (Connected). An unplugged device has lost power: the guest sees a disconnect, and on
 replug a new device to enumerate, on the same port when that port is still free. Unplugging the
 hub takes the devices on it off the bus with it. A device left unplugged stays unplugged when the
-machine is restarted, and when 86Box is closed and opened again. Each device also has a
-status-bar icon, grayed while the device is off the bus; clicking it opens the same menu.
+machine is restarted, and when 86Box is closed and opened again. A device can also be
+unplugged from the submenu of the port it sits in (below).
+
+## USB ports in the status bar and the Media menu
+
+The status bar has one icon per USB port of the machine, and the Media menu one submenu per
+port, titled "USB port <label>: <what is in it>". Root ports are labeled 1, 2, ... in controller
+order; the four ports of a hub are labeled after the root port the hub sits in, so a hub in port 1
+gives ports 1.1 to 1.4. An empty port shows a socket, a port with a flash drive a stick, and a port
+with any other device that device's icon; a stick or a device is grayed while it cannot reach the
+host. Clicking a port's icon opens its submenu. Ports the chipset has switched off are left out
+of both, and come back if the chipset turns them on. While a hub is unplugged its empty ports are
+left out the same way; ports holding a flash drive stay, grayed, and the drives go back to the
+guest when the hub is plugged back in.
+
+The submenu of an empty port, or of a port holding a flash drive, offers New flash drive...,
+Existing image..., Existing image (Write-protected)..., the recently used images (the one in the
+port is checked; picking another plugs it in here, taking it out of any other port first), and
+Unplug. The submenu of a port holding another device offers Unplug for that device; the device's
+own Media menu entry plugs it back in.
+
+## USB flash drives
+
+Each flash drive is a USB mass storage device of its own (`src/usb_flash.c`, Bulk-Only Transport),
+with one removable logical unit backed by a raw disk image. Its serial number comes from the
+image's file name, so the guest sees the same image as the same stick every time it is plugged in,
+and two images as two sticks.
+
+New flash drive... creates the image and plugs it into that port. The size is 8 MB to 32 GB:
+presets from 16 MB to 32 GB, or a whole number of MB or GB. The image gets a partition table and a
+FAT16 or FAT32 volume laid out per the Microsoft FAT32 File System Specification 1.03, or is left
+blank. A format the size cannot hold is grayed out: FAT16 holds 8 MB to 2047 MB, FAT32 33 MB to
+32 GB. The format changes by itself only when the chosen one no longer fits the size.
+
+A drive plugged in write-protected, or one whose image file cannot be written, reports itself
+write-protected to the guest. Drives go back into their ports when the machine starts. A drive
+whose port is gone or taken (its hub was removed in Settings, say) goes to the first free port
+instead; with no free port it stays in the configuration, out of the machine, until its port is
+picked again.
+
+In the configuration file, section `[USB flash drives]` holds `usb_flash_NN_port` (the port label)
+and `usb_flash_NN_fn` (the image, prefixed `wp://` when write-protected) per drive, and
+`usb_flash_image_history_NN` for the recently used images.
 
 ## Not implemented
 
@@ -96,6 +138,9 @@ southbridge has USB. Where USB did not work, the cause was the board's BIOS (USB
 no setup option, a beta BIOS, or the BIOS turning off the second controller); a few boards did
 not boot Debian for reasons unrelated to USB. Windows 98 SE
 ran USB devices on Intel, VIA, ALi, SiS, SMSC and STPC boards (it has no mass storage class
-driver). Windows 2000 ran the mouse, keyboard, speaker and mass storage on an Intel and an ALi
+driver of its own; flash drives ran with the third-party nusb 3.3 driver installed). Windows 2000
+ran the mouse, keyboard, speaker and mass storage on an Intel and an ALi
 board. DOS ran with the BIOS USB keyboard support on Intel and
-VIA boards.
+VIA boards. Flash drives were made, plugged in, written, write-protected, swapped and unplugged on
+Windows 98 SE and Debian 4 on an Intel board (with a PCI USB card and a hub fitted on the Windows 98
+SE machine) and on Windows 2000 on an ALi board.

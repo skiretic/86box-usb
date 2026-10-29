@@ -912,6 +912,8 @@ void
 MediaMenu::clearImageHistory()
 {
     mhm.clearImageHistory();
+    /* The USB flash drives keep their own recent list. */
+    memset(usb_flash_history, 0x00, sizeof(usb_flash_history));
     ui_sb_update_panes();
 }
 

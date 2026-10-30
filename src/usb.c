@@ -2210,6 +2210,8 @@ typedef struct usb_slot_t {
     _Atomic(const char *)     name; /* the name the port titles show */
     atomic_int                connected; /* on a port */
     atomic_int                online;    /* on a port, and so is every hub above it */
+    pc_timer_t                move_timer; /* a move: out of the old port, not yet in the new */
+    char                      dest[USB_PORT_LABEL];
 } usb_slot_t;
 
 static const char *const usb_slot_names[USB_SLOTS] = {
@@ -2797,6 +2799,58 @@ usb_slot_attach(usb_dev_t *dev, int slot)
     return usb_attach(dev);
 }
 
+/* How long a moved device is out before it is plugged into its new port.
+   Moving a cable by hand takes about this long, and the guest needs the
+   time: a device with a serial number that reappears on another port
+   before the guest has removed it from the old one is the same serial
+   twice, and Windows 2000 then installs it as a second, new device. */
+#define USB_MOVE_GAP_US 2000000.0
+
+/* While a device is out for a move, its last port is the new one: a hub's
+   ports, and the sticks in them, are listed under the new root port right
+   away, and a plug-in during the move goes there too. */
+static void
+usb_slot_aim(usb_dev_t *dev, const char *label)
+{
+    usb_port_ref_t refs[USB_PORTS_MAX];
+    int            n = usb_ports_enum(refs);
+
+    for (int k = 0; k < n; k++) {
+        if ((refs[k].hub == NULL) && !strcmp(refs[k].label, label)) {
+            dev->home_port   = refs[k].port;
+            dev->home_parent = NULL;
+            return;
+        }
+    }
+}
+
+/* The second half of a move. A port taken in the meantime, or gone, sends
+   the device to its last port or the first free one; the saved port follows
+   it there, and a hub's ports get their numbers from where it went. */
+static void
+usb_slot_move_land(void *priv)
+{
+    usb_slot_t *s   = (usb_slot_t *) priv;
+    const int   i   = (int) (s - usb_slots);
+    usb_dev_t  *dev = s->dev;
+    char        back[USB_PORT_LABEL];
+
+    if ((dev == NULL) || (dev->port != NULL) || !usb_slot_wanted(i))
+        return;
+
+    if (usb_port_attach(dev, s->dest))
+        usb_trace(USB_LOG_REG, -1, "USB %s: moved to port %s", dev->name, s->dest);
+    else {
+        usb_attach(dev);
+        usb_port_label(dev, back, sizeof(back));
+        if (usb_slot_is_hub(i) && (back[0] != '\0'))
+            usb_slots_rehome(s->dest, back);
+        usb_slot_set_port(i, back);
+    }
+
+    usb_slots_update();
+}
+
 /* Each request is acted on once: a device that finds no port when plugged
    in is named to the user once, and stays out until the user tries again. */
 void
@@ -2807,9 +2861,9 @@ usb_hotplug_process(void)
     if (!atomic_exchange(&usb_hotplug_pending, 0))
         return;
 
-    /* A move is an unplug from the old port and a plug into the new one, as
-       when a cable is moved by hand. A port taken in the meantime sends the
-       device back where it was. A hub keeps its devices through the move. */
+    /* A move is an unplug from the old port and, a moment later, a plug
+       into the new one, as when a cable is moved by hand; the plug is
+       usb_slot_move_land(). A hub keeps its devices through the move. */
     for (int i = 0; i < USB_SLOTS; i++) {
         usb_dev_t *dev = usb_slots[i].dev;
 
@@ -2818,25 +2872,16 @@ usb_hotplug_process(void)
 
         if (dev->port != NULL)
             usb_unplug(dev);
-        if (usb_port_attach(dev, to))
-            usb_trace(USB_LOG_REG, -1, "USB %s: moved to port %s", dev->name, to);
-        else {
-            /* The saved port follows the device back, and a hub's ports
-               get their old numbers back. */
-            char back[USB_PORT_LABEL];
-
-            usb_attach(dev);
-            usb_port_label(dev, back, sizeof(back));
-            if (usb_slot_is_hub(i) && (back[0] != '\0'))
-                usb_slots_rehome(to, back);
-            usb_slot_set_port(i, back);
-        }
+        usb_slot_aim(dev, to);
+        memcpy(usb_slots[i].dest, to, USB_PORT_LABEL);
+        usb_trace(USB_LOG_REG, -1, "USB %s: moving to port %s", dev->name, to);
+        timer_on_auto(&usb_slots[i].move_timer, USB_MOVE_GAP_US);
     }
 
     for (int i = 0; i < USB_SLOTS; i++) {
         usb_dev_t *dev = usb_slots[i].dev;
 
-        if (dev == NULL)
+        if ((dev == NULL) || (usb_slots[i].move_timer.flags & TIMER_ENABLED))
             continue;
 
         if (usb_slot_wanted(i) && (dev->port == NULL)) {
@@ -2870,8 +2915,10 @@ usb_dev_add(usb_dev_t *dev, const device_t *info)
         }
     }
 
-    if (slot >= 0)
+    if (slot >= 0) {
         usb_slots[slot].dev = dev;
+        timer_add(&usb_slots[slot].move_timer, usb_slot_move_land, &usb_slots[slot], 0);
+    }
 
     if ((slot < 0) || usb_slot_wanted(slot))
         usb_slot_attach(dev, slot);
@@ -2896,6 +2943,7 @@ usb_dev_remove(usb_dev_t *dev)
         usb_dev_t *other = usb_slots[i].dev;
 
         if (other == dev) {
+            timer_disable(&usb_slots[i].move_timer);
             atomic_store(&usb_slots[i].info, NULL);
             atomic_store(&usb_slots[i].name, NULL);
             usb_slots[i].dev = NULL;

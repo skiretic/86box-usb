@@ -88,6 +88,7 @@ public:
     void    usbPortNewImage(const QString &label);
     void    usbPortSelectImage(const QString &label, bool wp);
     static QString usbPortTitle(const struct usb_port_info_t &p);
+    static QString usbPortName(const struct usb_port_info_t &p);
 
 public slots:
     void cdromUpdateUi(int i);

@@ -1383,6 +1383,8 @@ load_ports(void)
     for (int i = 0; i < USB_SLOTS; i++) {
         sprintf(temp, "%s_connected", usb_slot_internal_name(i));
         usb_slot_want(i, !!ini_section_get_int(cat, temp, 1));
+        sprintf(temp, "%s_port", usb_slot_internal_name(i));
+        usb_slot_set_port(i, ini_section_get_string(cat, temp, ""));
     }
 
 #if 0
@@ -4131,13 +4133,22 @@ save_ports(void)
     else
         ini_section_set_string(cat, "usb_msd", usb_msd_get_internal_name(usb_msd_type));
 
-    /* Written only for a device the user unplugged. */
+    /* Written only for a device the user unplugged, or moved to a port. */
     for (int i = 0; i < USB_SLOTS; i++) {
+        char port[USB_PORT_LABEL];
+
         sprintf(temp, "%s_connected", usb_slot_internal_name(i));
         if (usb_slot_wanted(i))
             ini_section_delete_var(cat, temp);
         else
             ini_section_set_int(cat, temp, 0);
+
+        sprintf(temp, "%s_port", usb_slot_internal_name(i));
+        usb_slot_port(i, port);
+        if (port[0] == '\0')
+            ini_section_delete_var(cat, temp);
+        else
+            ini_section_set_string(cat, temp, port);
     }
 
 #if 0

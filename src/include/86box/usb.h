@@ -32,6 +32,7 @@ typedef struct usb_t {
     int           ohci_enable;
     uint32_t      ohci_mem_base;
     mem_mapping_t ohci_mmio_mapping;
+    uint8_t       card; /* on a PCI USB card, not on the board */
 } usb_t;
 
 /* Global variables. */
@@ -60,8 +61,16 @@ enum {
     USB_PORT_OFF     /* the controller or hub port is not working */
 };
 
+/* Where a port is, for its name in the GUI. */
+enum {
+    USB_PORT_ON_BOARD = 0,
+    USB_PORT_ON_CARD,
+    USB_PORT_ON_HUB
+};
+
 typedef struct usb_port_info_t {
     char    label[USB_PORT_LABEL];
+    int     where;
     int     state;
     int     slot;          /* USB_PORT_DEVICE: its hot-plug slot, -1 for none */
     char    name[64];      /* USB_PORT_DEVICE: the device name */
@@ -90,6 +99,9 @@ extern const device_t usb_flash_device;
 extern void usb_flash_cfg_clear(void);
 extern int  usb_flash_cfg_get(int i, char *label, char *fn, uint8_t *wp);
 extern void usb_flash_cfg_set(int i, const char *label, const char *fn, uint8_t wp);
+/* The hub moved from root port from to root port to: its sticks keep their
+   hub port numbers. */
+extern void usb_flash_cfg_rehome(const char *from, const char *to);
 /* Images used before, newest first, for the GUI's recent image lists. */
 extern char usb_flash_history[MAX_PREV_IMAGES][MAX_IMAGE_PATH_LEN];
 /* GUI thread: put a stick with fn into port label (swapping out any stick
@@ -144,6 +156,8 @@ extern void            usb_card_reset(void);
 extern const char     *usb_slot_internal_name(int slot);
 /* The device that holds the slot, NULL when the machine has none. */
 extern const device_t *usb_slot_device(int slot);
+/* The device's own name, as the port titles show it; NULL without one. */
+extern const char     *usb_slot_name(int slot);
 /* Whether the device is attached to a port right now. */
 extern int             usb_slot_connected(int slot);
 /* Whether it reaches the host: attached, and so is every hub above it. */
@@ -154,6 +168,15 @@ extern void            usb_slot_want(int slot, int connected);
 /* What the Connected item shows: the request while it is pending, else
    usb_slot_connected(). */
 extern int             usb_slot_requested(int slot);
+/* The port the user put the slot's device in, "" for the first free one;
+   the config value. label holds USB_PORT_LABEL bytes. */
+extern void            usb_slot_port(int slot, char *label);
+extern void            usb_slot_set_port(int slot, const char *label);
+extern int             usb_slot_is_hub(int slot);
+/* GUI thread: move the slot's device to port label, plugging it in if it
+   was unplugged, and keep that port for the next start. Moving the hub
+   takes the devices on it along, with the same hub port numbers. */
+extern void            usb_slot_move(int slot, const char *label);
 extern void            usb_hotplug_process(void);
 /* A flash drive request is waiting for usb_hotplug_process(). */
 extern void            usb_hotplug_kick(void);

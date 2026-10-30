@@ -1582,8 +1582,11 @@ MediaMenu::usbUpdateMenu(int slot)
     if (connectedAction != nullptr)
         connectedAction->setChecked(usb_slot_requested(slot));
 
-    menu->setTitle(DeviceConfig::DeviceName(dev, dev->internal_name, 0));
-    menu->setToolTip(DeviceConfig::DeviceName(dev, dev->internal_name, 0));
+    /* The name the port titles use, so the hub is "USB Hub" everywhere. */
+    const char   *own  = usb_slot_name(slot);
+    const QString name = (own != nullptr) ? QString::fromUtf8(own) : DeviceConfig::DeviceName(dev, dev->internal_name, 0);
+    menu->setTitle(name);
+    menu->setToolTip(name);
 }
 
 QString
@@ -1608,7 +1611,29 @@ MediaMenu::usbPortTitle(const usb_port_info_t &p)
             break;
     }
 
-    return tr("USB port %1: %2").arg(QString::fromUtf8(p.label), what);
+    return tr("%1: %2").arg(usbPortName(p), what);
+}
+
+/* A port's number and where it is, so a card's ports can be told from the
+   board's. */
+QString
+MediaMenu::usbPortName(const usb_port_info_t &p)
+{
+    QString where;
+
+    switch (p.where) {
+        case USB_PORT_ON_CARD:
+            where = tr("PCI card");
+            break;
+        case USB_PORT_ON_HUB:
+            where = tr("hub");
+            break;
+        default:
+            where = tr("board");
+            break;
+    }
+
+    return tr("USB port %1 (%2)").arg(QString::fromUtf8(p.label), where);
 }
 
 /* An empty port, or one with a flash drive, takes a new or existing image,
@@ -1649,11 +1674,29 @@ MediaMenu::usbPortUpdateMenu(int port)
 
     if (p.state == USB_PORT_DEVICE) {
         const int  slot = p.slot;
+        const bool hub  = (slot >= 0) && usb_slot_is_hub(slot);
         QAction   *a    = menu->addAction(tr("&Unplug %1").arg(QString::fromUtf8(p.name)), [slot] {
             usb_slot_want(slot, 0);
             config_save();
         });
         a->setEnabled(slot >= 0);
+
+        /* Every other working port is listed; one in use is grayed out with
+           what is in it. The hub goes on root ports only. */
+        auto *move = menu->addMenu(tr("&Move %1 to").arg(QString::fromUtf8(p.name)));
+        move->setEnabled(slot >= 0);
+        for (int k = 0; (k < n) && (slot >= 0); k++) {
+            const usb_port_info_t &q = ports[k];
+
+            if ((k == port) || (q.state == USB_PORT_OFF) || (hub && (q.where == USB_PORT_ON_HUB)))
+                continue;
+            const QString to = QString::fromUtf8(q.label);
+            auto         *t  = move->addAction((q.state == USB_PORT_EMPTY) ? usbPortName(q) : usbPortTitle(q), [slot, to] {
+                usb_slot_move(slot, to.toUtf8().constData());
+                config_save();
+            });
+            t->setEnabled(q.state == USB_PORT_EMPTY);
+        }
         return;
     }
 
@@ -1662,6 +1705,34 @@ MediaMenu::usbPortUpdateMenu(int port)
     menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, Browse), tr("&Existing image…"), [this, label] { usbPortSelectImage(label, false); });
     menu->addAction(getIconWithIndicator(icon, pixmap_size, QIcon::Normal, WriteProtectedBrowse), tr("Existing image (&Write-protected)…"), [this, label] { usbPortSelectImage(label, true); });
     menu->addSeparator();
+
+    /* An empty port takes any of the machine's USB devices: one in another
+       port moves here, one that was unplugged is plugged in here. The hub
+       cannot go on a hub port. */
+    if (p.state == USB_PORT_EMPTY) {
+        bool any = false;
+
+        for (int slot = 0; slot < USB_SLOTS; slot++) {
+            const device_t *dev = usb_slot_device(slot);
+            QString         now = tr("unplugged");
+
+            if ((dev == nullptr) || (usb_slot_is_hub(slot) && (p.where == USB_PORT_ON_HUB)))
+                continue;
+            for (int k = 0; k < n; k++) {
+                if ((ports[k].state == USB_PORT_DEVICE) && (ports[k].slot == slot))
+                    now = tr("now in port %1").arg(QString::fromUtf8(ports[k].label));
+            }
+            const char   *own  = usb_slot_name(slot);
+            const QString name = (own != nullptr) ? QString::fromUtf8(own) : DeviceConfig::DeviceName(dev, dev->internal_name, 0);
+            menu->addAction(tr("Plug in %1 (%2)").arg(name, now), [slot, label] {
+                usb_slot_move(slot, label.toUtf8().constData());
+                config_save();
+            });
+            any = true;
+        }
+        if (any)
+            menu->addSeparator();
+    }
 
     for (int i = 0; i < MAX_PREV_IMAGES; i++) {
         const QString fn = QString::fromUtf8(usb_flash_history[i]);

@@ -600,6 +600,27 @@ usb_flash_cfg_set(int i, const char *label, const char *fn, uint8_t wp)
     thread_release_mutex(usb_flash_mutex);
 }
 
+void
+usb_flash_cfg_rehome(const char *from, const char *to)
+{
+    const size_t n = strlen(from);
+    char         moved[USB_PORT_LABEL];
+
+    if (usb_flash_mutex == NULL)
+        return;
+
+    thread_wait_mutex(usb_flash_mutex);
+    for (int i = 0; i < USB_PORTS_MAX; i++) {
+        char *label = usb_flash_cfg[i].label;
+
+        if ((usb_flash_cfg[i].fn[0] != '\0') && !strncmp(label, from, n) && (label[n] == '.')) {
+            snprintf(moved, sizeof(moved), "%s%s", to, &label[n]);
+            memcpy(label, moved, USB_PORT_LABEL);
+        }
+    }
+    thread_release_mutex(usb_flash_mutex);
+}
+
 /* The newest image goes to the top of the recent list; GUI thread. */
 static void
 usb_flash_history_add(const char *fn)

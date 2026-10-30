@@ -69,6 +69,16 @@ enum {
 static const uint8_t usbmon_xfer[4] = { 2, 0, 3, 1 };
 static uint64_t      usb_dev_urb_id;
 
+/* A device's bus is that of the root port at the top of its hub chain, read
+   at each record: a hub moved to another controller takes its devices along. */
+static int
+usb_dev_pcap_bus(const usb_dev_t *dev)
+{
+    while (dev->parent != NULL)
+        dev = dev->parent;
+    return dev->bus;
+}
+
 /* usbmon pairs 'S' and 'C' by URB id. A control transfer is one URB: 'S'
    carries the setup packet (and a control write's data, so that 'S' waits
    for the Data stage), 'C' the data read and the final status. */
@@ -79,7 +89,7 @@ usb_dev_pcap_ctl_open(usb_dev_t *dev)
 
     dev->ctl_urb = ++usb_dev_urb_id;
     if ((dev->ctl_setup[0] & 0x80) || (wlength == 0))
-        usb_log_pcap(dev->ctl_urb, 'S', 2, dev->ctl_setup[0] >> 7, 0, dev->bus, dev->addr, URB_PENDING,
+        usb_log_pcap(dev->ctl_urb, 'S', 2, dev->ctl_setup[0] >> 7, 0, usb_dev_pcap_bus(dev), dev->addr, URB_PENDING,
                      wlength, dev->ctl_setup, NULL, 0);
 }
 
@@ -92,9 +102,9 @@ usb_dev_pcap_ctl_close(usb_dev_t *dev, int status)
     if (dev->ctl_urb == 0)
         return;
     if (!in && (wlength != 0))
-        usb_log_pcap(dev->ctl_urb, 'S', 2, 0, 0, dev->bus, dev->addr, URB_PENDING,
+        usb_log_pcap(dev->ctl_urb, 'S', 2, 0, 0, usb_dev_pcap_bus(dev), dev->addr, URB_PENDING,
                      wlength, dev->ctl_setup, dev->ctl_buf, dev->ctl_pos);
-    usb_log_pcap(dev->ctl_urb, 'C', 2, in, 0, dev->bus, dev->addr, status,
+    usb_log_pcap(dev->ctl_urb, 'C', 2, in, 0, usb_dev_pcap_bus(dev), dev->addr, status,
                  dev->ctl_pos, NULL, in ? dev->ctl_buf : NULL, dev->ctl_pos);
     dev->ctl_urb = 0;
 }
@@ -107,9 +117,9 @@ usb_dev_pcap_xfer(usb_dev_t *dev, const usb_packet_t *p, int status)
     int      xfer = usbmon_xfer[(in ? dev->ep_in[p->ep].type : dev->ep_out[p->ep].type) & 3];
     uint64_t id   = ++usb_dev_urb_id;
 
-    usb_log_pcap(id, 'S', xfer, in, p->ep, dev->bus, dev->addr, URB_PENDING,
+    usb_log_pcap(id, 'S', xfer, in, p->ep, usb_dev_pcap_bus(dev), dev->addr, URB_PENDING,
                  p->len, NULL, in ? NULL : p->data, p->len);
-    usb_log_pcap(id, 'C', xfer, in, p->ep, dev->bus, dev->addr, status,
+    usb_log_pcap(id, 'C', xfer, in, p->ep, usb_dev_pcap_bus(dev), dev->addr, status,
                  in ? p->actual : ((status == 0) ? p->len : 0), NULL, in ? p->data : NULL, p->actual);
 }
 #else

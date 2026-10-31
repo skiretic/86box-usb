@@ -419,21 +419,16 @@ struct MachineStatus::States {
         for (auto &n : net) {
             n.pixmaps = &pixmaps.net;
         }
-        for (auto &u : usbPort)
-            u.pixmaps = &pixmaps.usb_port;
     }
 
-    /* A USB port's icon: an empty port is a socket; otherwise what is in
-       the port, grayed when it cannot reach the host. A port the chipset
-       has switched off is hidden, and shows again if it is turned on. */
-    void updateUsbPort(int k, const usb_port_info_t &p)
+    /* What is in a USB port: an empty port is a socket; otherwise the
+       device's own icon (a stick for a flash drive, and for a device with
+       no hot-plug slot), grayed when it cannot reach the host. */
+    const QPixmap &usbPortPixmap(const usb_port_info_t &p) const
     {
-        PixmapSetEmpty *set   = &pixmaps.usb_port;
-        bool            empty = false;
-        const bool      off   = (p.state == USB_PORT_OFF);
+        const PixmapSetEmpty *set   = &pixmaps.usb_port;
+        bool                  empty = false;
 
-        if (usbPort[k].label->parentWidget() && (usbPort[k].label->isHidden() != off))
-            usbPort[k].label->setHidden(off);
         if (p.state == USB_PORT_FLASH) {
             set   = &pixmaps.usb_flash;
             empty = !p.online;
@@ -443,12 +438,63 @@ struct MachineStatus::States {
                 set = &pixmaps.usb[p.slot];
             empty = (p.slot >= 0) && !usb_slot_online(p.slot);
         }
-        if (usbPort[k].pixmaps != set) {
-            usbPort[k].pixmaps = set;
-            usbPort[k].empty   = empty;
-            usbPort[k].refresh();
-        } else
-            usbPort[k].setEmpty(empty);
+        return empty ? set->empty : set->normal;
+    }
+
+    /* A port's submenu carries that icon, in the USB icon's menu and in the
+       Media menu alike. Setting an icon makes every menu holding the
+       submenu update its entry, so it is set only when it changes. The key
+       of the pixmap last set is kept on the submenu itself, so a submenu
+       the Media menu has made again starts without one. */
+    void setUsbPortIcon(QMenu *menu, const usb_port_info_t &p)
+    {
+        const QPixmap &pixmap = usbPortPixmap(p);
+
+        if (menu->property("usbIconKey").toLongLong() == pixmap.cacheKey())
+            return;
+        menu->setProperty("usbIconKey", pixmap.cacheKey());
+        menu->setIcon(QIcon(pixmap));
+    }
+
+    /* The USB icon's menu lists every working port by its own submenu from
+       the Media menu, in port order, with a separator where the ports go
+       from the board to a PCI card or a hub. It is made each time it opens,
+       as ports switch on and off and devices come and go. */
+    void popupUsbMenu(QPoint pos)
+    {
+        static usb_port_info_t ports[USB_PORTS_MAX];
+        const int              n     = usb_ports_get(ports, USB_PORTS_MAX);
+        int                    where = -1;
+
+        usbMenu->clear();
+        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
+            if ((ports[k].state == USB_PORT_OFF) || !MediaMenu::ptr->usbPortMenus.contains(k))
+                continue;
+            QMenu *menu = MediaMenu::ptr->usbPortMenus[k];
+            MediaMenu::ptr->usbPortUpdateMenu(k);
+            setUsbPortIcon(menu, ports[k]);
+            if ((where >= 0) && (ports[k].where != where))
+                usbMenu->addSeparator();
+            where = ports[k].where;
+            usbMenu->addMenu(menu);
+        }
+        if (!usbMenu->isEmpty())
+            usbMenu->popup(pos - QPoint(0, usbMenu->sizeHint().height()));
+    }
+
+    /* Qt on macOS hangs a submenu's native menu under one menu entry at a
+       time, so putting a port's submenu in the USB icon's menu takes it
+       away from its entry in the Media menu. Once the USB icon's menu has
+       closed, the submenus come out of it and their icons are set again on
+       the next tick, which makes the Media menu update its entries and
+       take them back. */
+    void releaseUsbMenu()
+    {
+        usbMenu->clear();
+        if (MediaMenu::ptr) {
+            for (auto *menu : MediaMenu::ptr->usbPortMenus)
+                menu->setProperty("usbIconKey", QVariant());
+        }
     }
 
     std::array<StateEmpty, 2>                  cartridge;
@@ -460,7 +506,8 @@ struct MachineStatus::States {
     std::array<StateEmptyActive, TAPE_NUM>     tape;
     std::array<StateActive, HDD_BUS_USB>       hdds;
     std::array<StateEmptyActive, NET_CARD_MAX> net;
-    std::array<StateEmpty, USB_PORTS_MAX>      usbPort;
+    std::unique_ptr<ClickableLabel>            usb;
+    std::unique_ptr<QMenu>                     usbMenu;
     std::unique_ptr<ClickableLabel>            sound;
     std::unique_ptr<ClickableLabel>            dynarec;
     std::unique_ptr<QLabel>                    text;
@@ -694,30 +741,31 @@ MachineStatus::refreshIcons()
         d->sound->setPixmapIfChanged((sound_muted || fast_forward) ? d->pixmaps.sound.disabled : d->pixmaps.sound.normal);
 
     /* USB devices are plugged and unplugged on the emulation thread, so
-       each port's icon, tooltip and Media menu title follow what is in the
-       port now. */
-    {
+       each port's Media menu title and icon follow what is in the port
+       now. A port the chipset has switched off is hidden, and shows again
+       if it is turned on; the USB icon shows while any port works. */
+    if (d->usb && MediaMenu::ptr) {
         static usb_port_info_t ports[USB_PORTS_MAX];
-        const int              n = usb_ports_get(ports, USB_PORTS_MAX);
+        const int              n  = usb_ports_get(ports, USB_PORTS_MAX);
+        bool                   on = false;
 
         for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
-            if (!d->usbPort[k].label)
+            if (!MediaMenu::ptr->usbPortMenus.contains(k))
                 continue;
-            d->updateUsbPort(k, ports[k]);
-            const QString tip = MediaMenu::usbPortTitle(ports[k]);
-            if (d->usbPort[k].label->toolTip() != tip)
-                d->usbPort[k].label->setToolTip(tip);
-            if (MediaMenu::ptr && MediaMenu::ptr->usbPortMenus.contains(k)) {
-                QMenu *menu = MediaMenu::ptr->usbPortMenus[k];
-                if (menu->title() != tip) {
-                    menu->setTitle(tip);
-                    menu->setToolTip(tip);
-                }
-                const bool shown = (ports[k].state != USB_PORT_OFF);
-                if (menu->menuAction()->isVisible() != shown)
-                    menu->menuAction()->setVisible(shown);
+            QMenu        *menu  = MediaMenu::ptr->usbPortMenus[k];
+            const QString title = MediaMenu::usbPortTitle(ports[k]);
+            const bool    shown = (ports[k].state != USB_PORT_OFF);
+            if (menu->title() != title) {
+                menu->setTitle(title);
+                menu->setToolTip(title);
             }
+            if (menu->menuAction()->isVisible() != shown)
+                menu->menuAction()->setVisible(shown);
+            d->setUsbPortIcon(menu, ports[k]);
+            on = on || shown;
         }
+        if (d->usb->isHidden() == on)
+            d->usb->setHidden(!on);
     }
 
     /* Board LEDs are part of the machine, so they always show its state. */
@@ -872,10 +920,9 @@ MachineStatus::refresh(QStatusBar *sbar)
     for (size_t i = 0; i < NET_CARD_MAX; i++) {
         sbar->removeWidget(d->net[i].label.get());
     }
-    for (size_t i = 0; i < USB_PORTS_MAX; i++) {
-        sbar->removeWidget(d->usbPort[i].label.get());
-        d->usbPort[i].label.reset();
-    }
+    sbar->removeWidget(d->usb.get());
+    d->usb.reset();
+    d->usbMenu.reset();
     sbar->removeWidget(d->dynarec.get());
     sbar->removeWidget(d->sound.get());
     for (size_t i = 0; i < BOARD_LED_MAX; i++) {
@@ -1067,25 +1114,28 @@ MachineStatus::refresh(QStatusBar *sbar)
         sbar->addWidget(d->net[i].label.get());
     });
 
-    /* One icon per USB port, which opens that port's menu. */
-    {
+    /* One USB icon for all the ports, which opens a menu of the working
+       ones. */
+    if (!MediaMenu::ptr->usbPortMenus.isEmpty()) {
         static usb_port_info_t ports[USB_PORTS_MAX];
-        const int              n = usb_ports_get(ports, USB_PORTS_MAX);
+        const int              n  = usb_ports_get(ports, USB_PORTS_MAX);
+        bool                   on = false;
 
-        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
-            if (!MediaMenu::ptr->usbPortMenus.contains(k))
-                continue;
-            d->usbPort[k].label   = std::make_unique<ClickableLabel>();
-            d->usbPort[k].pixmaps = nullptr;
-            d->updateUsbPort(k, ports[k]);
-            d->usbPort[k].label->setToolTip(MediaMenu::usbPortTitle(ports[k]));
-            connect((ClickableLabel *) d->usbPort[k].label.get(), &ClickableLabel::clicked, [k](QPoint pos) {
-                MediaMenu::ptr->usbPortUpdateMenu(k);
-                MediaMenu::ptr->usbPortMenus[k]->popup(pos - QPoint(0, MediaMenu::ptr->usbPortMenus[k]->sizeHint().height()));
-            });
-            sbar->addWidget(d->usbPort[k].label.get());
-            d->usbPort[k].label->setHidden(ports[k].state == USB_PORT_OFF);
-        }
+        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++)
+            on = on || (ports[k].state != USB_PORT_OFF);
+
+        d->usbMenu = std::make_unique<QMenu>();
+        connect(d->usbMenu.get(), &QMenu::aboutToHide, this, [this] {
+            QTimer::singleShot(0, d->usbMenu.get(), [this] { d->releaseUsbMenu(); });
+        });
+        d->usb = std::make_unique<ClickableLabel>();
+        d->usb->setPixmap(d->pixmaps.usb_port.normal);
+        d->usb->setToolTip(tr("USB"));
+        connect(d->usb.get(), &ClickableLabel::clicked, this, [this](QPoint pos) {
+            d->popupUsbMenu(pos);
+        });
+        sbar->addWidget(d->usb.get());
+        d->usb->setHidden(!on);
     }
 
     auto hdc_name = QString(hdc_get_internal_name(hdc_current[0]));

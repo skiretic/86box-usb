@@ -133,6 +133,7 @@ typedef struct cyrix_gxm_t {
     mem_mapping_t dram_mapping;
     mem_mapping_t dram_mapping_hi;
     mem_mapping_t smm_mapping;
+    uint32_t      smm_base;
 } cyrix_gxm_t;
 
 static cyrix_gxm_t *gxm_dev = NULL;
@@ -449,6 +450,16 @@ gxm_gmem_readl(uint32_t addr, void *priv)
     return *(uint32_t *) &ram[dev->gmem_base + addr];
 }
 
+/* Graphics memory is RAM. A write through the aperture to bytes that
+   compiled code was built from (graphics memory placed where the OS keeps
+   code), in blocks tracked by word or by byte, goes through the RAM write
+   path, which invalidates it; frame buffer writes otherwise stay direct. */
+static inline int
+gxm_gmem_has_code(uint32_t a, int len)
+{
+    return cpu_use_exec && mem_phys_has_code(a, len);
+}
+
 static void
 gxm_gmem_write(uint32_t addr, uint8_t val, void *priv)
 {
@@ -456,7 +467,12 @@ gxm_gmem_write(uint32_t addr, uint8_t val, void *priv)
 
     addr &= (GMEM_SIZE - 1);
     if (addr < dev->gmem_size) {
-        ram[dev->gmem_base + addr] = val;
+        const uint32_t a = dev->gmem_base + addr;
+
+        if (gxm_gmem_has_code(a, 1))
+            mem_write_ramb_page(a, val, &pages[a >> 12]);
+        else
+            ram[a] = val;
         gxm_video_gmem_written(gxm_video, addr, 1);
     }
 }
@@ -467,7 +483,7 @@ gxm_gmem_writew(uint32_t addr, uint16_t val, void *priv)
     const cyrix_gxm_t *dev = (cyrix_gxm_t *) priv;
 
     addr &= (GMEM_SIZE - 1);
-    if ((addr + 2) > dev->gmem_size) {
+    if (((addr + 2) > dev->gmem_size) || gxm_gmem_has_code(dev->gmem_base + addr, 2)) {
         gxm_gmem_write(addr, val & 0xff, priv);
         gxm_gmem_write(addr + 1, val >> 8, priv);
     } else {
@@ -482,7 +498,7 @@ gxm_gmem_writel(uint32_t addr, uint32_t val, void *priv)
     const cyrix_gxm_t *dev = (cyrix_gxm_t *) priv;
 
     addr &= (GMEM_SIZE - 1);
-    if ((addr + 4) > dev->gmem_size) {
+    if (((addr + 4) > dev->gmem_size) || gxm_gmem_has_code(dev->gmem_base + addr, 4)) {
         gxm_gmem_writew(addr, val & 0xffff, priv);
         gxm_gmem_writew(addr + 2, val >> 16, priv);
     } else {
@@ -523,31 +539,48 @@ gxm_smm_readl(uint32_t addr, void *priv)
     return *(uint32_t *) &ram[0xa0000 + addr];
 }
 
+/* The writes go through the pages of the region's own addresses, which alias
+   the DRAM (gxm_remap): VSA patches the code it runs there, so
+   recompiled blocks of it must see the writes. */
 static void
-gxm_smm_write(uint32_t addr, uint8_t val, UNUSED(void *priv))
+gxm_smm_write(uint32_t addr, uint8_t val, void *priv)
 {
-    ram[0xa0000 + (addr & 0x1ffff)] = val;
+    const cyrix_gxm_t *dev = (cyrix_gxm_t *) priv;
+
+    addr &= 0x1ffff;
+    if (cpu_use_exec)
+        mem_write_ramb_page(dev->smm_base + addr, val, &pages[(dev->smm_base + addr) >> 12]);
+    else
+        ram[0xa0000 + addr] = val;
 }
 
 static void
 gxm_smm_writew(uint32_t addr, uint16_t val, void *priv)
 {
+    const cyrix_gxm_t *dev = (cyrix_gxm_t *) priv;
+
     addr &= 0x1ffff;
     if (addr > 0x1fffe) {
         gxm_smm_write(addr, val & 0xff, priv);
         gxm_smm_write(addr + 1, val >> 8, priv);
-    } else
+    } else if (cpu_use_exec)
+        mem_write_ramw_page(dev->smm_base + addr, val, &pages[(dev->smm_base + addr) >> 12]);
+    else
         *(uint16_t *) &ram[0xa0000 + addr] = val;
 }
 
 static void
 gxm_smm_writel(uint32_t addr, uint32_t val, void *priv)
 {
+    const cyrix_gxm_t *dev = (cyrix_gxm_t *) priv;
+
     addr &= 0x1ffff;
     if (addr > 0x1fffc) {
         gxm_smm_writew(addr, val & 0xffff, priv);
         gxm_smm_writew(addr + 2, val >> 16, priv);
-    } else
+    } else if (cpu_use_exec)
+        mem_write_raml_page(dev->smm_base + addr, val, &pages[(dev->smm_base + addr) >> 12]);
+    else
         *(uint32_t *) &ram[0xa0000 + addr] = val;
 }
 
@@ -569,6 +602,7 @@ gxm_remap(cyrix_gxm_t *dev)
 {
     static const uint32_t sp_size[4] = { 0x0000, 0x0800, 0x0c00, 0x1000 };
     const uint32_t        sp         = sp_size[(gxm.gcr & GCR_SP_SIZE) >> 2];
+    uint32_t              smm_base;
 
     dev->gx_base = (gxm.gcr & GCR_GX_BASE) << 30;
 
@@ -590,6 +624,15 @@ gxm_remap(cyrix_gxm_t *dev)
         mem_mapping_disable(&dev->reg_mapping);
         mem_mapping_disable(&dev->gmem_mapping);
         mem_mapping_disable(&dev->smm_mapping);
+    }
+
+    smm_base = (dev->gx_base && (dev->mc_mem_cntrl1 & MC_VGAWRP)) ? (dev->gx_base + 0x400000) : 0;
+    if (smm_base != dev->smm_base) {
+        if (dev->smm_base)
+            mem_set_ram_alias(dev->smm_base, 0xa0000, 0x20000, 0);
+        if (smm_base)
+            mem_set_ram_alias(smm_base, 0xa0000, 0x20000, 1);
+        dev->smm_base = smm_base;
     }
 
     flushmmucache_nopc();

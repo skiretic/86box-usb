@@ -2325,11 +2325,12 @@ load_other_removable_devices(void)
         sprintf(temp, "zip_%02i_parameters", c + 1);
         p = ini_section_get_string(cat, temp, NULL);
         if (p != NULL) {
-            sscanf(p, "%01u, %s", &rdisk_drives[c].type, s);
+            sscanf(p, "%u, %s", &rdisk_drives[c].type, s);
             legacy_zip_drives++;
         } else
             sscanf("0, none", "%01u, %s", &rdisk_drives[c].type, s);
         rdisk_drives[c].type++;
+        rdisk_drives[c].type = rdisk_type_from_config(rdisk_drives[c].type);
         rdisk_drives[c].bus_type = hdd_string_to_bus(s, 1);
 
         /* Default values, needed for proper operation of the Settings dialog. */
@@ -2431,16 +2432,17 @@ load_other_removable_devices(void)
         sprintf(temp, "rdisk_%02i_parameters", c + 1);
         p = ini_section_get_string(cat, temp, NULL);
         if (p != NULL) {
-            sscanf(p, "%01u, %s", &rdisk_drives[c].type, s);
+            sscanf(p, "%u, %s", &rdisk_drives[c].type, s);
             legacy_zip_drives++;
         } else
             sscanf("0, none", "%01u, %s", &rdisk_drives[c].type, s);
+        rdisk_drives[c].type = rdisk_type_from_config(rdisk_drives[c].type);
         rdisk_drives[c].bus_type = hdd_string_to_bus(s, 1);
 
         /* Default values, needed for proper operation of the Settings dialog. */
         rdisk_drives[c].ide_channel = rdisk_drives[c].scsi_device_id = c + 2;
 
-        if (rdisk_drives[c].bus_type == RDISK_BUS_ATAPI) {
+        if ((rdisk_drives[c].bus_type == RDISK_BUS_ATAPI) || (rdisk_drives[c].bus_type == RDISK_BUS_IDE)) {
             sprintf(temp, "rdisk_%02i_ide_channel", c + 1);
             sprintf(tmp2, "%u:%u", (c + 2) >> 1, (c + 2) & 1);
             p = ini_section_get_string(cat, temp, tmp2);
@@ -2477,7 +2479,7 @@ load_other_removable_devices(void)
             }
         }
 
-        if (rdisk_drives[c].bus_type != RDISK_BUS_ATAPI) {
+        if ((rdisk_drives[c].bus_type != RDISK_BUS_ATAPI) && (rdisk_drives[c].bus_type != RDISK_BUS_IDE)) {
             sprintf(temp, "rdisk_%02i_ide_channel", c + 1);
             ini_section_delete_var(cat, temp);
         }
@@ -2511,7 +2513,9 @@ load_other_removable_devices(void)
         }
 
         for (int i = 0; i < MAX_PREV_IMAGES; i++) {
-            rdisk_drives[c].image_history[i] = (char *) calloc((MAX_IMAGE_PATH_LEN + 1) << 1, sizeof(char));
+            /* The legacy zip_ loop above has already allocated these. */
+            if (rdisk_drives[c].image_history[i] == NULL)
+                rdisk_drives[c].image_history[i] = (char *) calloc((MAX_IMAGE_PATH_LEN + 1) << 1, sizeof(char));
             sprintf(temp, "rdisk_%02i_image_history_%02i", c + 1, i + 1);
             p = ini_section_get_string(cat, temp, NULL);
             if (p) {
@@ -4939,13 +4943,13 @@ save_other_removable_devices(void)
         if (rdisk_drives[c].bus_type == 0) {
             ini_section_delete_var(cat, temp);
         } else {
-            sprintf(tmp2, "%u, %s", rdisk_drives[c].type,
+            sprintf(tmp2, "%u, %s", rdisk_type_to_config(rdisk_drives[c].type),
                     hdd_bus_to_string(rdisk_drives[c].bus_type, 1));
             ini_section_set_string(cat, temp, tmp2);
         }
 
         sprintf(temp, "rdisk_%02i_ide_channel", c + 1);
-        if (rdisk_drives[c].bus_type != RDISK_BUS_ATAPI)
+        if ((rdisk_drives[c].bus_type != RDISK_BUS_ATAPI) && (rdisk_drives[c].bus_type != RDISK_BUS_IDE))
             ini_section_delete_var(cat, temp);
         else {
             sprintf(tmp2, "%u:%u", rdisk_drives[c].ide_channel >> 1,

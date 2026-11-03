@@ -54,6 +54,7 @@ extern const device_t pc87310_device;
 #define FDC37C6XX_IDE_SEC    0x00200
 
 #define FDC37C6XX_370        0x00400
+#define CT721                0x00800
 
 extern const device_t fdc37c6xx_device;
 
@@ -233,6 +234,7 @@ extern void w83877_in530_master_reset(void);
 
 #define W83977_UART_FORCE_SEC 0x01000000
 #define W83977_LPT_FORCE_SEC  0x02000000
+#define W83977_SECONDARY      0x04000000    /* Second Super I/O after another vendor's chip: no FDC, NVR or KBC. */
 
 extern const device_t w83977_device;
 

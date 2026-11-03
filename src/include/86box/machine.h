@@ -666,6 +666,16 @@ extern int             machine_at_kmxc02_init(const machine_t *);
 /* WD76C10 */
 extern int             machine_at_wd76c10_init(const machine_t *);
 
+/* m_at_386ex.c */
+/* Intel 386EX-based embedded systems */
+#ifdef EMU_DEVICE_H
+extern const device_t  ts3x00_device;
+#endif
+extern uint32_t        machine_at_ts3x00_gpio_handler(uint8_t write, uint32_t val);
+extern int             machine_at_ts3100_init(const machine_t *);
+extern int             machine_at_ts3200_init(const machine_t *);
+extern int             machine_at_ts3400_init(const machine_t *);
+
 /* m_at_m6117.c */
 /* ALi M6117D */
 extern int             machine_at_pja511m_init(const machine_t *);
@@ -1306,6 +1316,7 @@ extern int             machine_at_p5gxm_init(const machine_t *);
 extern uint32_t        machine_at_p5gxm_gpio_handler(uint8_t write, uint32_t val);
 extern int             machine_at_t3032_init(const machine_t *);
 extern int             machine_at_awp601_init(const machine_t *);
+extern int             machine_at_msc655b_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern const device_t  ms5146_device;
 #endif
@@ -1629,6 +1640,10 @@ extern int             machine_at_7sbb_init(const machine_t *);
 extern const device_t  me99_device;
 #endif
 extern int             machine_at_me99_init(const machine_t *);
+#ifdef EMU_DEVICE_H
+extern const device_t  in620_device;
+#endif
+extern int             machine_at_in620_init(const machine_t *);
 
 /* SMSC VictoryBX-66 */
 extern int             machine_at_atc7020bxii_init(const machine_t *);

@@ -40,7 +40,7 @@
 #include <86box/sio.h>
 #include <86box/keyboard.h>
 #include <86box/usb_log.h>
-#include "kbc_at_vectra.h"
+#include <86box/kbc_test.h>
 
 #define STAT_PARITY        0x80
 #define STAT_RTIMEOUT      0x40

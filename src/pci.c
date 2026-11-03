@@ -806,6 +806,13 @@ pci_trc_reset(uint8_t val)
     }
 }
 
+/* A chipset's own system-wide reset: what a hard reset through CF9h does. */
+void
+pci_system_reset(void)
+{
+    pci_trc_reset(0x02);
+}
+
 void
 pci_write(uint16_t port, uint8_t val, UNUSED(void *priv))
 {
@@ -913,7 +920,7 @@ pci_writel(uint16_t port, uint32_t val, UNUSED(void *priv))
                 if (pci_flags & FLAG_MECHANISM_1) {
                     pci_log("PCI: [WL] Mechanism #1 port 0CF8 = %08X\n", val);
 
-                    pci_index  = val & 0xff;
+                    pci_index  = val & 0xfc;
                     pci_func   = (val >> 8) & 7;
                     pci_card   = (val >> 11) & 31;
                     pci_bus    = (val >> 16) & 0xff;

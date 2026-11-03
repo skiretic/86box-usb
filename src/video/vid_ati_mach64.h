@@ -61,6 +61,8 @@
 #define BIOS_ROMCT_PATH               "roms/video/mach64/mach64-68b110b8cddfd546595673.bin"
 #define BIOS_ROMVT_PATH               "roms/video/mach64/mach64vt-660c60c135839345779942.bin"
 #define BIOS_ROMVT2_PATH              "roms/video/mach64/atimach64vt2pci.bin"
+#define BIOS_ROMGT_PATH              "roms/video/mach64/3d_rage.bin"
+#define BIOS_ROMRAGE2_PATH           "roms/video/mach64/3d_rage_ii.bin"
 #define BIOS_ROMGTB_PATH              "roms/video/mach64/ARS2D.bin"
 
 #define FIFO_SIZE         65536
@@ -69,7 +71,7 @@
 
 #define FIFO_ENTRIES      (mach64->fifo_write_idx - mach64->fifo_read_idx)
 #define FIFO_FULL         ((mach64->fifo_write_idx - mach64->fifo_read_idx) >= FIFO_SIZE)
-#define FIFO_EMPTY        (mach64->fifo_read_idx == mach64->fifo_write_idx)
+#define FIFO_EMPTY        mach64_fifo_empty(mach64)
 
 #define FIFO_TYPE         0xff000000
 #define FIFO_ADDR         0x00ffffff
@@ -99,10 +101,12 @@ enum {
     MACH64_CT,
     MACH64_VT,
     MACH64_VT2,
-    MACH64_GTB, /* 3D Rage II+; before the VT3, whose GP_IO DDC it does not have */
+    MACH64_GT, /* Original 3D Rage (GT-A2), VT-style overlay. */
+    MACH64_GTB, /* 3D Rage II/II+; before the VT3, whose GP_IO DDC it does not have */
     MACH64_VT3
 };
 
+#define MACH64_FLAG_RAGE2   (1 << 20) /* GT-B before the II+ DVD (GT PCI ID) */
 #define MACH64_FLAG_ONBOARD (1 << 19)
 #define MACH64_FLAG_DRAM    (1 << 17) /* the board's memory is DRAM (256Kx16), not VRAM */
 #define MACH64_PCI_IOCONFIG 0x40        // "User Defined Configuration"
@@ -392,6 +396,12 @@ typedef struct mach64_t {
     uint8_t          genvs;         /* 102h */
 } mach64_t;
 
+static inline int
+mach64_fifo_empty(const mach64_t *mach64)
+{
+    return mach64->fifo_read_idx == mach64->fifo_write_idx;
+}
+
 extern video_timings_t timing_mach64_isa;
 extern video_timings_t timing_mach64_vlb;
 extern video_timings_t timing_mach64_pci;
@@ -469,6 +479,7 @@ void     mach64_write(uint32_t addr, uint8_t val, void *priv);
 void     mach64_writew(uint32_t addr, uint16_t val, void *priv);
 void     mach64_writel(uint32_t addr, uint32_t val, void *priv);
 uint8_t  mach64_read(uint32_t addr, void *priv);
+uint8_t *mach64_debug_ptr(uint32_t addr, int write, void *priv);
 uint16_t mach64_readw(uint32_t addr, void *priv);
 uint32_t mach64_readl(uint32_t addr, void *priv);
 void     mach64_updatemapping(mach64_t *mach64);

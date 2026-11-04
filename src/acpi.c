@@ -3232,12 +3232,18 @@ acpi_reset(void *priv)
     }
 
     if (dev->power_on) {
-        /* Power on always generates a resume event, except on the SiS 5582.
-           There only the RTC and the APC that powers the board up run from
-           RTCVDD; the ACPI registers are in the 3.3V OVDD well, which is off
-           until power-up, so they come up cleared (SiS 5581/5582 p. 39 and
-           41 / PDF 39 and 41). */
-        if (dev->vendor != VEN_SIS_5582)
+        /* Power on always generates a resume event, except on the SiS 5582
+           and 5595. There only the RTC and the APC that powers the board up
+           run from RTCVDD; the ACPI registers are in the 3.3V OVDD well, which
+           is off until power-up, so they come up cleared (SiS 5581/5582 p. 39
+           and 41 / PDF 39 and 41). The 5595 is the same: the APC takes the
+           power-up press while PWRGD is low and ACPI sees only presses after
+           it (SiS 5595 3.6.1.3 and 3.7, pp. 44 and 47 / PDF 50 and 53), and
+           PM1_STS defaults to 0000h (p. 134 / PDF 140).  A BIOS that sets
+           PWRBTN_EN in legacy mode would otherwise take an SMI# for a button
+           press that never happened. */
+        if ((dev->vendor != VEN_SIS_5582) && (dev->vendor != VEN_SIS_5595_1997) &&
+            (dev->vendor != VEN_SIS_5595))
             dev->regs.pmsts |= 0x8100;
         dev->power_on = 0;
     }

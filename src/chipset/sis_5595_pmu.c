@@ -114,7 +114,10 @@ sis_5595_pmu_trap_io_mask(const uint16_t size, const uint16_t port, const uint8_
 {
     sis_5595_pmu_io_trap_t *trap = (sis_5595_pmu_io_trap_t *) priv;
 
-    if ((port & trap->mask) == (trap->addr & trap->mask))
+    /* A 1 in the mask makes the trap ignore that address bit; every other
+       bit must match the trap address (PMU 4Ch-4Dh and 5Ch-5Dh, SiS 5595
+       November 1998, pp. 116 and 120 / PDF 122 and 126). */
+    if (((port ^ trap->addr) & (uint16_t) ~trap->mask) == 0)
         sis_5595_pmu_trap_io(size, port, write, val, priv);
 }
 
@@ -145,8 +148,6 @@ sis_5595_pmu_trap_update_devctl(sis_5595_pmu_t *dev, uint8_t trap_id, uint8_t en
     if (enable && !trap->trap) {
         trap->priv     = (void *) dev;
         trap->flags    = flags;
-        trap->mask     = mask;
-        trap->addr     = addr;
         if (flags & 0x10)
             trap->trap     = io_trap_add(sis_5595_pmu_trap_io_ide_bm, trap);
         else if (flags & 0x08)
@@ -158,6 +159,15 @@ sis_5595_pmu_trap_update_devctl(sis_5595_pmu_t *dev, uint8_t trap_id, uint8_t en
         trap->sts_reg  = sts_reg;
         trap->sts_mask = sts_mask;
     }
+
+    /* The address and mask follow every reprogramming. A masked trap can
+       match only inside the size-aligned block that holds its address (its
+       mask covers at most the bits below the size), so that block is the
+       window, and sis_5595_pmu_trap_io_mask() picks the matching ports. */
+    trap->mask = mask;
+    trap->addr = addr;
+    if (flags & 0x08)
+        addr &= ~(size - 1);
 
     /* Remap I/O trap. */
     io_trap_remap(trap->trap, enable, addr, size);

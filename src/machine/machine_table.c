@@ -1069,6 +1069,53 @@ const machine_t machines[] = {
         .aliases                  = { "" }
     },
     {
+        .name              = "[8088] ERGODATA Wild XT",
+        .internal_name     = "ergodatawxt",
+        .type              = MACHINE_TYPE_8088,
+        .chipset           = MACHINE_CHIPSET_DISCRETE,
+        .init              = machine_xt_ergodata_init,
+        .p1_handler        = NULL,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_8088,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 0,
+            .max_bus     = 0,
+            .min_voltage = 0,
+            .max_voltage = 0,
+            .min_multi   = 0,
+            .max_multi   = 0
+        },
+        .bus_flags = MACHINE_PC,
+        .flags     = MACHINE_FDC, /* Machine has internal video: Paradise PVC2 (not yet implemented) */
+        .ram       = {
+            .min  = 128,
+            .max  = 640,
+            .step = 64
+        },
+        .nvrmask                  = 0,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = &kbc_xtclone_device,
+        .kbc_params               = 0x00000000,
+        .nvr_device               = NULL,
+        .nvr_params               = 0x00000000,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0xff,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = NULL,
+        .kbd_device               = &keyboard_pc_xt_device,
+        .fdc_device               = &fdc_xt_device,
+        .vid_device               = NULL,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "" }
+    },
+    {
         .name              = "[8088] Hyundai SUPER-16T",
         .internal_name     = "super16t",
         .type              = MACHINE_TYPE_8088,
@@ -5233,7 +5280,7 @@ const machine_t machines[] = {
             .max_multi   = 0
         },
         .bus_flags = MACHINE_AT,
-        .flags     = MACHINE_FDC, /* Machine has video: Paradise PVGA1A */
+        .flags     = MACHINE_FDC, /* Machine has internal video: Paradise PVGA1A */
         .ram       = {
             .min  = 256, /* POST misdetects memory when it's less than 1 MB,
                             but otherwise such amounts work without issues */
@@ -5815,7 +5862,7 @@ const machine_t machines[] = {
             .min_multi   = 0,
             .max_multi   = 0
         },
-        .bus_flags = MACHINE_PS2,
+        .bus_flags = MACHINE_AT | MACHINE_BUS_PS2,
         .flags     = MACHINE_IDE, /* Machine has internal video: C&T VGA 411 (not yet implemented) */
         .ram       = {
             .min  = 512, /* crashes and bootloops during POST with less */
@@ -5826,15 +5873,15 @@ const machine_t machines[] = {
         .jumpered_ecp_dma         = 0,
         .default_jumpered_ecp_dma = -1,
         .kbc_device               = &kbc_at_device,
-        .kbc_params               = KBC_VEN_AMI | 0x00004600,
+        .kbc_params               = 0x00000000,
         .nvr_device               = &nvr_at_device,
         .nvr_params               = NVR_AT,
         .sio_device               = NULL,
         .sio_params               = 0x00000000,
-        .kbc_p1                   = 0x00000cf0,
+        .kbc_p1                   = 0x000004f0,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
-        .device                   = NULL,
+        .device                   = &f82c710_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = NULL,
@@ -5863,7 +5910,7 @@ const machine_t machines[] = {
             .min_multi   = 0,
             .max_multi   = 0
         },
-        .bus_flags = MACHINE_PS2,
+        .bus_flags = MACHINE_AT | MACHINE_BUS_PS2,
         .flags     = MACHINE_FLAGS_NONE,
         .ram       = {
             .min  = 512, /* crashes and bootloops during POST with less */
@@ -5874,7 +5921,7 @@ const machine_t machines[] = {
         .jumpered_ecp_dma         = 0,
         .default_jumpered_ecp_dma = -1,
         .kbc_device               = &kbc_at_device,
-        .kbc_params               = KBC_VEN_AMI | 0x00004600,
+        .kbc_params               = 0x00000000,
         .nvr_device               = &nvr_at_device,
         .nvr_params               = NVR_AT,
         .sio_device               = NULL,
@@ -5882,7 +5929,7 @@ const machine_t machines[] = {
         .kbc_p1                   = 0x00000cf0,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
-        .device                   = NULL,
+        .device                   = &f82c710_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = NULL,
@@ -5911,7 +5958,7 @@ const machine_t machines[] = {
             .min_multi   = 0,
             .max_multi   = 0
         },
-        .bus_flags = MACHINE_PS2,
+        .bus_flags = MACHINE_AT | MACHINE_BUS_PS2,
         .flags     = MACHINE_IDE | MACHINE_VIDEO,
         .ram       = {
             .min  = 512, /* crashes and bootloops during POST with less */
@@ -5922,7 +5969,7 @@ const machine_t machines[] = {
         .jumpered_ecp_dma         = 0,
         .default_jumpered_ecp_dma = -1,
         .kbc_device               = &kbc_at_device,
-        .kbc_params               = KBC_VEN_AMI | 0x00004600,
+        .kbc_params               = 0x00000000,
         .nvr_device               = &nvr_at_device,
         .nvr_params               = NVR_AT,
         .sio_device               = NULL,
@@ -5930,7 +5977,7 @@ const machine_t machines[] = {
         .kbc_p1                   = 0x00000cf0,
         .gpio                     = 0xffffffff,
         .gpio_acpi                = 0xffffffff,
-        .device                   = NULL,
+        .device                   = &f82c710_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = &ati28800k_spc4620p_device,
@@ -11242,6 +11289,55 @@ const machine_t machines[] = {
         .kbd_device               = NULL,
         .fdc_device               = NULL,
         .vid_device               = &et4000w32_onboard_device,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "" }
+    },
+    /* Has a VLSI VL82C114 Combination I/O which holds the KBC. */
+    {
+        .name              = "[VLSI 82C480] IBM PS/1 model 2133",
+        .internal_name     = "ibmps1_2133",
+        .type              = MACHINE_TYPE_SOCKET2,
+        .chipset           = MACHINE_CHIPSET_VLSI_VL82C480,
+        .init              = machine_ps1_m2133_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = NULL,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_SOCKET3,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 25000000,
+            .max_bus     = 33333333,
+            .min_voltage = 5000,
+            .max_voltage = 5000,
+            .min_multi   = 0,
+            .max_multi   = 0
+        },
+        .bus_flags = MACHINE_PS2,
+        .flags     = MACHINE_IDE | MACHINE_VIDEO,
+        .ram       = {
+            .min  = 1024,
+            .max  = 65536,
+            .step = 1024
+        },
+        .nvrmask                  = 127,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = NULL,
+        .kbc_params               = 0x00000000,
+        /* The NVR is on the VLSI VL82C114. */
+        .nvr_device               = NULL,
+        .nvr_params               = 0x00000000,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x000004f0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = &ps1_2133_device,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = &gd5428_onboard_device,
         .snd_device               = NULL,
         .net_device               = NULL,
         .aliases                  = { "" }
@@ -17906,6 +18002,54 @@ const machine_t machines[] = {
         .net_device               = NULL,
         .aliases                  = { "HP Chimay", "" }
     },
+    /* The 6877 and 6887 share the system board; the PC 750 has the larger chassis and riser. */
+    {
+        .name              = "[i430FX] IBM PC 7x0 (type 68x7)",
+        .internal_name     = "ibm_pc700_6877_6887",
+        .type              = MACHINE_TYPE_SOCKET7_3V,
+        .chipset           = MACHINE_CHIPSET_INTEL_430FX,
+        .init              = machine_at_ibm_pc700_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = machine_at_ibm_pc700_gpio_handler,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_SOCKET5_7,
+            .block       = CPU_BLOCK(CPU_K5, CPU_5K86, CPU_Cx6x86, CPU_WINCHIP, CPU_WINCHIP2, CPU_PENTIUMMMX),
+            .min_bus     = 50000000,
+            .max_bus     = 66666667,
+            .min_voltage = 3380,
+            .max_voltage = 3520,
+            .min_multi   = 1.5,
+            .max_multi   = 2.5
+        },
+        .bus_flags = MACHINE_PS2_PCI,
+        .flags     = MACHINE_IDE_DUAL | MACHINE_VIDEO | MACHINE_APM,
+        .ram       = {
+            .min  = 16384,
+            .max  = 131072,
+            .step = 8192
+        },
+        .nvrmask                  = 255,
+        .jumpered_ecp_dma         = MACHINE_DMA_DISABLED | MACHINE_DMA_1 | MACHINE_DMA_3,
+        .default_jumpered_ecp_dma = 3,
+        .kbc_device               = NULL,
+        .kbc_params               = 0x00000000,
+        .nvr_device               = NULL,
+        .nvr_params               = 0x00000000,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x000044f0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = NULL,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = &s3_trio64vplus_onboard_pci_device,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "IBM PC 730 type 6877", "IBM PC 750 type 6887", "" }
+    },
     /* According to tests from real hardware: This has AMI MegaKey KBC firmware on the
        PC87306 Super I/O chip, command 0xA1 returns '5'.
        Command 0xA0 copyright string: (C)1994 AMI . */
@@ -18621,7 +18765,7 @@ const machine_t machines[] = {
             .max_multi   = 3.0
         },
         .bus_flags = MACHINE_PS2_PCI | MACHINE_BUS_USB,
-        .flags     = MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_GAMEPORT | MACHINE_USB, /* Machine has internal video: ATI 3D Rage II (Mach64GT-B) (not yet implemented) */
+        .flags     = MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_GAMEPORT | MACHINE_USB, /* Machine has internal video: ATI 3D Rage II (Mach64GT-B) */
         .ram       = {
             .min  = 8192,
             .max  = 131072,
@@ -19681,7 +19825,7 @@ const machine_t machines[] = {
             .max_multi   = 3.5
         },
         .bus_flags = MACHINE_PS2_PCI | MACHINE_BUS_USB,
-        .flags     = MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_USB | MACHINE_NIC, /* Machine has internal video: either ATI 3D Rage (Mach64GT) (not yet implemented) or 3D Rage II+ DVD (Mach64GT-B) */
+        .flags     = MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_USB | MACHINE_NIC, /* Machine has internal video: either ATI 3D Rage (Mach64GT) or 3D Rage II+ DVD (Mach64GT-B) */
         .ram       = {
             .min  = 8192,
             .max  = 524288,
@@ -20544,6 +20688,55 @@ const machine_t machines[] = {
         .snd_device               = NULL,
         .net_device               = NULL,
         .aliases                  = { "" }
+    },
+    /* Has a National Semiconductor PC87307 Super I/O with on-chip KBC, which has one of these
+       firmwares: AMI '5' MegaKey, Phoenix MultiKey/42 1.37, or Phoenix MultiKey/42i 4.16. */
+    {
+        .name              = "[i430VX] ICL ErgoPro e452/e652",
+        .internal_name     = "ergoe452",
+        .type              = MACHINE_TYPE_SOCKET7,
+        .chipset           = MACHINE_CHIPSET_INTEL_430VX,
+        .init              = machine_at_ergoe452_init,
+        .p1_handler        = machine_generic_p1_handler,
+        .gpio_handler      = machine_at_ergoe452_gpio_handler,
+        .available_flag    = MACHINE_AVAILABLE,
+        .gpio_acpi_handler = NULL,
+        .cpu               = {
+            .package     = CPU_PKG_SOCKET5_7,
+            .block       = CPU_BLOCK_NONE,
+            .min_bus     = 60000000,
+            .max_bus     = 66666667,
+            .min_voltage = 2200,
+            .max_voltage = 3520,
+            .min_multi   = 1.5,
+            .max_multi   = 3.5
+        },
+        .bus_flags = MACHINE_PS2_PCI,
+        .flags     = MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_USB,
+        .ram       = {
+            .min  = 8192,
+            .max  = 131072,
+            .step = 4096
+        },
+        .nvrmask                  = 127,
+        .jumpered_ecp_dma         = 0,
+        .default_jumpered_ecp_dma = -1,
+        .kbc_device               = NULL,
+        .kbc_params               = 0x00000000,
+        .nvr_device               = NULL,
+        .nvr_params               = 0x00000000,
+        .sio_device               = NULL,
+        .sio_params               = 0x00000000,
+        .kbc_p1                   = 0x00000cf0,
+        .gpio                     = 0xffffffff,
+        .gpio_acpi                = 0xffffffff,
+        .device                   = &ergoe452_device,
+        .kbd_device               = NULL,
+        .fdc_device               = NULL,
+        .vid_device               = NULL,
+        .snd_device               = NULL,
+        .net_device               = NULL,
+        .aliases                  = { "Fujitsu ErgoPro e452/e652", "MikroMikko ErgoPro e452/e652", "" }
     },
     /* Has the AMIKey-2 ('H') KBC firmware. */
     {
@@ -22249,7 +22442,7 @@ const machine_t machines[] = {
             .max_multi   = 5.5
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_GAMEPORT | MACHINE_USB, /* Machine has internal video: ATI Rage Pro Turbo AGP (not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_GAMEPORT | MACHINE_USB | MACHINE_VIDEO, /* Internal video, ATI Rage Pro Turbo AGP */
         .ram       = {
             .min  = 8192,
             .max  = 262144,
@@ -22270,7 +22463,7 @@ const machine_t machines[] = {
         .device                   = NULL,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &es1373_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "MSI MS-5185", "Gateway ATX Select 366", "Gateway ATX Select 400", "" }
@@ -24223,7 +24416,7 @@ const machine_t machines[] = {
             .max_multi   = 5.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_USB, /* Machine has internal video: ATI 3D Rage Pro AGP 2X and NIC: 3Com 3C905 (both not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_USB | MACHINE_VIDEO, /* Internal video, ATI 3D Rage Pro AGP 2X; the NIC, 3Com 3C905 (not yet implemented) */
         .ram       = {
             .min  = 8192,
             .max  = 786432,
@@ -24244,7 +24437,7 @@ const machine_t machines[] = {
         .device                   = NULL,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &cs4236b_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "Dell System Tabasco", "Dell OptiPlex NX", "" }
@@ -24469,7 +24662,7 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_SOUND, /* Machine has internal video: ATI Rage Pro Turbo AGP (not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_SOUND | MACHINE_VIDEO, /* Internal video, ATI Rage Pro Turbo AGP */
         .ram       = {
             .min  = 8192,
             .max  = 524288,
@@ -24490,7 +24683,7 @@ const machine_t machines[] = {
         .device                   = &in440ex_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &ess_solo1_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "Gobi Internet PC", "Toshiba Equium 3000M", "Sony Kokomo", "Sony Vaio PCV-E2xx", "" }
@@ -24518,7 +24711,7 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_SOUND, /* Machine has internal video: ATI Rage Pro Turbo AGP (not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_SOUND | MACHINE_VIDEO, /* Internal video, ATI Rage Pro Turbo AGP */
         .ram       = {
             .min  = 8192,
             .max  = 524288,
@@ -24539,7 +24732,7 @@ const machine_t machines[] = {
         .device                   = &in440exd_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &ess_solo1_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "CompUSA PC American Pro", "" }
@@ -25065,7 +25258,7 @@ const machine_t machines[] = {
             .max_multi   = 5.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_USB, /* Machine has internal video: ATI Rage Pro Turbo AGP and NIC: 3Com 3C905B-TX (both not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_VIDEO, /* Internal video, ATI Rage Pro Turbo AGP; the NIC, 3Com 3C905B-TX (not yet implemented) */
         .ram       = {
             .min  = 8192,
             .max  = 786432,
@@ -25086,7 +25279,7 @@ const machine_t machines[] = {
         .device                   = &optiplexgx1_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &cs4236b_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "Dell System Banff", "" }
@@ -25406,7 +25599,7 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_GAMEPORT | MACHINE_USB, /* Machine has internal video: ATI 3D Rage Pro PCI (not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_SOUND | MACHINE_APM | MACHINE_ACPI | MACHINE_GAMEPORT | MACHINE_USB | MACHINE_VIDEO, /* Internal video, ATI 3D Rage Pro PCI */
         .ram       = {
             .min  = 8192,
             .max  = 524288,
@@ -25427,7 +25620,7 @@ const machine_t machines[] = {
         .device                   = &ms6147_device,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &es1371_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "Packard Bell Tempest", "Fujitsu ErgoPro e368", "" }
@@ -26764,7 +26957,7 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_AGP | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_SOUND, /* Machine has internal video: ATI Rage Pro Turbo AGP (not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_SOUND | MACHINE_VIDEO, /* Internal video, ATI Rage Pro Turbo AGP */
         .ram       = {
             .min  = 8192,
             .max  = 524288,
@@ -26785,7 +26978,7 @@ const machine_t machines[] = {
         .device                   = NULL,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &ess_solo1_onboard_device,
         .net_device               = NULL,
         .aliases                  = { "Acer AcerPower 6200", "" }
@@ -26813,7 +27006,7 @@ const machine_t machines[] = {
             .max_multi   = 8.0
         },
         .bus_flags = MACHINE_PS2_NOISA | MACHINE_BUS_USB,
-        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_NIC | MACHINE_SOUND, /* Machine has internal video: ATI Rage Pro Turbo AGP (not yet implemented) */
+        .flags     = MACHINE_AGP_INTERNAL | MACHINE_IDE_DUAL | MACHINE_VIDEO | MACHINE_APM | MACHINE_ACPI | MACHINE_USB | MACHINE_NIC | MACHINE_SOUND, /* Machine has internal video: ATI Rage Pro Turbo AGP */
         .ram       = {
             .min  = 16384, /* 8 MB RAM is detected as 16 MB by DOS. 16 MB is detected incorrectly by BIOS Setup but is otherwise fully functional */
             .max  = 524288,
@@ -26834,7 +27027,7 @@ const machine_t machines[] = {
         .device                   = NULL,
         .kbd_device               = NULL,
         .fdc_device               = NULL,
-        .vid_device               = NULL,
+        .vid_device               = &mach64ragepro_onboard_device,
         .snd_device               = &es1373_onboard_device,
         .net_device               = &i82559c_onboard_device,
         .aliases                  = { "Intel Bali", "" }
@@ -27948,9 +28141,16 @@ machine_has_flags_ex(uintptr_t flags)
     int ret = machine_has_flags(machine, flags);
 
     if (flags & MACHINE_PS2_KBC) {
-        if (machine_is_ps2 && (machines[machine].init != machine_at_pc5286_init))
+        if (machine_is_ps2 &&
+            (machines[machine].init != machine_at_pc5286_init) &&
+            (machines[machine].init != machine_at_spc4200p_init) &&
+            (machines[machine].init != machine_at_spc4216p_init) &&
+            (machines[machine].init != machine_at_spc4620p_init))
             ret |= MACHINE_PS2_KBC;
-        else if (machines[machine].init == machine_at_pc5286_init)
+        else if ((machines[machine].init == machine_at_pc5286_init) ||
+                 (machines[machine].init == machine_at_spc4200p_init) ||
+                 (machines[machine].init == machine_at_spc4216p_init) ||
+                 (machines[machine].init == machine_at_spc4620p_init))
             ret &= ~MACHINE_PS2_KBC;
     }
 

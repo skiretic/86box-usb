@@ -61,7 +61,7 @@ enum {
     VIDEO_AGP
 };
 
-typedef enum video_font_format_e 
+typedef enum video_font_format_e
 {
     FONT_FORMAT_MDA = 0,
     FONT_FORMAT_PC200 = 1,
@@ -394,6 +394,13 @@ extern const device_t mach64rage2_device;
 extern const device_t mach64rage2_onboard_device;
 extern const device_t mach64gtb_device;
 extern const device_t mach64gtb_onboard_device;
+extern const device_t mach64gtc_device;
+extern const device_t mach64gtc_agp_device;
+extern const device_t mach64ragepro_device;
+extern const device_t mach64ragepro_pci_device;
+extern const device_t mach64ragexl_pci_device;
+extern const device_t mach64ragelt_agp_device;
+extern const device_t mach64ragepro_onboard_device;
 extern const device_t mach64vt3_onboard_device;
 extern const device_t ati_rage128_pro_device;
 extern const device_t ati_xpert128_pci_device;
@@ -410,9 +417,7 @@ extern const device_t ati28800_wonder1024d_xl_plus_device;
 extern const device_t ati28800k_device;
 extern const device_t ati28800k_spc4620p_device;
 extern const device_t ati28800k_spc6033p_device;
-#    ifdef USE_XL24
 extern const device_t ati28800_wonderxl24_device;
-#    endif /* USE_XL24 */
 
 /* Bochs */
 extern const device_t bochs_svga_device;

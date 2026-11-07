@@ -9,8 +9,6 @@ name: CMake (Windows)
 
 on:
 
-  workflow_dispatch:
-
   push:
     paths:
       - src/**

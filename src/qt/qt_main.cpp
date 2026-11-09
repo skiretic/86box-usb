@@ -60,6 +60,7 @@ extern "C" {
 #include <86box/config.h>
 #include <86box/plat.h>
 #include <86box/ui.h>
+#include <86box/runctl.h>
 #include <86box/video.h>
 #include <86box/gdbstub.h>
 #include <86box/version.h>
@@ -114,7 +115,6 @@ extern void exit_pause(void);
 #endif
 
 bool cpu_thread_running = false;
-bool fast_forward = false;
 }
 
 #ifdef Q_OS_MACOS
@@ -478,6 +478,7 @@ main_thread_fn()
     frames                   = 0;
     debt_ns                  = 0;
     is_cpu_thread            = 1;
+    runctl_thread_started();
     while (!is_quit && cpu_thread_run) {
         /* See if it is time to run a frame of code. */
         const qint64 new_ns = elapsed_timer.nsecsElapsed();
@@ -491,7 +492,7 @@ main_thread_fn()
 #endif
         automation_poll();
         const int automation = automation_run_state();
-        if (((debt_ns >= quantum_ns) || fast_forward || (automation == AUTOMATION_RUN)) && !dopause && (automation != AUTOMATION_HOLD)) {
+        if (((debt_ns >= quantum_ns) || (runctl_mode() == RUN_MODE_FAST) || (automation == AUTOMATION_RUN)) && !dopause && (automation != AUTOMATION_HOLD)) {
             /*
              * Pace with one pc_run() per scheduler pass.
              * We intentionally avoid burst catch-up (multi-frame loop) because it can
@@ -521,7 +522,7 @@ main_thread_fn()
 
             if (automation == AUTOMATION_RUN)
                 debt_ns = 0; /* unpaced automation steps must not cause catch-up later */
-            else if (!fast_forward && debt_ns >= quantum_ns)
+            else if ((runctl_mode() != RUN_MODE_FAST) && debt_ns >= quantum_ns)
                 debt_ns -= quantum_ns;
             else
                 debt_ns = 0;
@@ -547,8 +548,7 @@ main_thread_fn()
                 debugger_reset_end();
             }
 
-            if (dopause)
-                ack_pause();
+            runctl_safe_point();
 
             /* Keep answering a GDB client while the machine isn't running. */
             gdbstub_poll();
@@ -559,6 +559,7 @@ main_thread_fn()
 
     cpu_thread_running = false;
     is_quit            = 1;
+    runctl_thread_exiting();
     for (uint8_t i = 1; i < GFXCARD_MAX; i++) {
         if (gfxcard[i]) {
             ui_deinit_monitor(i);
@@ -968,20 +969,19 @@ main(int argc, char *argv[])
         pc_reset_hard_init();
         main_window->updateMouseStrings();
 
-        /* Set the PAUSE mode depending on the renderer. */
+        /* The VNC renderer starts paused until a client connects. */
 #ifdef USE_VNC
         if (vid_api == RENDERER_VNC)
-            plat_pause(1);
-        else
+            runctl_pause(RUN_PAUSE_REMOTE);
 #endif
-            plat_pause(0);
 
         cpu_thread_running = true;
+        runctl_thread_starting();
         main_thread        = new std::thread(main_thread_fn);
     });
 
     const auto ret = app.exec();
-    cpu_thread_run = 0;
+    runctl_request_stop();
     main_thread->join();
     pc_close(nullptr);
     endblit();

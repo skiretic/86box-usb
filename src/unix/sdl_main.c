@@ -33,6 +33,7 @@
 #include <86box/keyboard.h>
 #include <86box/mouse.h>
 #include <86box/plat.h>
+#include <86box/runctl.h>
 #include <86box/thread.h>
 #include <86box/timer.h>
 #include <86box/nvr.h>
@@ -53,7 +54,6 @@ int             update_icons;
 int             kbd_req_capture;
 int             hide_status_bar;
 int             hide_tool_bar;
-bool            fast_forward = false;
 int             fixed_size_x = 640;
 int             fixed_size_y = 480;
 extern int      title_set;
@@ -201,6 +201,7 @@ main_thread(UNUSED(void *param))
 
     
     is_cpu_thread = 1;
+    runctl_thread_started();
 
 #ifdef USE_SDL2_LIB
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
@@ -228,10 +229,10 @@ main_thread(UNUSED(void *param))
         old_time = new_time;
         automation_poll();
         const int automation = automation_run_state();
-        if ((drawits > 0 || fast_forward || (automation == AUTOMATION_RUN)) && !dopause && (automation != AUTOMATION_HOLD)) {
+        if ((drawits > 0 || (runctl_mode() == RUN_MODE_FAST) || (automation == AUTOMATION_RUN)) && !dopause && (automation != AUTOMATION_HOLD)) {
             /* Yes, so do one frame now. */
             drawits -= force_10ms ? 10 : 1;
-            if (drawits > 50 || fast_forward || (automation == AUTOMATION_RUN))
+            if (drawits > 50 || (runctl_mode() == RUN_MODE_FAST) || (automation == AUTOMATION_RUN))
                 drawits = 0;
 
             /* Run a block of code. */
@@ -246,6 +247,8 @@ main_thread(UNUSED(void *param))
             }
         }
         else {
+            runctl_safe_point();
+
             /* Keep answering a GDB client while the machine isn't running. */
             gdbstub_poll();
 
@@ -266,6 +269,7 @@ main_thread(UNUSED(void *param))
     }
 
     is_quit = 1;
+    runctl_thread_exiting();
 }
 
 thread_t *thMain = NULL;
@@ -280,6 +284,7 @@ do_start(void)
     timer_freq = SDL_GetPerformanceFrequency();
 
     /* Start the emulator, really. */
+    runctl_thread_starting();
     thMain = thread_create(main_thread, NULL);
 }
 
@@ -408,9 +413,6 @@ main(int argc, char **argv)
 
     /* Fire up the machine. */
     pc_reset_hard_init();
-
-    /* Set the PAUSE mode depending on the renderer. */
-    plat_pause(0);
 
     /* Initialize the rendering window, or fullscreen. */
     do_start();

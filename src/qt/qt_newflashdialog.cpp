@@ -156,9 +156,13 @@ NewFlashDialog::updateOk()
 void
 NewFlashDialog::accept()
 {
-    const QString  name  = lineEditFile->text();
-    const uint64_t bytes = sizeBytes();
-    const int      fs    = comboBoxFormat->currentData().toInt();
+    /* A typed name without a folder is in the VM's folder, where the image
+       is created (plat_fopen64 resolves it there), so that is also where
+       an existing image must be looked for. */
+    const QFileInfo fi(lineEditFile->text());
+    const QString   name  = fi.isRelative() ? (usr_path + fi.filePath()) : fi.filePath();
+    const uint64_t  bytes = sizeBytes();
+    const int       fs    = comboBoxFormat->currentData().toInt();
 
     if (QFileInfo::exists(name) &&
         (QMessageBox::warning(this, tr("New USB flash drive"), tr("%1 already exists. Replace it?").arg(name),

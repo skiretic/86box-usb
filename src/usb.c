@@ -2619,6 +2619,8 @@ usb_slot_wanted(int slot)
     return ((slot >= 0) && (slot < USB_SLOTS)) ? !(atomic_load(&usb_slot_unplugged) & (1 << slot)) : 0;
 }
 
+static void usb_slots_keep_layout(int only);
+
 void
 usb_slot_want(int slot, int connected)
 {
@@ -2627,8 +2629,20 @@ usb_slot_want(int slot, int connected)
 
     if (connected)
         atomic_fetch_and(&usb_slot_unplugged, ~(1 << slot));
-    else
+    else {
+        /* The ports of a hub are numbered after the port the hub is in,
+           and the devices and flash drives left in them are saved under
+           those numbers. The hub keeps that port as its saved port, so
+           that after a restart or a hard reset its ports are listed under
+           the same numbers while it is still unplugged, and what waits in
+           them stays there instead of moving to another port. It is taken
+           now, from the ports the user sees, because a hard reset asked
+           for before the unplug is carried out rebuilds the hub off its
+           port first. */
+        if (usb_slot_is_hub(slot))
+            usb_slots_keep_layout(slot);
         atomic_fetch_or(&usb_slot_unplugged, 1 << slot);
+    }
     atomic_store(&usb_hotplug_pending, 1);
 }
 
@@ -2732,9 +2746,10 @@ usb_slots_rehome(const char *from, const char *to)
 
 /* The layout the user sees is the one that comes back at the next start:
    once the user moves anything, every device on a port keeps that port,
-   not only the one moved. A port already saved is left alone. */
+   not only the one moved. A port already saved is left alone. With only
+   set to a slot, that slot alone keeps its port. */
 static void
-usb_slots_keep_layout(void)
+usb_slots_keep_layout(int only)
 {
     char     labels[USB_SLOTS][USB_PORT_LABEL];
     mutex_t *m = atomic_load(&usb_port_mutex);
@@ -2754,7 +2769,7 @@ usb_slots_keep_layout(void)
 
     m = usb_slot_lock();
     for (int s = 0; s < USB_SLOTS; s++) {
-        if ((usb_slot_ports[s][0] == '\0') && (labels[s][0] != '\0'))
+        if (((only < 0) || (s == only)) && (usb_slot_ports[s][0] == '\0') && (labels[s][0] != '\0'))
             memcpy(usb_slot_ports[s], labels[s], USB_PORT_LABEL);
     }
     thread_release_mutex(m);
@@ -2771,7 +2786,7 @@ usb_slot_move(int slot, const char *label)
     if ((slot < 0) || (slot >= USB_SLOTS) || (label == NULL))
         return;
 
-    usb_slots_keep_layout();
+    usb_slots_keep_layout(-1);
 
     /* The devices and sticks on the hub go with it, so what was saved for
        hub port n under the old root port is saved under the new one. The
@@ -2921,22 +2936,6 @@ usb_hotplug_process(void)
             usb_slot_attach(dev, i);
         } else if (!usb_slot_wanted(i) && (dev->port != NULL)) {
             usb_trace(USB_LOG_REG, -1, "USB %s: unplugged", dev->name);
-            /* The ports of a hub are numbered after the port the hub is in,
-               and the devices and flash drives left in them are saved under
-               those numbers. The hub keeps that port as its saved port, so
-               that after a restart its ports are listed under the same
-               numbers while it is still unplugged, and what waits in them
-               stays there instead of moving to another port. */
-            if (usb_slot_is_hub(i)) {
-                char     at[USB_PORT_LABEL];
-                mutex_t *m;
-
-                usb_port_label(dev, at, sizeof(at));
-                m = usb_slot_lock();
-                if (usb_slot_ports[i][0] == '\0')
-                    memcpy(usb_slot_ports[i], at, USB_PORT_LABEL);
-                thread_release_mutex(m);
-            }
             usb_unplug(dev);
         }
     }

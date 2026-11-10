@@ -2356,15 +2356,28 @@ usb_ports_enum(usb_port_ref_t *out)
     for (int s = 0; s < USB_SLOTS; s++) {
         usb_dev_t *hub = usb_slots[s].dev;
         void      *at;
+        char       saved[USB_PORT_LABEL];
+        mutex_t   *m;
 
         if ((hub == NULL) || (hub->ops->n_ports == NULL))
             continue;
 
         /* A hub unplugged by the user keeps its ports, under its last root
-           port; they are out of order until it is plugged back in. */
+           port; they are out of order until it is plugged back in. A hub that
+           has been on no port since the machine started (it was unplugged at
+           the start) keeps them under its saved port, so the flash drives
+           saved on it wait there instead of going to other ports. */
         at = (hub->port != NULL) ? hub->port : hub->home_port;
+        saved[0] = '\0';
+        if (at == NULL) {
+            m = usb_slot_lock();
+            memcpy(saved, usb_slot_ports[s], USB_PORT_LABEL);
+            thread_release_mutex(m);
+        }
         for (int r = 0; r < roots; r++) {
-            if ((at == NULL) || (out[r].port != at) || (hub->parent != NULL) || (hub->home_parent != NULL))
+            if ((hub->parent != NULL) || (hub->home_parent != NULL))
+                continue;
+            if ((at != NULL) ? (out[r].port != at) : ((saved[0] == '\0') || strcmp(out[r].label, saved)))
                 continue;
             for (int i = 0; (i < hub->ops->n_ports(hub)) && (n < USB_PORTS_MAX); i++, n++) {
                 out[n].hub   = hub;
@@ -2458,7 +2471,10 @@ usb_port_attach(usb_dev_t *udev, const char *label)
 
         if (strcmp(r->label, label) != 0)
             continue;
-        if (!r->on || (usb_port_ref_dev(r) != NULL))
+        /* A port of a hub that is unplugged is not working, but a device
+           can still sit in it and wait for the hub, as when the hub is
+           unplugged with the device in it. */
+        if ((!r->on && ((r->hub == NULL) || usb_dev_on_bus(r->hub))) || (usb_port_ref_dev(r) != NULL))
             return 0;
 
         if (r->hub != NULL) {
@@ -2905,6 +2921,22 @@ usb_hotplug_process(void)
             usb_slot_attach(dev, i);
         } else if (!usb_slot_wanted(i) && (dev->port != NULL)) {
             usb_trace(USB_LOG_REG, -1, "USB %s: unplugged", dev->name);
+            /* The ports of a hub are numbered after the port the hub is in,
+               and the devices and flash drives left in them are saved under
+               those numbers. The hub keeps that port as its saved port, so
+               that after a restart its ports are listed under the same
+               numbers while it is still unplugged, and what waits in them
+               stays there instead of moving to another port. */
+            if (usb_slot_is_hub(i)) {
+                char     at[USB_PORT_LABEL];
+                mutex_t *m;
+
+                usb_port_label(dev, at, sizeof(at));
+                m = usb_slot_lock();
+                if (usb_slot_ports[i][0] == '\0')
+                    memcpy(usb_slot_ports[i], at, USB_PORT_LABEL);
+                thread_release_mutex(m);
+            }
             usb_unplug(dev);
         }
     }

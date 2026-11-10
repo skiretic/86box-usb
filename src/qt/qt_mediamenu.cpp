@@ -352,18 +352,38 @@ MediaMenu::refresh(QMenu *parentMenu)
        machine has started; the items are made again each time the submenu
        opens, from what is in the port then. */
     usbPortMenus.clear();
+    usbPortParent  = parentMenu;
+    usbPortsBefore = parentMenu->addAction(tr("Clear image &history"), [this]() { clearImageHistory(); });
     {
         static usb_port_info_t ports[USB_PORTS_MAX];
-        const int              n = usb_ports_get(ports, USB_PORTS_MAX);
 
-        for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
-            auto *menu = parentMenu->addMenu("");
-            connect(menu, &QMenu::aboutToShow, this, [this, k] { usbPortUpdateMenu(k); });
-            usbPortMenus[k] = menu;
-            usbPortUpdateMenu(k);
-        }
+        usbPortMenusFollow(usb_ports_get(ports, USB_PORTS_MAX));
     }
-    parentMenu->addAction(tr("Clear image &history"), [this]() { clearImageHistory(); });
+}
+
+/* Ports can appear after the menus were made: a hub that was unplugged at
+   the start, with no port saved for it, lists its ports only once it is
+   plugged in. Each port up to n gets its submenu, made when it is first
+   needed; a submenu past n (its hub went away) is hidden. */
+void
+MediaMenu::usbPortMenusFollow(int n)
+{
+    if ((usbPortParent == nullptr) || (usbPortsBefore == nullptr))
+        return;
+
+    for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
+        if (usbPortMenus.contains(k))
+            continue;
+        auto *menu = new QMenu(usbPortParent);
+        usbPortParent->insertMenu(usbPortsBefore, menu);
+        connect(menu, &QMenu::aboutToShow, this, [this, k] { usbPortUpdateMenu(k); });
+        usbPortMenus[k] = menu;
+        usbPortUpdateMenu(k);
+    }
+    for (auto it = usbPortMenus.begin(); it != usbPortMenus.end(); ++it) {
+        if (it.key() >= n)
+            it.value()->menuAction()->setVisible(false);
+    }
 }
 
 void

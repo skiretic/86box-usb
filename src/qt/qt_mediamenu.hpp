@@ -83,6 +83,7 @@ public:
     void usbUpdateMenu(int slot);
 
     /* USB ports: plug a flash drive into port, or swap or unplug it. */
+    void    usbPortMenusFollow(int n);
     void    usbPortUpdateMenu(int port);
     void    usbPortPlug(const QString &label, const QString &fn, bool wp);
     void    usbPortNewImage(const QString &label);
@@ -109,6 +110,8 @@ private:
     QMap<int, QMenu *> netMenus;
     QMap<int, QMenu *> usbMenus;
     QMap<int, QMenu *> usbPortMenus;
+    QMenu             *usbPortParent  = nullptr;
+    QAction           *usbPortsBefore = nullptr; /* the port submenus go before it */
 
     QString                 getMediaOpenDirectory();
     ui::MediaHistoryManager mhm;

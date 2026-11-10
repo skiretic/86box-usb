@@ -467,6 +467,7 @@ struct MachineStatus::States {
         int                    where = -1;
 
         usbMenu->clear();
+        MediaMenu::ptr->usbPortMenusFollow(n);
         for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
             if ((ports[k].state == USB_PORT_OFF) || !MediaMenu::ptr->usbPortMenus.contains(k))
                 continue;
@@ -751,6 +752,7 @@ MachineStatus::refreshIcons()
         const int              n  = usb_ports_get(ports, USB_PORTS_MAX);
         bool                   on = false;
 
+        MediaMenu::ptr->usbPortMenusFollow(n);
         for (int k = 0; (k < n) && (k < USB_PORTS_MAX); k++) {
             if (!MediaMenu::ptr->usbPortMenus.contains(k))
                 continue;

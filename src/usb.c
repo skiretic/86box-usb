@@ -2748,6 +2748,8 @@ void
 usb_slot_move(int slot, const char *label)
 {
     char     from[USB_PORT_LABEL];
+    char     saved[USB_PORT_LABEL];
+    int      pending;
     mutex_t *m;
 
     if ((slot < 0) || (slot >= USB_SLOTS) || (label == NULL))
@@ -2756,9 +2758,23 @@ usb_slot_move(int slot, const char *label)
     usb_slots_keep_layout();
 
     /* The devices and sticks on the hub go with it, so what was saved for
-       hub port n under the old root port is saved under the new one. */
-    if (usb_slot_is_hub(slot) && usb_hub_root_label(from))
-        usb_slots_rehome(from, label);
+       hub port n under the old root port is saved under the new one. The
+       old root port is the one the hub's ports are listed under, unless an
+       earlier move is still queued (both made while the machine is paused):
+       its ports were then already renumbered under that move's port, which
+       is the hub's saved port. With the hub's ports not listed at all (the
+       hub unplugged), the saved port is all there is to go by. */
+    if (usb_slot_is_hub(slot)) {
+        m = usb_slot_lock();
+        pending = (usb_slot_moves[slot][0] != '\0');
+        memcpy(saved, usb_slot_ports[slot], USB_PORT_LABEL);
+        thread_release_mutex(m);
+
+        if (!pending && usb_hub_root_label(from))
+            usb_slots_rehome(from, label);
+        else if (saved[0] != '\0')
+            usb_slots_rehome(saved, label);
+    }
 
     m = usb_slot_lock();
     snprintf(usb_slot_ports[slot], USB_PORT_LABEL, "%s", label);

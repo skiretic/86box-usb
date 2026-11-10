@@ -82,6 +82,7 @@ static const uint8_t usb_flash_dev_desc[18] = {
 typedef struct usb_flash_t {
     usb_msd_bot_t bot;
     char          fn[MAX_IMAGE_PATH_LEN];
+    char          label[USB_PORT_LABEL]; /* the saved port it was plugged in for */
     uint8_t       req_wp; /* the user asked for write protection */
     FILE         *fp;
     int           wp;     /* asked for, or the file is read-only */
@@ -757,7 +758,10 @@ usb_flash_cfg_drop(const usb_flash_cfg_t *e, int park)
    longer wanted where it is comes out, then each wanted image goes into its
    port. Swapping is both: the old stick leaves, the new one arrives. When
    the machine starts, a stick whose port is taken or gone goes to any free
-   port, and the config follows it there. */
+   port, and the config follows it there. A stick the controller moved on
+   its own (the chipset turned the controller off) stays where it went, as a
+   device does: it is still wanted under the saved port it was plugged in
+   for, which the config keeps for the next start. */
 void
 usb_flash_reconcile(int at_reset)
 {
@@ -779,8 +783,15 @@ usb_flash_reconcile(int at_reset)
             continue;
         usb_port_label(&s->bot.usb, label, sizeof(label));
         for (int i = 0; (i < USB_PORTS_MAX) && !keep; i++) {
-            keep = (want[i].fn[0] != '\0') && !want[i].parked && !strcmp(want[i].label, label) &&
-                   !strcmp(want[i].fn, s->fn) && (want[i].wp == s->req_wp);
+            if ((want[i].fn[0] == '\0') || want[i].parked || strcmp(want[i].fn, s->fn) || (want[i].wp != s->req_wp))
+                continue;
+            if (!strcmp(want[i].label, label)) {
+                /* Where it is now; after a hub move the saved port is the
+                   renumbered one. */
+                memcpy(s->label, want[i].label, USB_PORT_LABEL);
+                keep = 1;
+            } else
+                keep = !strcmp(want[i].label, s->label);
         }
         if (!keep) {
             usb_flash_sticks[k] = NULL;
@@ -803,7 +814,8 @@ usb_flash_reconcile(int at_reset)
                 continue;
             }
             usb_port_label(&usb_flash_sticks[k]->bot.usb, label, sizeof(label));
-            if (!strcmp(label, e->label) && !strcmp(usb_flash_sticks[k]->fn, e->fn))
+            if ((!strcmp(label, e->label) || !strcmp(usb_flash_sticks[k]->label, e->label)) &&
+                !strcmp(usb_flash_sticks[k]->fn, e->fn))
                 have = 1;
         }
         if (have || (slot < 0))
@@ -814,10 +826,12 @@ usb_flash_reconcile(int at_reset)
             usb_flash_cfg_drop(e, at_reset);
             continue;
         }
+        memcpy(s->label, e->label, USB_PORT_LABEL);
         if (usb_port_attach(&s->bot.usb, e->label))
             usb_trace(USB_LOG_REG, -1, "USB flash drive %s: plugged into port %s", e->fn, e->label);
         else if (at_reset && usb_attach_quiet(&s->bot.usb)) {
             usb_port_label(&s->bot.usb, label, sizeof(label));
+            memcpy(s->label, label, USB_PORT_LABEL);
             thread_wait_mutex(usb_flash_mutex);
             for (int c = 0; c < USB_PORTS_MAX; c++) {
                 if (!strcmp(usb_flash_cfg[c].label, e->label) && !strcmp(usb_flash_cfg[c].fn, e->fn))

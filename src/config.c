@@ -1551,8 +1551,11 @@ load_usb_flash_drives(void)
     for (int i = 0; i < MAX_PREV_IMAGES; i++) {
         sprintf(temp, "usb_flash_image_history_%02i", i + 1);
         p = ini_section_get_string(cat, temp, NULL);
-        if ((p != NULL) && load_image_file(usb_flash_history[i], p, NULL))
+        if (p == NULL)
+            continue;
+        if (load_image_file(fn, p, NULL))
             fatal("Configuration: Length of usb_flash_image_history_%02i is more than %i\n", i + 1, MAX_IMAGE_PATH_LEN - 1);
+        usb_flash_history_set(i, fn);
     }
 }
 
@@ -4319,10 +4322,9 @@ save_usb_flash_drives(void)
 
     for (int i = 0; i < MAX_PREV_IMAGES; i++) {
         sprintf(temp, "usb_flash_image_history_%02i", i + 1);
-        if (usb_flash_history[i][0] == 0x00)
+        if (!usb_flash_history_get(i, path, sizeof(path)))
             ini_section_delete_var(cat, temp);
         else {
-            snprintf(path, sizeof(path), "%s", usb_flash_history[i]);
             save_image_file(cat, temp, path);
         }
     }

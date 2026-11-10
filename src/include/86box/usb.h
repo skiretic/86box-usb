@@ -102,8 +102,11 @@ extern void usb_flash_cfg_set(int i, const char *label, const char *fn, uint8_t 
 /* The hub moved from root port from to root port to: its sticks keep their
    hub port numbers. */
 extern void usb_flash_cfg_rehome(const char *from, const char *to);
-/* Images used before, newest first, for the GUI's recent image lists. */
-extern char usb_flash_history[MAX_PREV_IMAGES][MAX_IMAGE_PATH_LEN];
+/* Images used before, newest first, for the GUI's recent image lists:
+   entry i into fn (returns 0 when it is empty), set it, clear them all. */
+extern int  usb_flash_history_get(int i, char *fn, int n);
+extern void usb_flash_history_set(int i, const char *fn);
+extern void usb_flash_history_clear(void);
 /* GUI thread: put a stick with fn into port label (swapping out any stick
    there), or with fn NULL or empty, unplug it. Done on the emulation
    thread. */

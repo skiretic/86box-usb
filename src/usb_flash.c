@@ -547,7 +547,9 @@ typedef struct usb_flash_cfg_t {
     uint8_t parked;
 } usb_flash_cfg_t;
 
-char usb_flash_history[MAX_PREV_IMAGES][MAX_IMAGE_PATH_LEN];
+/* The recent images, under usb_flash_mutex: the GUI changes the list while
+   a config save may be reading it on the emulation thread. */
+static char usb_flash_history[MAX_PREV_IMAGES][MAX_IMAGE_PATH_LEN];
 
 static usb_flash_cfg_t usb_flash_cfg[USB_PORTS_MAX];
 static usb_flash_cfg_t usb_flash_want_copy[USB_PORTS_MAX];
@@ -621,7 +623,8 @@ usb_flash_cfg_rehome(const char *from, const char *to)
     thread_release_mutex(usb_flash_mutex);
 }
 
-/* The newest image goes to the top of the recent list; GUI thread. */
+/* The newest image goes to the top of the recent list; GUI thread, with
+   usb_flash_mutex held. */
 static void
 usb_flash_history_add(const char *fn)
 {
@@ -633,6 +636,44 @@ usb_flash_history_add(const char *fn)
     }
     memmove(usb_flash_history[1], usb_flash_history[0], (size_t) i * MAX_IMAGE_PATH_LEN);
     snprintf(usb_flash_history[0], MAX_IMAGE_PATH_LEN, "%s", fn);
+}
+
+int
+usb_flash_history_get(int i, char *fn, int n)
+{
+    int ret;
+
+    if ((i < 0) || (i >= MAX_PREV_IMAGES) || (usb_flash_mutex == NULL))
+        return 0;
+
+    thread_wait_mutex(usb_flash_mutex);
+    ret = (usb_flash_history[i][0] != '\0');
+    snprintf(fn, n, "%s", usb_flash_history[i]);
+    thread_release_mutex(usb_flash_mutex);
+
+    return ret;
+}
+
+void
+usb_flash_history_set(int i, const char *fn)
+{
+    if ((i < 0) || (i >= MAX_PREV_IMAGES) || (usb_flash_mutex == NULL))
+        return;
+
+    thread_wait_mutex(usb_flash_mutex);
+    snprintf(usb_flash_history[i], MAX_IMAGE_PATH_LEN, "%s", fn);
+    thread_release_mutex(usb_flash_mutex);
+}
+
+void
+usb_flash_history_clear(void)
+{
+    if (usb_flash_mutex == NULL)
+        return;
+
+    thread_wait_mutex(usb_flash_mutex);
+    memset(usb_flash_history, 0x00, sizeof(usb_flash_history));
+    thread_release_mutex(usb_flash_mutex);
 }
 
 void
@@ -671,10 +712,10 @@ usb_port_flash_want(const char *label, const char *fn, uint8_t wp)
             usb_flash_cfg[at].wp = wp;
         }
     }
-    thread_release_mutex(usb_flash_mutex);
-
     if (plug)
         usb_flash_history_add(fn);
+    thread_release_mutex(usb_flash_mutex);
+
     usb_hotplug_kick();
 }
 

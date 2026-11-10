@@ -966,7 +966,7 @@ MediaMenu::clearImageHistory()
 {
     mhm.clearImageHistory();
     /* The USB flash drives keep their own recent list. */
-    memset(usb_flash_history, 0x00, sizeof(usb_flash_history));
+    usb_flash_history_clear();
     ui_sb_update_panes();
 }
 
@@ -1795,7 +1795,11 @@ MediaMenu::usbPortUpdateMenu(int port)
     }
 
     for (int i = 0; i < MAX_PREV_IMAGES; i++) {
-        const QString fn = QString::fromUtf8(usb_flash_history[i]);
+        char recent[MAX_IMAGE_PATH_LEN];
+
+        if (!usb_flash_history_get(i, recent, sizeof(recent)))
+            continue;
+        const QString fn = QString::fromUtf8(recent);
 
         if (fn.isEmpty())
             continue;

@@ -2461,6 +2461,28 @@ usb_ports_get(usb_port_info_t *ports, int max)
 }
 
 int
+usb_port_flash_image(const char *label, char *fn, int n)
+{
+    mutex_t *m   = atomic_load(&usb_port_mutex);
+    int      ret = 0;
+
+    fn[0] = '\0';
+    if (m == NULL)
+        return 0;
+
+    thread_wait_mutex(m);
+    for (int k = 0; (k < usb_port_snap_n) && !ret; k++) {
+        if ((usb_port_snap[k].state == USB_PORT_FLASH) && !strcmp(usb_port_snap[k].label, label)) {
+            snprintf(fn, n, "%s", usb_port_snap[k].image);
+            ret = 1;
+        }
+    }
+    thread_release_mutex(m);
+
+    return ret;
+}
+
+int
 usb_port_attach(usb_dev_t *udev, const char *label)
 {
     usb_port_ref_t refs[USB_PORTS_MAX];

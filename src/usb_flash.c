@@ -680,11 +680,20 @@ usb_flash_history_clear(void)
 void
 usb_port_flash_want(const char *label, const char *fn, uint8_t wp)
 {
-    int plug = (fn != NULL) && (fn[0] != '\0');
-    int at   = -1;
+    int  plug = (fn != NULL) && (fn[0] != '\0');
+    int  at   = -1;
+    int  in   = -1;
+    char here[MAX_IMAGE_PATH_LEN];
+    int  shown;
 
     if (usb_flash_mutex == NULL)
         return;
+
+    /* The request is for the port as the user sees it. A stick the
+       controller moved on its own (the chipset turned the controller off)
+       sits in a port other than its saved one, so its entry is found by the
+       image shown in this port: one image is one stick. */
+    shown = usb_port_flash_image(label, here, sizeof(here));
 
     thread_wait_mutex(usb_flash_mutex);
     for (int i = 0; i < USB_PORTS_MAX; i++) {
@@ -692,13 +701,17 @@ usb_port_flash_want(const char *label, const char *fn, uint8_t wp)
 
         if (e->fn[0] == '\0')
             continue;
-        if (!strcmp(e->label, label))
+        if (shown && !strcmp(e->fn, here))
+            in = i;
+        else if (!strcmp(e->label, label))
             at = i;
         /* One image is one stick: moving it to this port takes it out of
            the one it was in. */
         else if (plug && !strcmp(e->fn, fn))
             memset(e, 0x00, sizeof(usb_flash_cfg_t));
     }
+    if (in >= 0)
+        at = in;
     if (plug && (at < 0)) {
         for (int i = 0; (i < USB_PORTS_MAX) && (at < 0); i++) {
             if (usb_flash_cfg[i].fn[0] == '\0')

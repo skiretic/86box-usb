@@ -81,6 +81,9 @@ typedef struct usb_port_info_t {
 
 /* Copies the ports into ports (up to max); returns how many there are. */
 extern int usb_ports_get(usb_port_info_t *ports, int max);
+/* The image of the flash drive in port label as the ports were last listed;
+   returns 0 when there is none. */
+extern int usb_port_flash_image(const char *label, char *fn, int n);
 
 /* USB flash drives: a stick with a raw image, plugged into a port. The
    user plugs, swaps and unplugs them from the GUI by port; the config

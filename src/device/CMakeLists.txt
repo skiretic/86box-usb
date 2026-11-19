@@ -47,6 +47,7 @@ add_library(dev OBJECT
     kbc_3270pc.c
     kbc_at.c
     kbc_at_dev.c
+    kbc_at_upi42.c
     kbc_ps2_m25.c
     kbc_tvis.c
     kbc_xt.c
@@ -68,6 +69,7 @@ add_library(dev OBJECT
     mouse_bus.c
     mouse_ibm7690_tablet.c
     mouse_microtouch_touchscreen.c
+    mouse_elo_touchscreen.c
     mouse_ps2.c
     mouse_upc.c
     mouse_serial.c
@@ -92,6 +94,13 @@ add_library(dev OBJECT
     unittester.c
     zenith_scratchpad.c
     lightpen_pxl380.c
+    ../pcmcia/pcmcia.c
+    ../pcmcia/pcic_pd6722.c
+    ../pcmcia/net_te100pc16.c
+    ../pcmcia/pccard_cis.c
+    ../pcmcia/pccard_mfc.c
+    ../pcmcia/scsi_apa1460.c
+    ../pcmcia/pccard_cf.c
 )
 
 add_subdirectory(modem)
@@ -139,7 +148,4 @@ if(PCL)
     target_compile_definitions(dev PRIVATE USE_PCL)
 endif()
 
-if(WACOM)
-    target_compile_definitions(dev PRIVATE USE_WACOM)
-    target_sources(dev PRIVATE mouse_wacom_tablet.c)
-endif()
+target_sources(dev PRIVATE mouse_wacom_tablet.c)

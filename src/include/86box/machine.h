@@ -120,6 +120,7 @@
 #define MACHINE_USB               0x0000000080000000ULL /* sys has int USB */
 #define MACHINE_ZENITH            0x0000000100000000ULL /* sys is Zenith */
 #define MACHINE_IDE_INTERNAL      0x0000000800000000ULL /* sys int IDE only with the Internal controller */
+#define MACHINE_JAPANESE          0x0000001000000000ULL /* sys is Japanese: its DOS uses code page 932 */
 /* Combined flags. */
 #define MACHINE_LPT               (MACHINE_LPT_PRI | MACHINE_LPT_SEC | MACHINE_LPT_TER)
 #define MACHINE_UART              (MACHINE_UART_PRI | MACHINE_UART_SEC | \
@@ -376,6 +377,9 @@ typedef struct _machine_ {
     void                  *kbc_device;
 #endif /* EMU_DEVICE_H */
     uintptr_t              kbc_params;
+    /* Explicit UPI-42 keyboard controller firmware image path; NULL disables
+     * the firmware-based KBC for this machine. */
+    const char            *kbc_fwvers;
 #ifdef EMU_DEVICE_H
     const device_t        *nvr_device;
 #else
@@ -499,7 +503,15 @@ extern void            machine_init_gpio_acpi(void);
 extern uint32_t        machine_handle_gpio_acpi(uint8_t write, uint32_t val);
 
 /* Initialization functions for boards and systems. */
+
+/* machine_common_init_ex() and machine_at_common_init_ex() flags: the ways a board isn't a standard PC or AT, whose parts it sets up itself. */
+enum {
+    MACHINE_NONSTANDARD_DMA = 0x01, /* no 8237A DMA controllers or page registers, only the DMA core: its DMA unit registers itself with dma_set_controller() */
+    MACHINE_NONSTANDARD_PIT = 0x02  /* no standard 8253/8254 PIT: the board sets its timer up, refresh included */
+};
+
 extern void            machine_common_init(const machine_t *);
+extern void            machine_common_init_ex(const machine_t *, uint32_t flags);
 extern int             machine_ibm5140_init(const machine_t *);
 #ifdef EMU_DEVICE_H
 extern const device_t  ibm5140_device;
@@ -756,6 +768,8 @@ extern int             machine_at_fic4386vcv_init(const machine_t *);
 
 /* m_at_common.c */
 extern void            machine_at_common_init(const machine_t *);
+extern void            machine_at_common_init_ex(const machine_t *, uint32_t flags);
+extern void            machine_at_add_kbc(const machine_t *);
 extern void            machine_at_init(const machine_t *);
 extern void            machine_at_ps2_init(const machine_t *);
 extern void            machine_at_common_ide_init(const machine_t *);

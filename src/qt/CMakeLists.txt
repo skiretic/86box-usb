@@ -214,6 +214,10 @@ add_library(ui STATIC
     qt_settingsotherperipherals.cpp
     qt_settingsotherperipherals.hpp
     qt_settingsotherperipherals.ui
+    qt_settingspcmcia.cpp
+    qt_settingspcmcia.hpp
+    qt_pccard_menu.cpp
+    qt_pccard_menu.hpp
     qt_settings_bus_tracking.cpp
     qt_settings_bus_tracking.hpp
     qt_settings_completer.cpp
@@ -255,6 +259,9 @@ add_library(ui STATIC
     qt_soundgain.hpp
     qt_soundgain.cpp
     qt_soundgain.ui
+
+    qt_midilcd.hpp
+    qt_midilcd.cpp
 
     qt_styleoverride.cpp
     qt_styleoverride.hpp
@@ -387,10 +394,6 @@ endif()
 
 if(RTMIDI)
     target_compile_definitions(ui PRIVATE USE_RTMIDI)
-endif()
-
-if(WACOM)
-    target_compile_definitions(ui PRIVATE USE_WACOM)
 endif()
 
 if(WIN32)
@@ -527,7 +530,7 @@ if (LIBRASHADER)
     if (LIBRASHADER_STATIC)
         if (LIBRASHADER_STATIC_FIND_LIB)
             find_library(LIBRASHADER_STATIC_LIB liblibrashader_capi.a REQUIRED)
-            target_link_libraries(ui PRIVATE "${LIBRASHADER_STATIC_LIB}" ntdll userenv)
+            target_link_libraries(ui PRIVATE "${LIBRASHADER_STATIC_LIB}" ntdll userenv synchronization)
         else()
             target_link_libraries(ui PRIVATE librashader_capi)
         endif()

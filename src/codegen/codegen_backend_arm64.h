@@ -43,6 +43,9 @@
    flat or wide 32-bit stack with the carry of its end. A backend without
    them makes those tests with an add and a compare (CHECK_STACK_LIMITS). */
 #define CODEGEN_BACKEND_HAS_STACK_LIMIT_UOPS
+/* CALL far in real and virtual 8086 mode compiled in the IR (call_far_rm(),
+   codegen_ops_jump.c). A backend without it calls dynarec_call_far_w/l. */
+#define CODEGEN_BACKEND_HAS_CALL_FAR_RM
 /* The accesses and checks whose only way out of the block is a fault
    (codegen_uop_is_lazy) leave the dirty integer registers and the pending
    immediates in place and store them on that way out only, in a stub after
@@ -50,6 +53,11 @@
    back before each of those uops. */
 #define CODEGEN_BACKEND_HAS_LAZY_WRITEBACK
 void codegen_lazy_stubs_emit(codeblock_t *block);
+/* CMP_IMM_JZ_DEST_COLD, TEST_IMM_JZ_DEST_COLD and FCMP_JWITHIN_DEST_COLD, the
+   branches over a cold region (UOP_TYPE_COLD). A backend without them writes
+   back before those branches (CMP_IMM_JZ_DEST, FCMP_JWITHIN_DEST), and makes
+   the no-wait FERR# call unconditionally. */
+#define CODEGEN_BACKEND_HAS_COLD_REGION
 
 /* Blocks jump straight to their successor when nothing between them needs
    the C loop (codegen_link.h). The option below adds work to every loop

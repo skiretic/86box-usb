@@ -5,6 +5,7 @@
 #endif
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -264,6 +265,21 @@ plat_language_code_r(UNUSED(int id), UNUSED(char *outbuf), UNUSED(int len))
     return;
 }
 
+/* The SDL UI isn't translated; the host's language is what the locale says. */
+void
+plat_ui_language(char *outbuf, int len)
+{
+    static const char *vars[] = { "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG" };
+    outbuf[0]                 = '\0';
+    for (size_t i = 0; i < (sizeof(vars) / sizeof(vars[0])); i++) {
+        const char *v = getenv(vars[i]);
+        if (v && v[0]) {
+            snprintf(outbuf, len, "%s", v);
+            return;
+        }
+    }
+}
+
 /*
  * Path manipulation
  */
@@ -423,6 +439,23 @@ uint32_t
 plat_get_ticks(void)
 {
     return (uint32_t) (plat_get_ticks_common() / 1000);
+}
+
+uint64_t
+plat_get_ns(void)
+{
+    static uint64_t start;
+    static uint64_t freq;
+
+    if (!freq) {
+        start = SDL_GetPerformanceCounter();
+        freq  = SDL_GetPerformanceFrequency();
+    }
+
+    const uint64_t t = SDL_GetPerformanceCounter() - start;
+
+    /* Split, so t * 1e9 can't overflow. */
+    return ((t / freq) * 1000000000ULL) + (((t % freq) * 1000000000ULL) / freq);
 }
 
 void

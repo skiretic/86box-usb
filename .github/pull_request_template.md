@@ -1,11 +1,19 @@
+Motivation
+==========
+_Explain why you are making this change._
+
 Summary
 =======
 _Briefly describe what you are submitting._
 
+Testing
+=======
+_All code changes **must** be tested before submission. Please provide the detailed steps you took to test and validate your work. Screenshots, videos, and audio are especially welcome for changes that suit them._
+
 Checklist
 =========
 * [ ] Closes #xxx
-* [ ] I have tested my changes locally and validated that the functionality works as intended
+* [ ] I have tested my work with the steps I detailed above
 * [ ] I have discussed this with core contributors already
 * [ ] This pull request requires changes to the ROM set
   * [ ] I have opened a roms pull request - https://github.com/86Box/roms/pull/changeme/

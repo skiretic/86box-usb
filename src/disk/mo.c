@@ -39,6 +39,7 @@
 #include <86box/hdc_ide.h>
 #include <86box/mo.h>
 #include <86box/version.h>
+#include <86box/fat_image.h>
 
 #ifdef _WIN32
 #    include <windows.h>
@@ -96,25 +97,9 @@ static const mode_sense_pages_t mo_mode_sense_pages_default_scsi = { 0 };
 static const mode_sense_pages_t mo_mode_sense_pages_changeable   = { 0 };
 
 /*
-   Sony MD Data and Hi-MD pages, rebuilt from the decoded values in Aaru device reports 324 (MDM110), 273
-   (MDH-10) and 173 (Hi-MD WALKMAN).  Pages 20h, 21h and 1Bh are in the reports without values, so their lengths
-   are ESTIMATED and they are all zero.
+   Sony Hi-MD pages, rebuilt from the decoded values in Aaru device report 173.  Page 1Bh is in the report without
+   values, so its length is ESTIMATED and it is all zero.
  */
-static const mode_sense_pages_t mdm110_mode_sense_pages_default = {
-    { [0x01] = { GPMODE_R_W_ERROR_PAGE,  0x0a, 0x80, 0x03, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 },
-      [0x07] = { 0x07,                   0x0a, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-      [0x08] = { GPMODE_CACHING_PAGE,    0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-      [0x20] = { 0x20,                   0x0a } }
-};
-
-static const mode_sense_pages_t mdh10_mode_sense_pages_default = {
-    { [0x01] = { GPMODE_R_W_ERROR_PAGE,  0x0a, 0x80, 0x05, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00 },
-      [0x07] = { 0x07,                   0x0a, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-      [0x08] = { GPMODE_CACHING_PAGE,    0x0a, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
-      [0x20] = { 0x20,                   0x0a },
-      [0x21] = { 0x21,                   0x0a } }
-};
-
 static const mode_sense_pages_t himd_mode_sense_pages_default = {
     { [0x01] = { GPMODE_R_W_ERROR_PAGE,  0x0a, 0xa5, 0x06, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00 },
       [0x08] = { GPMODE_CACHING_PAGE,    0x0a, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -122,26 +107,16 @@ static const mode_sense_pages_t himd_mode_sense_pages_default = {
 };
 
 /* What can be changed: nothing, only the lengths are needed. */
-static const mode_sense_pages_t md_mode_sense_pages_changeable = {
+static const mode_sense_pages_t himd_mode_sense_pages_changeable = {
     { [0x01] = { GPMODE_R_W_ERROR_PAGE,  0x0a },
-      [0x07] = { 0x07,                   0x0a },
       [0x08] = { GPMODE_CACHING_PAGE,    0x0a },
-      [0x1b] = { 0x1b,                   0x0a },
-      [0x20] = { 0x20,                   0x0a },
-      [0x21] = { 0x21,                   0x0a } }
+      [0x1b] = { 0x1b,                   0x0a } }
 };
-
-#define IS_SONY_MD(t) (((t) == MO_TYPE_SONY_MDM110) || ((t) == MO_TYPE_SONY_MDH10) || ((t) == MO_TYPE_SONY_HIMD))
 
 static uint64_t
 mo_page_flags(const mo_t *dev)
 {
     switch (dev->drv->type) {
-        case MO_TYPE_SONY_MDM110:
-            return GPMODEP_R_W_ERROR_PAGE | (1ULL << 0x07) | GPMODEP_CACHING_PAGE | (1ULL << 0x20) | GPMODEP_ALL_PAGES;
-        case MO_TYPE_SONY_MDH10:
-            return GPMODEP_R_W_ERROR_PAGE | (1ULL << 0x07) | GPMODEP_CACHING_PAGE | (1ULL << 0x20) | (1ULL << 0x21) |
-                   GPMODEP_ALL_PAGES;
         case MO_TYPE_SONY_HIMD:
             return GPMODEP_R_W_ERROR_PAGE | GPMODEP_CACHING_PAGE | (1ULL << 0x1b) | GPMODEP_ALL_PAGES;
         default:
@@ -153,10 +128,6 @@ static const mode_sense_pages_t *
 mo_pages_default(const mo_t *dev)
 {
     switch (dev->drv->type) {
-        case MO_TYPE_SONY_MDM110:
-            return &mdm110_mode_sense_pages_default;
-        case MO_TYPE_SONY_MDH10:
-            return &mdh10_mode_sense_pages_default;
         case MO_TYPE_SONY_HIMD:
             return &himd_mode_sense_pages_default;
         default:
@@ -167,14 +138,14 @@ mo_pages_default(const mo_t *dev)
 static const mode_sense_pages_t *
 mo_pages_changeable(const mo_t *dev)
 {
-    return IS_SONY_MD(dev->drv->type) ? &md_mode_sense_pages_changeable : &mo_mode_sense_pages_changeable;
+    return (dev->drv->type == MO_TYPE_SONY_HIMD) ? &himd_mode_sense_pages_changeable : &mo_mode_sense_pages_changeable;
 }
 
-/* Can this disc not be written?  The 2336-byte MiniDisc media are audio discs to a computer. */
+/* Can this disc not be written? */
 static int
 mo_write_blocked(const mo_t *dev)
 {
-    return dev->drv->read_only || (dev->drv->sector_size == 2336);
+    return dev->drv->read_only;
 }
 
 /* The medium type of the mode parameter header. */
@@ -217,6 +188,7 @@ mo_load_abort(const mo_t *dev)
     if (dev->drv->fp)
         fclose(dev->drv->fp);
     dev->drv->fp           = NULL;
+    dev->drv->folder_image = 0;
     dev->drv->medium_size = 0;
     dev->drv->sector_size = 0;
     mo_eject(dev->id); /* Make sure the host OS knows we've rejected (and ejected) the image. */
@@ -241,12 +213,105 @@ mo_is_empty(const uint8_t id)
     return ret;
 }
 
+/* The volume layout for a folder mounted as a medium. M.O. disks are formatted without a partition
+   table, as Windows does; Hi-MD discs can't take a folder. Returns 0 if the medium can't take one. */
+static int
+mo_folder_params(int medium, fat_image_params_t *p)
+{
+    memset(p, 0, sizeof(fat_image_params_t));
+    if ((medium < 0) || (medium >= KNOWN_MO_DISK_TYPES))
+        return 0;
+    p->sectors           = mo_types[medium].sectors;
+    p->sector_size       = mo_types[medium].bytes_per_sector;
+    p->sectors_per_track = 32;
+    p->heads             = 64;
+    return 1;
+}
+
+/* A medium the drive can be given a folder on, for fat_image_pick(). */
+static int
+mo_folder_medium(void *opaque, int medium, fat_image_params_t *params)
+{
+    uint32_t type = *(const uint32_t *) opaque;
+
+    return mo_drive_types[type].supported_media[medium] && mo_folder_params(medium, params);
+}
+
+int
+mo_mount_folder(mo_t *dev, const char *fn, const int skip_insert, int *left_out)
+{
+    int          was_empty = mo_is_empty(dev->id);
+    const char  *path      = fn;
+    fat_image_t *image     = NULL;
+    FILE        *fp        = NULL;
+
+    if (left_out)
+        *left_out = 0;
+
+    if (!strncmp(path, "wp://", 5)) {
+        path += 5;
+        dev->drv->read_only = 1;
+    }
+    if (strlen(fn) >= sizeof(dev->drv->image_path)) {
+        mo_load_abort(dev);
+        return FAT_IMAGE_READ_ERROR;
+    }
+
+    fat_image_result_t result = fat_image_scan(path, &image);
+    if (result != FAT_IMAGE_OK) {
+        mo_load_abort(dev);
+        return result;
+    }
+
+    uint32_t           type = dev->drv->type;
+    fat_image_params_t params;
+    int                medium = fat_image_pick(image, KNOWN_MO_TYPES, mo_drive_types[type].default_media,
+                                               mo_folder_medium, &type, &params, &result);
+    if (medium >= 0) {
+        result = fat_image_write_temp(image, &params, "mo", &fp);
+        if ((result == FAT_IMAGE_OK) && left_out)
+            *left_out = fat_image_left_out(image);
+    }
+    fat_image_free(image);
+    if (result != FAT_IMAGE_OK) {
+        mo_load_abort(dev);
+        return result;
+    }
+
+    if (dev->drv->fp)
+        fclose(dev->drv->fp);
+    dev->drv->fp           = fp;
+    dev->drv->base         = 0;
+    dev->drv->medium_size  = mo_types[medium].sectors;
+    dev->drv->sector_size  = mo_types[medium].bytes_per_sector;
+    dev->drv->supported    = 1;
+    dev->drv->folder_image = 1;
+    if (dev->drv->image_path != fn)
+        snprintf(dev->drv->image_path, sizeof(dev->drv->image_path), "%s", fn);
+
+    if (!skip_insert) {
+        /* Signal media change to the emulated machine. */
+        mo_insert(dev);
+
+        /* The drive was previously empty, transition directly to UNIT ATTENTION. */
+        if (was_empty)
+            mo_insert(dev);
+    }
+    ui_sb_update_icon_wp(SB_MO | dev->id, dev->drv->read_only);
+    return FAT_IMAGE_OK;
+}
+
 void
 mo_load(const mo_t *dev, const char *fn, const int skip_insert)
 {
-    const int was_empty = mo_is_empty(dev->id);
-    int       ret       = 0;
-    int       offs      = 0;
+    int was_empty = mo_is_empty(dev->id);
+    int ret       = 0;
+    int offs      = 0;
+
+    if ((dev->drv != NULL) && fat_image_is_source(fn + ((strstr(fn, "wp://") == fn) ? 5 : 0))) {
+        (void) mo_mount_folder((mo_t *) dev, fn, skip_insert, NULL);
+        return;
+    }
 
     if (strstr(fn, "wp://") == fn) {
         offs                = 5;
@@ -340,7 +405,8 @@ mo_disk_unload(const mo_t *dev)
 {
     if ((dev->drv != NULL) && (dev->drv->fp != NULL)) {
         fclose(dev->drv->fp);
-        dev->drv->fp = NULL;
+        dev->drv->fp           = NULL;
+        dev->drv->folder_image = 0;
     }
 }
 
@@ -1784,12 +1850,11 @@ mo_command(scsi_common_t *sc, const uint8_t *cdb)
                     dev->buffer[7] = 0x20;    /* Wide bus supported */
                 }
                 dev->buffer[7] |= 0x02;
-                if (IS_SONY_MD(dev->drv->type)) {
-                    /* Reports 324 and 273 have no wide transfers.  Report 173 claims no standard. */
+                if (dev->drv->type == MO_TYPE_SONY_HIMD) {
+                    /* Report 173 has no wide transfers and claims no standard. */
                     dev->buffer[6] = 0x00;
                     dev->buffer[7] = 0x00;
-                    if (dev->drv->type == MO_TYPE_SONY_HIMD)
-                        dev->buffer[2] = 0x00;
+                    dev->buffer[2] = 0x00;
                 }
 
                 if (dev->drv->type > 0) {

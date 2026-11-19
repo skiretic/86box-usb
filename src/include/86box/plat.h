@@ -202,6 +202,7 @@ extern void    *plat_mmap(size_t size, uint8_t executable, uint8_t* large);
 extern void     plat_munmap(void *ptr, size_t size);
 extern uint64_t plat_timer_read(void);
 extern uint32_t plat_get_ticks(void);
+extern uint64_t plat_get_ns(void); /* monotonic host time; the pacing loop's clock */
 extern void     plat_delay_ms(uint32_t count);
 extern void     plat_mouse_capture(int on);
 extern int      plat_vidapi(const char *name);
@@ -210,6 +211,8 @@ extern void     plat_resize(int x, int y, int monitor_index);
 extern void     plat_resize_request(int x, int y, int monitor_index);
 extern int      plat_language_code(char *langcode);
 extern void     plat_language_code_r(int id, char *outbuf, int len);
+/* The language code of the UI as it is shown: the one chosen, or the host's for the system language. */
+extern void     plat_ui_language(char *outbuf, int len);
 extern void     plat_get_cpu_string(char *outbuf, uint8_t len);
 #ifdef _WIN32
 extern void     plat_get_system_directory(char *outbuf);
@@ -251,6 +254,9 @@ extern void mo_reload(uint8_t id);
 extern void tape_eject(uint8_t id);
 extern void tape_mount(uint8_t id, char *fn, uint8_t wp);
 extern void tape_reload(uint8_t id);
+extern void md_eject(uint8_t id);
+extern void md_mount(uint8_t id, char *fn, uint8_t wp);
+extern void md_reload(uint8_t id);
 extern int     plat_is_block_device(const char *path);
 extern int64_t plat_get_block_device_size(const char *path);
 

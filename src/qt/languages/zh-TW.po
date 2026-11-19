@@ -1,6 +1,6 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-11-10 10:50+0000\n"
+"PO-Revision-Date: 2026-11-16 02:46+0000\n"
 "Last-Translator: bozoscum <bozoscum@users.noreply.weblate.86box.net>\n"
 "Language-Team: Chinese (Traditional Han script) <https://weblate.86box.net/"
 "projects/86box/86box/zh_Hant/>\n"
@@ -52,7 +52,7 @@ msgstr "隱藏狀態列(&H)"
 msgid "Hide &toolbar"
 msgstr "隱藏工具列(&T)"
 
-msgid "&Resizeable window"
+msgid "&Resizable window"
 msgstr "視窗大小可調(&R)"
 
 msgid "R&emember size && position"
@@ -247,6 +247,42 @@ msgstr "偏好設定(&P)…"
 msgid "Sound &gain…"
 msgstr "音量增益(&G)…"
 
+msgid "M&IDI output device"
+msgstr "MIDI 輸出裝置(&I)"
+
+msgid "Restart &device"
+msgstr "重新啟動機器(&D)"
+
+msgid "Send MIDI &command"
+msgstr "傳送 MIDI 命令(&C)"
+
+msgid "&GM System On"
+msgstr "開啟 GM 系統(&G)"
+
+msgid "G&S Reset"
+msgstr "重設 GS (&S)"
+
+msgid "&XG System On"
+msgstr "開啟 XG 系統(&X)"
+
+msgid "&MT-32 Reset"
+msgstr "重設 MT-32 (&M)"
+
+msgid "All &notes off"
+msgstr "關閉所有音符(&N)"
+
+msgid "Show MIDI &LCD"
+msgstr "顯示 MIDI LCD (&L)"
+
+msgid "MIDI LCD"
+msgstr "MIDI LCD"
+
+msgid "Always on &top"
+msgstr "固定最上層顯示 (&T)"
+
+msgid "&Close"
+msgstr "闗閉 (&C)"
+
 msgid "Begin trace"
 msgstr "開始追踪"
 
@@ -281,7 +317,7 @@ msgid "&Rewind to the beginning"
 msgstr "倒迴至起頭(&R)"
 
 msgid "&Fast forward to the end"
-msgstr "快進至結尾(&F)"
+msgstr "快轉至結尾(&F)"
 
 msgid "E&ject"
 msgstr "退出(&J)"
@@ -301,8 +337,8 @@ msgstr "卸載(&M)"
 msgid "Reload previous image"
 msgstr "載入上一個映像"
 
-msgid "&Folder…"
-msgstr "資料夾(&F)…"
+msgid "Mount &folder…"
+msgstr "掛載資料夾(&F)…"
 
 msgid "Preferences"
 msgstr "偏好設定"
@@ -414,6 +450,15 @@ msgstr "等待狀態 (WS):"
 
 msgid "MB"
 msgstr "MB"
+
+msgid "GB"
+msgstr ""
+
+msgid "%1 MB"
+msgstr ""
+
+msgid "%1 GB"
+msgstr ""
 
 msgid "Memory:"
 msgstr "記憶體:"
@@ -784,8 +829,8 @@ msgstr "磁帶機:"
 msgid "ISA RTC:"
 msgstr "ISA 實時時鐘:"
 
-msgid "ISA Memory Expansion"
-msgstr "ISA 記憶體擴充"
+msgid "ISA/MCA Memory Expansion"
+msgstr "ISA/MCA 記憶體擴充"
 
 msgid "ISA ROM Cards"
 msgstr "ISA ROM 擴充卡"
@@ -858,6 +903,9 @@ msgstr ""
 
 msgid "(empty)"
 msgstr "(空)"
+
+msgid "(not available)"
+msgstr ""
 
 msgid "All files"
 msgstr "所有檔案"
@@ -2560,6 +2608,9 @@ msgstr "SLI"
 msgid "Start Address"
 msgstr "起始位址"
 
+msgid "Allow RAM up to the system ROM"
+msgstr "允許主記憶體覆蓋系統 ROM"
+
 msgid "Contiguous Size"
 msgstr "連續大小"
 
@@ -3432,6 +3483,18 @@ msgstr "允許重編譯(&A)"
 msgid "&Fast forward"
 msgstr "快轉(&F)"
 
+msgid "Fast forward at startup"
+msgstr "啟動時快轉"
+
+msgid "Start new machines in fast forward"
+msgstr "開始新機器時快轉"
+
+msgid "Only affects machines created from now on. Each machine can be changed in its settings, under Machine > Performance."
+msgstr "僅影響現在及之後創建的機器。各別機器可於「機器 > 效能」設定頁中修改此一設定。"
+
+msgid "Fast forward at &startup"
+msgstr "啟動時快轉(&S)"
+
 msgid "Fast forward"
 msgstr "快轉"
 
@@ -3741,7 +3804,7 @@ msgid "Only RAM and video memory can be written."
 msgstr "僅主記憶體及顯示記憶體可被寫入。"
 
 msgid "not written (not writable RAM or video memory, or the emulator is busy)."
-msgstr "未寫入 (非寫入主記憶體或顯示記憶體，或模擬器忙碌中)。"
+msgstr "未寫入 (非可寫入之主記憶體或顯示記憶體，或模擬器忙碌中)。"
 
 msgid "The emulator is busy; try again."
 msgstr "模擬器忙碌中，請再試一次。"
@@ -3764,7 +3827,7 @@ msgstr "要求範圍內無映射記憶體。"
 msgid "The search is limited to %1 bytes."
 msgstr "限制於 %1 位元組中搜尋。"
 
-msgid "Searching memory..."
+msgid "Searching memory…"
 msgstr "搜尋記憶體…"
 
 msgid "The search was cancelled. The selection did not move."
@@ -3800,7 +3863,7 @@ msgstr "拷貝選取 (hex)"
 msgid "Copy selection (ASCII)"
 msgstr "拷貝選取 (ASCII)"
 
-msgid "Fill selection..."
+msgid "Fill selection…"
 msgstr "填入選取…"
 
 msgid "Copy address"
@@ -3809,7 +3872,7 @@ msgstr "拷貝位址"
 msgid "Disassemble here"
 msgstr "反組譯此處"
 
-msgid "Dump memory from here..."
+msgid "Dump memory from here…"
 msgstr "從此處傾印記憶體…"
 
 msgid "Memory viewer"
@@ -3839,7 +3902,7 @@ msgstr "執行"
 msgid "Live update"
 msgstr "實時更新"
 
-msgid "Dump..."
+msgid "Dump…"
 msgstr "傾印…"
 
 msgid "Commands"
@@ -3884,7 +3947,7 @@ msgstr "找尋下一個"
 msgid "Search downwards from the selection (F3)"
 msgstr "在選取中往後搜尋 (F3)"
 
-msgid "Range..."
+msgid "Range…"
 msgstr "範圍…"
 
 msgid "Search within an address range instead of all memory"
@@ -3983,7 +4046,7 @@ msgid "Stopped: %1"
 msgstr "停止: %1"
 
 msgid "The emulator is busy; the view was not updated."
-msgstr "模擬器忙碌；檢視未更新。"
+msgstr "模擬器忙碌中；檢視未更新。"
 
 msgid "Stopped at a breakpoint."
 msgstr "在中斷點停止。"
@@ -3994,7 +4057,7 @@ msgstr "單步執行後停止。"
 msgid "Stopped."
 msgstr "停止。"
 
-msgid "Stepping..."
+msgid "Stepping…"
 msgstr "單步執行…"
 
 msgid "Running."
@@ -4090,8 +4153,9 @@ msgstr "設置"
 msgid "cleared"
 msgstr "已清除"
 
-msgid "%1 breakpoint(s), linear addresses:"
-msgstr "%1 中斷點，線性位址:"
+msgid "%n breakpoint(s), linear addresses:"
+msgid_plural "%n breakpoints, linear addresses:"
+msgstr[0] "%1 中斷點，線性位址:"
 
 msgid "Pause the processor before accessing I/O ports."
 msgstr "存取 I/O 埠前暫停處理器。"
@@ -4101,9 +4165,6 @@ msgstr "未知的命令或不可用的參數。輸入 help 以取得語法。"
 
 msgid "Dump memory"
 msgstr "傾印記憶體"
-
-msgid "Browse..."
-msgstr "瀏覽…"
 
 msgid "Start (hex, register or seg:off):"
 msgstr "起始 (16 進制，暫存器或區段:偏移):"
@@ -4124,8 +4185,8 @@ msgid "Only RAM and other directly mapped memory is read. Unmapped and inaccessi
 msgstr "僅主記憶體及其他直接映射記憶體被讀取。未映射及不可存取之位元組未被讀取；在其"
 "位置以充填位元組顯示。"
 
-msgid "Binary files (*.bin);;All files (*)"
-msgstr "二進位檔 (*.bin)；全部檔案 (*)"
+msgid "Binary files"
+msgstr "二進位檔"
 
 msgid "The length must be a hex number above 0."
 msgstr "長度必須為非 0 之 16 進制數。"
@@ -4136,7 +4197,7 @@ msgstr "充填位元組必須為從 00 到 FF 的 16 進制數值。"
 msgid "Could not open %1 for writing."
 msgstr "無法開啟 %1 以寫入。"
 
-msgid "Dumping memory..."
+msgid "Dumping memory…"
 msgstr "記憶體傾印中…"
 
 msgid "Could not write to %1."
@@ -4274,8 +4335,8 @@ msgstr "關閉 (僅與 +VDR=1)"
 msgid "Caller ID between emulator instances (enable on both)"
 msgstr "模擬器實例間呼叫者識別 (雙方皆啟用)"
 
-msgid "Caller ID sent when dialling (number,name)"
-msgstr "撥號時傳送呼叫者識別 (門號，名稱)"
+msgid "Caller ID sent when dialing (number,name)"
+msgstr "撥號時傳送呼叫者識別 (門號,名稱)"
 
 msgid "Network to guest queue limit (back-pressure)"
 msgstr "網路至客戶端佇列限制 (回壓機制)"
@@ -4299,28 +4360,127 @@ msgid "TCP send timeout"
 msgstr "TCP 傳送逾時"
 
 msgid "Card:"
-msgstr ""
+msgstr "界面卡:"
 
 msgid "Hub:"
-msgstr ""
+msgstr "集線器:"
 
 msgid "Mass storage:"
-msgstr ""
+msgstr "大容量儲存裝置:"
 
 msgid "Its drives are hard disks, CD-ROM drives and other removable devices set up on their own pages, on bus SCSI, in the channels named \"USB Mass Storage\". Each drive is one logical unit, in channel order."
 msgstr ""
+"磁碟機包含硬碟機、光碟機以及其他抽取式裝置，各自於 SCSI "
+"匯流排有其專屬設置頁面中名為 \"USB大容量儲存裝置\" "
+"通道內。每個磁碟機為一個邏輯單元並按照通道順序排列。"
 
 msgid "Hard disks…"
-msgstr ""
+msgstr "硬碟…"
 
 msgid "CD-ROM drives…"
-msgstr ""
+msgstr "光碟機…"
 
 msgid "Other removable devices…"
-msgstr ""
+msgstr "其他抽取式裝罝…"
 
 msgid "4-port USB 1.1 hub"
-msgstr ""
+msgstr "四埠 USB 1.1 集線器"
 
 msgid "USB Mass Storage"
+msgstr "USB 大容量儲存裝置"
+
+msgid "Mount folder as a temporary floppy"
+msgstr "將資料夾載掛成臨時軟碟機"
+
+msgid "The selected drive does not support folder mounting."
+msgstr "選取的磁碟機不支援資料夾載掛。"
+
+msgid "The contents exceed the capacity of the configured floppy drive."
+msgstr "內容超出軟碟機組態的容量。"
+
+msgid "Mount folder as a temporary removable disk"
+msgstr ""
+
+msgid "Unable to mount folder or archive"
+msgstr ""
+
+msgid "The contents don't fit on any medium the drive takes, or a file is 4 GB or larger."
+msgstr ""
+
+msgid "There are too many files in the top folder for the root directory of the medium."
+msgstr ""
+
+msgid "The temporary image could not be written."
+msgstr ""
+
+msgid "There is not enough memory to build the image."
+msgstr ""
+
+msgid "The folder or archive could not be read."
+msgstr ""
+
+msgid "Archives"
+msgstr ""
+
+msgid "New USB flash drive"
+msgstr ""
+
+msgid "&New USB flash drive…"
+msgstr ""
+
+msgid "unplugged"
+msgstr ""
+
+msgid "&Unplug"
+msgstr ""
+
+msgid "&Unplug %1"
+msgstr ""
+
+msgid "Plug in %1 (%2)"
+msgstr ""
+
+msgid "&Move %1 to"
+msgstr ""
+
+msgid "Size:"
+msgstr ""
+
+msgid "Custom size:"
+msgstr ""
+
+msgid "None (blank)"
+msgstr ""
+
+msgid "FAT16"
+msgstr ""
+
+msgid "FAT32"
+msgstr ""
+
+msgid "Format:"
+msgstr ""
+
+msgid "Could not create %1."
+msgstr ""
+
+msgid "%1 already exists. Replace it?"
+msgstr ""
+
+msgid "USB port %1 (%2)"
+msgstr ""
+
+msgid "USB port"
+msgstr ""
+
+msgid "PCI card"
+msgstr ""
+
+msgid "hub"
+msgstr ""
+
+msgid "board"
+msgstr ""
+
+msgid "now in port %1"
 msgstr ""

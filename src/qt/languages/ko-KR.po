@@ -1,6 +1,6 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-09-01 17:51+0000\n"
+"PO-Revision-Date: 2026-11-14 02:27+0000\n"
 "Last-Translator: pc1412 <pc1412@gmail.com>\n"
 "Language-Team: Korean <https://weblate.86box.net/projects/86box/86box/ko/>\n"
 "Language: ko-KR\n"
@@ -51,7 +51,7 @@ msgstr "상태 바 숨기기(&H)"
 msgid "Hide &toolbar"
 msgstr "도구 모음 숨기기(&T)"
 
-msgid "&Resizeable window"
+msgid "&Resizable window"
 msgstr "창 크기 조절 가능(&R)"
 
 msgid "R&emember size && position"
@@ -151,13 +151,13 @@ msgid "4:&3 Integer scale"
 msgstr "4:3 정수배 확대(&3)"
 
 msgid "&Center"
-msgstr ""
+msgstr "중앙(&C)"
 
 msgid "4:3 Cen&ter"
-msgstr ""
+msgstr "4:3 중앙(&T)"
 
 msgid "4:3 Integer scale (&vertical)"
-msgstr ""
+msgstr "4:3 정수 배율(세로)(&V)"
 
 msgid "Inverted VGA monitor"
 msgstr "색상 반전된 VGA 모니터"
@@ -246,6 +246,42 @@ msgstr "환경설정(&P)…"
 msgid "Sound &gain…"
 msgstr "음량 증폭(&G)…"
 
+msgid "M&IDI output device"
+msgstr ""
+
+msgid "Restart &device"
+msgstr ""
+
+msgid "Send MIDI &command"
+msgstr ""
+
+msgid "&GM System On"
+msgstr ""
+
+msgid "G&S Reset"
+msgstr ""
+
+msgid "&XG System On"
+msgstr ""
+
+msgid "&MT-32 Reset"
+msgstr ""
+
+msgid "All &notes off"
+msgstr ""
+
+msgid "Show MIDI &LCD"
+msgstr ""
+
+msgid "MIDI LCD"
+msgstr ""
+
+msgid "Always on &top"
+msgstr ""
+
+msgid "&Close"
+msgstr ""
+
 msgid "Begin trace"
 msgstr "추적 시작하기"
 
@@ -300,8 +336,8 @@ msgstr "비었음(&M)"
 msgid "Reload previous image"
 msgstr "이전 이미지 다시 불러오기"
 
-msgid "&Folder…"
-msgstr "폴더(&F)…"
+msgid "Mount &folder…"
+msgstr "폴더 마운트(&F)…"
 
 msgid "Preferences"
 msgstr "환경설정"
@@ -414,35 +450,44 @@ msgstr "대기 상태:"
 msgid "MB"
 msgstr "MB"
 
+msgid "GB"
+msgstr ""
+
+msgid "%1 MB"
+msgstr ""
+
+msgid "%1 GB"
+msgstr ""
+
 msgid "Memory:"
 msgstr "메모리:"
 
 msgid "Synchronize with host clock"
-msgstr ""
+msgstr "호스트 시계와 동기화"
 
 msgid "Time zone:"
-msgstr ""
+msgstr "시간대:"
 
 msgid "Local"
-msgstr ""
+msgstr "현지 시간"
 
 msgid "UTC"
-msgstr ""
+msgstr "협정 시계시(UTC)"
 
 msgid "Date:"
-msgstr ""
+msgstr "날짜:"
 
 msgid "Match the host"
-msgstr ""
+msgstr "호스트와 일치"
 
 msgid "Offset the year by:"
-msgstr ""
+msgstr "연도 조정:"
 
 msgid "(currently %1)"
-msgstr ""
+msgstr "(현재 %1)"
 
 msgid "Always use the year:"
-msgstr ""
+msgstr "항상 사용할 연도:"
 
 msgid "Do not synchronize the date"
 msgstr ""
@@ -783,8 +828,8 @@ msgstr "테이프 드라이브:"
 msgid "ISA RTC:"
 msgstr "ISA RTC 카드:"
 
-msgid "ISA Memory Expansion"
-msgstr "ISA 메모리 확장 카드"
+msgid "ISA/MCA Memory Expansion"
+msgstr "ISA/MCA 메모리 확장 카드"
 
 msgid "ISA ROM Cards"
 msgstr "ISA ROM 카드"
@@ -858,6 +903,9 @@ msgstr ""
 
 msgid "(empty)"
 msgstr "(비었음)"
+
+msgid "(not available)"
+msgstr ""
 
 msgid "All files"
 msgstr "모든 파일"
@@ -2601,6 +2649,9 @@ msgstr "SLI"
 msgid "Start Address"
 msgstr "시작 주소"
 
+msgid "Allow RAM up to the system ROM"
+msgstr ""
+
 msgid "Contiguous Size"
 msgstr "연속 크기"
 
@@ -3476,6 +3527,18 @@ msgstr "재컴파일 허용(&A)"
 msgid "&Fast forward"
 msgstr "빠른 전진(&F)"
 
+msgid "Fast forward at startup"
+msgstr ""
+
+msgid "Start new machines in fast forward"
+msgstr ""
+
+msgid "Only affects machines created from now on. Each machine can be changed in its settings, under Machine > Performance."
+msgstr ""
+
+msgid "Fast forward at &startup"
+msgstr ""
+
 msgid "Fast forward"
 msgstr "빠른 전진"
 
@@ -3798,7 +3861,7 @@ msgstr ""
 msgid "The search is limited to %1 bytes."
 msgstr ""
 
-msgid "Searching memory..."
+msgid "Searching memory…"
 msgstr ""
 
 msgid "The search was cancelled. The selection did not move."
@@ -3834,7 +3897,7 @@ msgstr ""
 msgid "Copy selection (ASCII)"
 msgstr ""
 
-msgid "Fill selection..."
+msgid "Fill selection…"
 msgstr ""
 
 msgid "Copy address"
@@ -3843,7 +3906,7 @@ msgstr ""
 msgid "Disassemble here"
 msgstr ""
 
-msgid "Dump memory from here..."
+msgid "Dump memory from here…"
 msgstr ""
 
 msgid "Memory viewer"
@@ -3873,7 +3936,7 @@ msgstr ""
 msgid "Live update"
 msgstr ""
 
-msgid "Dump..."
+msgid "Dump…"
 msgstr ""
 
 msgid "Commands"
@@ -3918,7 +3981,7 @@ msgstr ""
 msgid "Search downwards from the selection (F3)"
 msgstr ""
 
-msgid "Range..."
+msgid "Range…"
 msgstr ""
 
 msgid "Search within an address range instead of all memory"
@@ -4026,7 +4089,7 @@ msgstr ""
 msgid "Stopped."
 msgstr ""
 
-msgid "Stepping..."
+msgid "Stepping…"
 msgstr ""
 
 msgid "Running."
@@ -4098,8 +4161,9 @@ msgstr ""
 msgid "cleared"
 msgstr ""
 
-msgid "%1 breakpoint(s), linear addresses:"
-msgstr ""
+msgid "%n breakpoint(s), linear addresses:"
+msgid_plural "%n breakpoints, linear addresses:"
+msgstr[0] ""
 
 msgid "Pause the processor before accessing I/O ports."
 msgstr ""
@@ -4108,9 +4172,6 @@ msgid "Unknown command or invalid arguments. Type help for syntax."
 msgstr ""
 
 msgid "Dump memory"
-msgstr ""
-
-msgid "Browse..."
 msgstr ""
 
 msgid "Start (hex, register or seg:off):"
@@ -4131,7 +4192,7 @@ msgstr ""
 msgid "Only RAM and other directly mapped memory is read. Unmapped and inaccessible bytes are not read; the fill byte is written in their place."
 msgstr ""
 
-msgid "Binary files (*.bin);;All files (*)"
+msgid "Binary files"
 msgstr ""
 
 msgid "The length must be a hex number above 0."
@@ -4143,7 +4204,7 @@ msgstr ""
 msgid "Could not open %1 for writing."
 msgstr ""
 
-msgid "Dumping memory..."
+msgid "Dumping memory…"
 msgstr ""
 
 msgid "Could not write to %1."
@@ -4281,7 +4342,7 @@ msgstr ""
 msgid "Caller ID between emulator instances (enable on both)"
 msgstr ""
 
-msgid "Caller ID sent when dialling (number,name)"
+msgid "Caller ID sent when dialing (number,name)"
 msgstr ""
 
 msgid "Network to guest queue limit (back-pressure)"
@@ -4330,4 +4391,100 @@ msgid "4-port USB 1.1 hub"
 msgstr ""
 
 msgid "USB Mass Storage"
+msgstr ""
+
+msgid "Mount folder as a temporary floppy"
+msgstr ""
+
+msgid "The selected drive does not support folder mounting."
+msgstr ""
+
+msgid "The contents exceed the capacity of the configured floppy drive."
+msgstr ""
+
+msgid "Mount folder as a temporary removable disk"
+msgstr ""
+
+msgid "Unable to mount folder or archive"
+msgstr ""
+
+msgid "The contents don't fit on any medium the drive takes, or a file is 4 GB or larger."
+msgstr ""
+
+msgid "There are too many files in the top folder for the root directory of the medium."
+msgstr ""
+
+msgid "The temporary image could not be written."
+msgstr ""
+
+msgid "There is not enough memory to build the image."
+msgstr ""
+
+msgid "The folder or archive could not be read."
+msgstr ""
+
+msgid "Archives"
+msgstr ""
+
+msgid "New USB flash drive"
+msgstr ""
+
+msgid "&New USB flash drive…"
+msgstr ""
+
+msgid "unplugged"
+msgstr ""
+
+msgid "&Unplug"
+msgstr ""
+
+msgid "&Unplug %1"
+msgstr ""
+
+msgid "Plug in %1 (%2)"
+msgstr ""
+
+msgid "&Move %1 to"
+msgstr ""
+
+msgid "Size:"
+msgstr ""
+
+msgid "Custom size:"
+msgstr ""
+
+msgid "None (blank)"
+msgstr ""
+
+msgid "FAT16"
+msgstr ""
+
+msgid "FAT32"
+msgstr ""
+
+msgid "Format:"
+msgstr ""
+
+msgid "Could not create %1."
+msgstr ""
+
+msgid "%1 already exists. Replace it?"
+msgstr ""
+
+msgid "USB port %1 (%2)"
+msgstr ""
+
+msgid "USB port"
+msgstr ""
+
+msgid "PCI card"
+msgstr ""
+
+msgid "hub"
+msgstr ""
+
+msgid "board"
+msgstr ""
+
+msgid "now in port %1"
 msgstr ""

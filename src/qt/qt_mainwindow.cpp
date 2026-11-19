@@ -12,11 +12,13 @@
  *          Cacodemon345
  *          Teemu Korhonen
  *          dob205
+ *          Marcos Alves
  *
  *          Copyright 2021 Joakim L. Gilje
  *          Copyright 2021-2022 Cacodemon345
  *          Copyright 2021-2022 Teemu Korhonen
  *          Copyright 2022 dob205
+ *          Copyright 2026 Marcos Alves
  */
 #include <QDebug>
 
@@ -25,6 +27,8 @@
 
 #include "qt_specifydimensions.h"
 #include "qt_soundgain.hpp"
+#include "qt_midilcd.hpp"
+#include "qt_models_common.hpp"
 #include "qt_preferences.hpp"
 #include "qt_mcadevicelist.hpp"
 #include "qt_memoryviewer.hpp"
@@ -40,6 +44,7 @@
 
 extern "C" {
 #include <86box/86box.h>
+#include <86box/ini.h>
 #include <86box/config.h>
 #include <86box/device.h>
 #include <86box/keyboard.h>
@@ -56,6 +61,11 @@ extern "C" {
 #include <86box/nvr.h>
 #include <86box/acpi.h>
 #include <86box/renderdefs.h>
+#include <86box/midi.h>
+#include <86box/midi_lcd.h>
+#ifdef USE_RTMIDI
+#    include <86box/midi_rtmidi.h>
+#endif
 
 #ifdef USE_VNC
 #    include <86box/vnc.h>
@@ -102,11 +112,13 @@ extern bool cpu_thread_running;
 void qt_set_sequence_auto_mnemonic(bool b);
 
 #include <array>
+#include <utility>
 #include <memory>
 #include <unordered_map>
 
 #include "qt_settings.hpp"
 #include "qt_about.hpp"
+#include "qt_pccard_menu.hpp"
 #include "qt_machinestatus.hpp"
 #include "qt_mediamenu.hpp"
 #include "qt_util.hpp"
@@ -216,10 +228,43 @@ MainWindow::MainWindow(QWidget *parent)
     extern MainWindow *main_window;
     main_window = this;
     ui->setupUi(this);
+    updateMenuKeyboardState();
     status->setSoundMenu(ui->menuSound);
+    midiOutGroup = new QActionGroup(this);
+    midiOutGroup->setExclusive(true);
+    connect(ui->menuMIDI, &QMenu::aboutToShow, this, &MainWindow::refreshMidiOutMenu);
+    connect(ui->menuSound, &QMenu::aboutToShow, this, [this] {
+        midi_lcd_t lcd;
+
+        ui->menuMIDI_command->setEnabled(midi_out_device_is_open());
+        midi_lcd_get(&lcd);
+        ui->actionMIDI_LCD->setEnabled((lcd.type != MIDI_LCD_NONE) || ui->actionMIDI_LCD->isChecked());
+    });
+    connect(ui->actionMIDI_LCD, &QAction::triggered, this, &MainWindow::showMidiLcd);
+    if (config_get_int("MIDI LCD", "visible", 0))
+        QTimer::singleShot(0, this, [this] { showMidiLcd(true); });
+    const std::pair<QAction *, int> midiCommands[] = {
+        { ui->actionMIDI_reset_GM,      MIDI_CMD_GM_ON         },
+        { ui->actionMIDI_reset_GS,      MIDI_CMD_GS_RESET      },
+        { ui->actionMIDI_reset_XG,      MIDI_CMD_XG_ON         },
+        { ui->actionMIDI_reset_MT32,    MIDI_CMD_MT32_RESET    },
+        { ui->actionMIDI_all_notes_off, MIDI_CMD_ALL_NOTES_OFF }
+    };
+    for (const auto &[action, cmd] : midiCommands) {
+        connect(action, &QAction::triggered, this, [cmd = cmd] {
+            runctl_pause_wait(RUN_PAUSE_SYNC);
+            midi_out_send_command(cmd);
+            runctl_resume(RUN_PAUSE_SYNC);
+        });
+    }
+    connect(ui->actionMIDI_restart_device, &QAction::triggered, this, [this] {
+        switchMidiOut(midi_output_device_current);
+    });
     dynarecMenu = new QMenu(this);
     dynarecMenu->addAction(ui->actionForce_interpretation);
     status->setDynarecMenu(dynarecMenu);
+    pcCardMenu = new PcCardMenu(this);
+    status->setPcCardMenu(pcCardMenu);
     ui->actionMute_Unmute->setText(sound_muted ? tr("&Unmute") : tr("&Mute"));
     ui->stackedWidget->setMouseTracking(true);
     statusBar()->setVisible(!hide_status_bar);
@@ -375,11 +420,7 @@ MainWindow::MainWindow(QWidget *parent)
         if (mouse_input_mode >= 1 && QApplication::overrideCursor())
             while (QApplication::overrideCursor())
                 QApplication::restoreOverrideCursor();
-#ifdef USE_WACOM
         ui->menuTablet_tool->menuAction()->setVisible(tablet_type && (strstr(tablet_get_internal_name(tablet_type), "wacom") != NULL));
-#else
-        ui->menuTablet_tool->menuAction()->setVisible(false);
-#endif
 
         bool enable_comp_option = false;
         for (int i = 0; i < MONITORS_NUM; i++) {
@@ -447,16 +488,7 @@ MainWindow::MainWindow(QWidget *parent)
             }
             ui->stackedWidget->unsetCursor();
         }
-#ifndef Q_OS_MACOS
-        if (kbd_req_capture) {
-            qt_set_sequence_auto_mnemonic(!mouse_capture);
-            /* Hack to get the menubar to update the internal Alt+shortcut table */
-            if (!video_fullscreen) {
-                ui->menubar->hide();
-                ui->menubar->show();
-            }
-        }
-#endif
+        updateMenuKeyboardState();
     });
 
     connect(qApp, &QGuiApplication::applicationStateChanged, [this](Qt::ApplicationState state) {
@@ -538,9 +570,6 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
-    connect(this, &MainWindow::updateStatusBarPanes, this, [this] {
-        refreshMediaMenu();
-    });
     connect(this, &MainWindow::updateStatusBarPanes, this, &MainWindow::refreshMediaMenu);
     connect(this, &MainWindow::updateStatusBarTip, status.get(), &MachineStatus::updateTip);
     connect(this, &MainWindow::statusBarMessage, status.get(), &MachineStatus::message, Qt::QueuedConnection);
@@ -555,6 +584,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->actionHide_tool_bar->setChecked(hide_tool_bar);
     ui->actionShow_non_primary_monitors->setChecked(show_second_monitors);
     ui->actionUpdate_status_bar_icons->setChecked(update_icons);
+    ui->actionFast_forward_on_start->setChecked(fast_forward_on_start);
     ui->actionApply_fullscreen_stretch_mode_when_maximized->setChecked(video_fullscreen_scale_maximized);
 
 #ifdef Q_OS_MACOS
@@ -919,12 +949,6 @@ MainWindow::MainWindow(QWidget *parent)
 #endif
 
     setContextMenuPolicy(Qt::PreventContextMenu);
-    /* Remove default Shift+F10 handler, which unfocuses keyboard input even with no context menu. */
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    connect(new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F10), this), &QShortcut::activated, this, []() { });
-#else
-    connect(new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_F10), this), &QShortcut::activated, this, []() { });
-#endif
 
     connect(this, &MainWindow::initRendererMonitor, this, &MainWindow::initRendererMonitorSlot);
     connect(this, &MainWindow::initRendererMonitorForNonQtThread, this, &MainWindow::initRendererMonitorSlot, Qt::BlockingQueuedConnection);
@@ -1064,6 +1088,14 @@ MainWindow::closeEvent(QCloseEvent *event)
             renderers[i]->show();
             renderers[i]->switchRenderer(RendererStack::Renderer::Software);
         }
+    }
+
+    /* Keep "visible" as it is now: the window closing with the main window
+       must not count as the user closing it. */
+    if (midiLcd) {
+        disconnect(midiLcd, nullptr, this, nullptr);
+        midiLcd->saveSettings();
+        config_save();
     }
 
     qt_nvr_save();
@@ -1314,17 +1346,29 @@ MainWindow::showEvent(QShowEvent *event)
 }
 
 void
-MainWindow::on_actionKeyboard_requires_capture_triggered()
+MainWindow::updateMenuKeyboardState()
 {
-    kbd_req_capture ^= 1;
 #ifndef Q_OS_MACOS
-    qt_set_sequence_auto_mnemonic(!!kbd_req_capture);
-    /* Hack to get the menubar to update the internal Alt+shortcut table */
-    if (!video_fullscreen) {
+    const bool enabled = dopause || (kbd_req_capture && !mouse_capture);
+    if (menu_keyboard_state == enabled)
+        return;
+
+    menu_keyboard_state = enabled;
+    qt_set_sequence_auto_mnemonic(enabled);
+    /* Changing mnemonic generation does not rebuild QMenuBar's shortcut table.
+       Refresh it only when visible, without revealing a hidden fullscreen menu. */
+    if (ui->menubar->isVisible()) {
         ui->menubar->hide();
         ui->menubar->show();
     }
 #endif
+}
+
+void
+MainWindow::on_actionKeyboard_requires_capture_triggered()
+{
+    kbd_req_capture ^= 1;
+    updateMenuKeyboardState();
 }
 
 void
@@ -1438,6 +1482,8 @@ MainWindow::on_actionSettings_triggered()
         case QDialog::Rejected:
             break;
     }
+    /* Also changed by soft saves, which reject the dialog */
+    ui->actionFast_forward_on_start->setChecked(fast_forward_on_start);
     runctl_resume(RUN_PAUSE_SYNC);
 }
 
@@ -1721,6 +1767,18 @@ MainWindow::eventFilter(QObject *receiver, QEvent *event)
             return QMainWindow::eventFilter(receiver, event);
     }
 
+    /* Suppress Qt's default Shift-F10 so the combination still
+       reaches the guest. */
+    if (event->type() == QEvent::ShortcutOverride) {
+        auto *ke = static_cast<QKeyEvent *>(event);
+        if (ke->key() == Qt::Key_F10
+            && (ke->modifiers() & Qt::ShiftModifier)
+            && !(ke->modifiers() & ~Qt::ShiftModifier)) {
+            event->accept();
+            return true;
+        }
+    }
+
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
         auto      *ke   = static_cast<QKeyEvent *>(event);
         const bool down = event->type() == QEvent::KeyPress;
@@ -1872,6 +1930,7 @@ MainWindow::refreshMediaMenu()
     mm->refresh(ui->menuMedia);
     status->setSoundMenu(ui->menuSound);
     status->setDynarecMenu(dynarecMenu);
+    status->setPcCardMenu(pcCardMenu);
     status->refresh(ui->statusbar);
     ui->actionMCA_devices->setVisible(machine_has_bus(machine, MACHINE_BUS_MCA));
     updatePowerOffAction();
@@ -2401,6 +2460,14 @@ MainWindow::on_actionFast_forward_triggered()
 }
 
 void
+MainWindow::on_actionFast_forward_on_start_triggered()
+{
+    fast_forward_on_start ^= 1;
+    ui->actionFast_forward_on_start->setChecked(fast_forward_on_start);
+    config_save();
+}
+
+void
 MainWindow::on_actionRemember_size_and_position_triggered()
 {
     window_remember ^= 1;
@@ -2587,6 +2654,127 @@ MainWindow::on_actionSound_gain_triggered()
 }
 
 void
+MainWindow::showMidiLcd(bool show)
+{
+    if (!midiLcd) {
+        if (!show)
+            return;
+        midiLcd = new MidiLcdWindow(this);
+        connect(midiLcd, &MidiLcdWindow::visibilityChanged, this, [this](bool visible) {
+            ui->actionMIDI_LCD->setChecked(visible);
+            midiLcd->saveSettings();
+            config_save();
+        });
+    }
+    midiLcd->setVisible(show);
+}
+
+/* The list is built each time the menu opens, as the settings may have
+   changed the device. Models::Devices() keeps the table until the settings
+   dialog closes, so the devices that have to look for files (ROMs, CLAP
+   plugins) are not checked again on every opening. */
+void
+MainWindow::refreshMidiOutMenu()
+{
+    for (QAction *action : midiOutGroup->actions())
+        delete action;
+
+    /* The devices go above the separator and "Restart device" from the .ui. */
+    QAction   *first      = ui->menuMIDI->actions().value(0);
+    const bool systemMidi = !strcmp(midi_out_device_get_internal_name(midi_output_device_current),
+                                    SYSTEM_MIDI_INTERNAL_NAME);
+    QAction   *none       = nullptr;
+    bool       listed     = false;
+
+    const auto addEntry = [&](const QString &name, int device, int port, bool current) {
+        auto *action = new QAction(name, ui->menuMIDI);
+        ui->menuMIDI->insertAction(first, action);
+        action->setCheckable(true);
+        action->setChecked(current);
+        midiOutGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, device, port, current] {
+            if (!current)
+                switchMidiOut(device, port);
+        });
+        listed |= current;
+        return action;
+    };
+
+    /* The emulation sends to an open System MIDI port from its own thread,
+       through the RtMidi object that also lists the host's ports. */
+    if (systemMidi)
+        runctl_pause_wait(RUN_PAUSE_SYNC);
+
+    for (const auto &midi : Models::Devices(midi_out_device_getdevice, midi_out_device_get_internal_name,
+                                            midi_out_device_available, 0)) {
+        if (!midi.available)
+            continue;
+
+        const bool current = (midi.id == midi_output_device_current);
+#ifdef USE_RTMIDI
+        /* One entry for each port of the host, as the device's settings
+           list them. RtMidi opens the first port when the configured one
+           is gone. */
+        if (!strcmp(midi_out_device_get_internal_name(midi.id), SYSTEM_MIDI_INTERNAL_NAME)) {
+            const int ports = rtmidi_out_get_num_devs();
+            int       port  = config_get_int(SYSTEM_MIDI_NAME, "midi", 0);
+
+            if ((port < 0) || (port >= ports))
+                port = 0;
+            for (int i = 0; i < ports; i++) {
+                char name[512] = { 0 };
+
+                rtmidi_out_get_dev_name(i, name);
+                addEntry(QString("%1: %2").arg(midi.name, QString::fromUtf8(name).simplified()),
+                         midi.id, i, current && (i == port));
+            }
+            continue;
+        }
+#endif
+        QAction *action = addEntry(midi.name, midi.id, -1, current);
+        if (midi.id == 0)
+            none = action;
+    }
+
+    if (systemMidi)
+        runctl_resume(RUN_PAUSE_SYNC);
+
+    /* As in the settings, a configured device that can't be used, for
+       example with its plugin missing, shows as None. */
+    if (!listed && none)
+        none->setChecked(true);
+
+    /* System MIDI only reopens the host's port: a module on the other end
+       doesn't restart. */
+    ui->actionMIDI_restart_device->setEnabled(listed && (midi_output_device_current > 0) && !systemMidi);
+}
+
+/* Like plugging a module into the MIDI port, or switching it off and on
+   again when it's the same device: it starts from its power-on state, while
+   the rest of the machine keeps running. A System MIDI port is chosen with
+   port 0 and up. */
+void
+MainWindow::switchMidiOut(int device, int port)
+{
+    bool changed = (device != midi_output_device_current);
+
+    if (port >= 0)
+        changed |= (port != config_get_int(SYSTEM_MIDI_NAME, "midi", 0));
+
+    runctl_pause_wait(RUN_PAUSE_SYNC);
+    midi_output_device_current = device;
+    if (port >= 0)
+        config_set_int(SYSTEM_MIDI_NAME, "midi", port);
+    midi_config_changed();
+    if (changed)
+        config_save();
+    runctl_resume(RUN_PAUSE_SYNC);
+
+    if (changed)
+        emitVmmSignal();
+}
+
+void
 MainWindow::setSendKeyboardInput(bool enabled)
 {
     send_keyboard_input = enabled;
@@ -2595,6 +2783,7 @@ MainWindow::setSendKeyboardInput(bool enabled)
 void
 MainWindow::updateUiPauseState()
 {
+    updateMenuKeyboardState();
     const auto pause_icon   = dopause ? QIcon(":/menuicons/qt/icons/run.ico") : QIcon(":/menuicons/qt/icons/pause.ico");
     const auto tooltip_text = dopause ? QString(tr("Resume execution")) : QString(tr("Pause execution"));
     const auto menu_text    = dopause ? QString(tr("Re&sume")) : QString(tr("&Pause"));

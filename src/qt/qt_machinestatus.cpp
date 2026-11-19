@@ -10,9 +10,11 @@
  *
  * Authors: Joakim L. Gilje <jgilje@jgilje.net>
  *          Cacodemon345
+ *          Marcos Alves
  *
  *          Copyright 2021 Joakim L. Gilje
  *          Copyright 2021-2022 Cacodemon345
+ *          Copyright 2026 Marcos Alves
  */
 #include "qt_machinestatus.hpp"
 
@@ -33,12 +35,14 @@ extern "C" {
 #include <86box/rdisk.h>
 #include <86box/mo.h>
 #include <86box/scsi_tape.h>
+#include <86box/md.h>
 #include <86box/plat.h>
 #include <86box/machine.h>
 #include <86box/thread.h>
 #include <86box/network.h>
 #include <86box/mem.h>
 #include <86box/usb.h>
+#include <86box/pcmcia.h>
 #include <86box/ui.h>
 #include <86box/machine_status.h>
 #include <86box/config.h>
@@ -63,6 +67,7 @@ extern int          is_dynarec_active(void);
 #include "qt_soundgain.hpp"
 #include "qt_preferences.hpp"
 #include "qt_iconindicators.hpp"
+#include "qt_pccard_menu.hpp"
 
 #include <array>
 
@@ -114,7 +119,11 @@ struct Pixmaps {
     PixmapSetEmptyActive floppy_525;
     PixmapSetEmptyActive floppy_35;
     PixmapSetEmptyActive cdrom;
+    PixmapSetEmptyActive cdr;
+    PixmapSetEmptyActive cdrw;
     PixmapSetEmptyActive dvdrom;
+    PixmapSetEmptyActive hd_dvdrom;
+    PixmapSetEmptyActive bdrom;
     PixmapSetEmptyActive rdisk_disabled;
     PixmapSetEmptyActive rdisk;
     PixmapSetEmptyActive zip;
@@ -122,6 +131,7 @@ struct Pixmaps {
     PixmapSetEmptyActive syquest;
     PixmapSetEmptyActive mo;
     PixmapSetEmptyActive tape;
+    PixmapSetEmptyActive md;
     PixmapSetActive      hd;
     PixmapSetEmptyActive net;
     PixmapSetEmpty       usb[USB_SLOTS];
@@ -129,6 +139,7 @@ struct Pixmaps {
     PixmapSetEmpty       usb_port;
     PixmapSetDisabled    sound;
     PixmapSetDisabled    dynarec;
+    PixmapSetDisabled    pccard;
 };
 
 struct StateActive {
@@ -368,7 +379,11 @@ struct MachineStatus::States {
         pixmaps.floppy_525.load(QIcon(":/settings/qt/icons/floppy_525.ico"));
         pixmaps.floppy_35.load(QIcon(":/settings/qt/icons/floppy_35.ico"));
         pixmaps.cdrom.load(QIcon(":/settings/qt/icons/cdrom.ico"));
+        pixmaps.cdr.load(QIcon(":/settings/qt/icons/cdr.ico"));
+        pixmaps.cdrw.load(QIcon(":/settings/qt/icons/cdrw.ico"));
         pixmaps.dvdrom.load(QIcon(":/settings/qt/icons/dvdrom.ico"));
+        pixmaps.hd_dvdrom.load(QIcon(":/settings/qt/icons/hd_dvdrom.ico"));
+        pixmaps.bdrom.load(QIcon(":/settings/qt/icons/bdrom.ico"));
         pixmaps.rdisk_disabled.normal                  = QIcon(":/settings/qt/icons/rdisk_disabled.ico").pixmap(pixmap_size);
         pixmaps.rdisk_disabled.active                  = pixmaps.rdisk_disabled.normal;
         pixmaps.rdisk_disabled.read_write_active       = pixmaps.rdisk_disabled.normal;
@@ -382,6 +397,7 @@ struct MachineStatus::States {
         pixmaps.syquest.load(QIcon(":/settings/qt/icons/syquest.ico"));
         pixmaps.mo.load(QIcon(":/settings/qt/icons/mo.ico"));
         pixmaps.tape.load(QIcon(":/settings/qt/icons/tape.ico"));
+        pixmaps.md.load(QIcon(":/settings/qt/icons/mo.ico"));
         pixmaps.hd.load(QIcon(":/settings/qt/icons/hard_disk.ico"));
         pixmaps.net.load(QIcon(":/settings/qt/icons/network.ico"));
         /* One icon per USB device kind, named after the device; a flash
@@ -394,6 +410,7 @@ struct MachineStatus::States {
         pixmaps.sound.load(QIcon(":/settings/qt/icons/sound.ico"));
         pixmaps.dynarec.normal                          = QIcon(":/menuicons/qt/icons/recompiler.ico").pixmap(pixmap_size);
         pixmaps.dynarec.disabled                        = QIcon(":/menuicons/qt/icons/interpreter.ico").pixmap(pixmap_size);
+        pixmaps.pccard.load(QIcon(":/settings/qt/icons/pcmcia.ico"));
 
         cartridge[0].pixmaps = &pixmaps.cartridge;
         cartridge[1].pixmaps = &pixmaps.cartridge;
@@ -412,6 +429,9 @@ struct MachineStatus::States {
         }
         for (auto &t : tape) {
             t.pixmaps = &pixmaps.tape;
+        }
+        for (auto &m : md) {
+            m.pixmaps = &pixmaps.md;
         }
         for (auto &h : hdds) {
             h.pixmaps = &pixmaps.hd;
@@ -505,12 +525,14 @@ struct MachineStatus::States {
     std::array<StateEmptyActive, RDISK_NUM>    rdisk;
     std::array<StateEmptyActive, MO_NUM>       mo;
     std::array<StateEmptyActive, TAPE_NUM>     tape;
+    std::array<StateEmptyActive, MD_NUM>       md;
     std::array<StateActive, HDD_BUS_USB>       hdds;
-    std::array<StateEmptyActive, NET_CARD_MAX> net;
+    std::array<StateEmptyActive, NET_CONF_MAX> net; /* then a PC Card NIC per socket */
     std::unique_ptr<ClickableLabel>            usb;
     std::unique_ptr<QMenu>                     usbMenu;
     std::unique_ptr<ClickableLabel>            sound;
     std::unique_ptr<ClickableLabel>            dynarec;
+    std::unique_ptr<ClickableLabel>            pccard;
     std::unique_ptr<QLabel>                    text;
 
     std::array<std::unique_ptr<QLabel>, BOARD_LED_MAX> board_leds;
@@ -542,6 +564,33 @@ MachineStatus::setDynarecMenu(QMenu *menu)
     dynarecMenu = menu;
 }
 
+/* The PC Card icon, with the sockets' menu behind it. */
+void
+MachineStatus::setPcCardMenu(PcCardMenu *menu)
+{
+    if (pcCardMenu == menu)
+        return;
+    pcCardMenu = menu;
+    connect(menu, &PcCardMenu::changed, this, [this]() {
+        updatePcCardIcon();
+        /* A card went in or came out: a network card's icon, or a SCSI card's
+           drives, come or go with it. */
+        ui_sb_update_panes();
+    });
+}
+
+void
+MachineStatus::updatePcCardIcon()
+{
+    if (!d->pccard || !pcCardMenu)
+        return;
+    bool any = false;
+    for (int s = 0; s < PCMCIA_SOCKETS; s++)
+        any |= (pcmcia_card_type[s] > 0);
+    d->pccard->setPixmap(any ? d->pixmaps.pccard.normal : d->pixmaps.pccard.disabled);
+    d->pccard->setToolTip(pcCardMenu->toolTip());
+}
+
 bool
 MachineStatus::hasCassette()
 {
@@ -558,6 +607,33 @@ bool
 MachineStatus::hasSCSI()
 {
     return (machine_has_flags(machine, MACHINE_SCSI) > 0) || other_scsi_present;
+}
+
+/* Any SCSI bus at all -- the machine's, a SCSI card's, or that of a SCSI PC
+   Card in a socket (the APA-1460), whose drives belong in the status bar and
+   the Media menu too. */
+bool
+MachineStatus::hasAnySCSI()
+{
+    if (hasSCSI())
+        return true;
+    for (int i = 0; i < SCSI_CARD_MAX; i++) {
+        if (scsi_card_current[i] != 0)
+            return true;
+    }
+    return pcmciaHasSCSI();
+}
+
+bool
+MachineStatus::pcmciaHasSCSI()
+{
+    if (!pcmcia_enabled)
+        return false;
+    for (int s = 0; s < PCMCIA_SOCKETS; s++) {
+        if (pcmcia_card_is_scsi(pcmcia_card_type[s]))
+            return true;
+    }
+    return false;
 }
 
 void
@@ -585,9 +661,7 @@ MachineStatus::iterateCDROM(const std::function<void(int)> &cb)
 //            !hdc_name.startsWith(QStringLiteral("jride")) &&
             !hdc_name.startsWith(QStringLiteral("mcide")))
             continue;
-        if ((cdrom[i].bus_type == CDROM_BUS_SCSI) && !hasSCSI() &&
-            (scsi_card_current[0] == 0) && (scsi_card_current[1] == 0) &&
-            (scsi_card_current[2] == 0) && (scsi_card_current[3] == 0))
+        if ((cdrom[i].bus_type == CDROM_BUS_SCSI) && !hasAnySCSI())
             continue;
         if ((cdrom[i].bus_type == CDROM_BUS_SONY || cdrom[i].bus_type == CDROM_BUS_CM100 || cdrom[i].bus_type == CDROM_BUS_PHILIPS || cdrom[i].bus_type == CDROM_BUS_HITACHI || cdrom[i].bus_type == CDROM_BUS_MITSUMI || cdrom[i].bus_type == CDROM_BUS_MKE) && (cdrom_interface_current == 0) &&
             !((cdrom[i].bus_type == CDROM_BUS_MITSUMI) && (machines[machine].init == machine_at_tandy_vis_init)) &&
@@ -612,9 +686,7 @@ MachineStatus::iterateRDisk(const std::function<void(int)> &cb)
 //            !hdc_name.startsWith(QStringLiteral("jride")) &&
             !hdc_name.startsWith(QStringLiteral("mcide")))
             continue;
-        if ((rdisk_drives[i].bus_type == RDISK_BUS_SCSI) && !hasSCSI() &&
-            (scsi_card_current[0] == 0) && (scsi_card_current[1] == 0) &&
-            (scsi_card_current[2] == 0) && (scsi_card_current[3] == 0))
+        if ((rdisk_drives[i].bus_type == RDISK_BUS_SCSI) && !hasAnySCSI())
             continue;
         if (rdisk_drives[i].bus_type != 0) {
             cb(i);
@@ -634,9 +706,7 @@ MachineStatus::iterateMO(const std::function<void(int)> &cb)
 //            !hdc_name.startsWith(QStringLiteral("jride")) &&
             !hdc_name.startsWith(QStringLiteral("mcide")))
             continue;
-        if ((mo_drives[i].bus_type == MO_BUS_SCSI) && !hasSCSI() &&
-            (scsi_card_current[0] == 0) && (scsi_card_current[1] == 0) &&
-            (scsi_card_current[2] == 0) && (scsi_card_current[3] == 0))
+        if ((mo_drives[i].bus_type == MO_BUS_SCSI) && !hasAnySCSI())
             continue;
         if (mo_drives[i].bus_type != 0) {
             cb(i);
@@ -656,9 +726,7 @@ MachineStatus::iterateTape(const std::function<void(int)> &cb)
 //            !hdc_name.startsWith(QStringLiteral("jride")) &&
             !hdc_name.startsWith(QStringLiteral("mcide")))
             continue;
-        if ((tape_drives[i].bus_type == TAPE_BUS_SCSI) && !hasSCSI() &&
-            (scsi_card_current[0] == 0) && (scsi_card_current[1] == 0) &&
-            (scsi_card_current[2] == 0) && (scsi_card_current[3] == 0))
+        if ((tape_drives[i].bus_type == TAPE_BUS_SCSI) && !hasAnySCSI())
             continue;
         /* A parallel-port tape needs the port it sits on to exist. */
         if ((tape_drives[i].bus_type == TAPE_BUS_LPT) &&
@@ -671,12 +739,26 @@ MachineStatus::iterateTape(const std::function<void(int)> &cb)
 }
 
 void
+MachineStatus::iterateMD(const std::function<void(int)> &cb)
+{
+    for (size_t i = 0; i < MD_NUM; i++) {
+        if ((md_drives[i].bus_type == MD_BUS_SCSI) && hasAnySCSI())
+            cb(i);
+    }
+}
+
+void
 MachineStatus::iterateNIC(const std::function<void(int)> &cb)
 {
     for (int i = 0; i < NET_CARD_MAX; i++) {
         if (network_dev_available(i)) {
             cb(i);
         }
+    }
+    /* A PC network card: its socket's link, after the Network settings' four. */
+    for (int s = 0; s < PCMCIA_SOCKETS; s++) {
+        if (pcmcia_enabled && pcmcia_card_is_network(pcmcia_card_type[s]))
+            cb(NET_CARD_MAX + s);
     }
 }
 
@@ -719,11 +801,15 @@ MachineStatus::refreshEmptyIcons()
         d->tape[i].setEmpty(machine_status.tape[i].empty);
         d->tape[i].setWriteProtected(machine_status.tape[i].write_prot);
     }
+    for (size_t i = 0; i < MD_NUM; i++) {
+        d->md[i].setEmpty(machine_status.md[i].empty);
+        d->md[i].setWriteProtected(machine_status.md[i].write_prot);
+    }
 
     d->cassette.setEmpty(machine_status.cassette.empty);
     d->cassette.setWriteProtected(machine_status.cassette.write_prot);
 
-    for (size_t i = 0; i < NET_CARD_MAX; i++)
+    for (size_t i = 0; i < NET_CONF_MAX; i++)
         d->net[i].setEmpty(machine_status.net[i].empty);
 
     for (int i = 0; i < 2; ++i)
@@ -836,6 +922,14 @@ MachineStatus::refreshIcons()
         if (machine_status.tape[i].write_active)
             ui_sb_update_icon_write(SB_TAPE | i, 0);
     }
+    for (size_t i = 0; i < MD_NUM; i++) {
+        d->md[i].setActive(machine_status.md[i].active);
+        d->md[i].setWriteActive(machine_status.md[i].write_active);
+        if (machine_status.md[i].active)
+            ui_sb_update_icon(SB_MD | i, 0);
+        if (machine_status.md[i].write_active)
+            ui_sb_update_icon_write(SB_MD | i, 0);
+    }
 
     for (size_t i = 0; i < HDD_BUS_USB; i++) {
         d->hdds[i].setActive(machine_status.hdd[i].active);
@@ -846,7 +940,7 @@ MachineStatus::refreshIcons()
             ui_sb_update_icon_write(SB_HDD | i, 0);
     }
 
-    for (size_t i = 0; i < NET_CARD_MAX; i++) {
+    for (size_t i = 0; i < NET_CONF_MAX; i++) {
         d->net[i].setActive(machine_status.net[i].active);
         d->net[i].setWriteActive(machine_status.net[i].write_active);
     }
@@ -874,6 +968,10 @@ MachineStatus::clearActivity()
     for (auto &tape : d->tape) {
         tape.setActive(false);
         tape.setWriteActive(false);
+    }
+    for (auto &md : d->md) {
+        md.setActive(false);
+        md.setWriteActive(false);
     }
     for (auto &hdd : d->hdds) {
         hdd.setActive(false);
@@ -918,10 +1016,13 @@ MachineStatus::refresh(QStatusBar *sbar)
     for (size_t i = 0; i < TAPE_NUM; i++) {
         sbar->removeWidget(d->tape[i].label.get());
     }
+    for (size_t i = 0; i < MD_NUM; i++) {
+        sbar->removeWidget(d->md[i].label.get());
+    }
     for (size_t i = 0; i < HDD_BUS_USB; i++) {
         sbar->removeWidget(d->hdds[i].label.get());
     }
-    for (size_t i = 0; i < NET_CARD_MAX; i++) {
+    for (size_t i = 0; i < NET_CONF_MAX; i++) {
         sbar->removeWidget(d->net[i].label.get());
     }
     sbar->removeWidget(d->usb.get());
@@ -933,6 +1034,7 @@ MachineStatus::refresh(QStatusBar *sbar)
         sbar->removeWidget(d->board_leds[i].get());
         d->board_leds[i].reset();
     }
+    sbar->removeWidget(d->pccard.get());
 
     if (cassette_enable) {
         d->cassette.label = std::make_unique<ClickableLabel>();
@@ -988,7 +1090,7 @@ MachineStatus::refresh(QStatusBar *sbar)
         else if (QString(drv->image_path).left(5) == "wp://")
             d->fdd[i].setWriteProtected(true);
         else
-            d->fdd[i].setWriteProtected(drv->read_only);
+            d->fdd[i].setWriteProtected(drv->writeprot);
         d->fdd[i].setActive(false);
         d->fdd[i].setWriteActive(false);
         d->fdd[i].refresh();
@@ -1005,8 +1107,16 @@ MachineStatus::refresh(QStatusBar *sbar)
 
     iterateCDROM([this, sbar](int i) {
         int t = cdrom[i].type;
-        if (cdrom_is_dvd(t))
+        if (cdrom_is_bd(t))
+            d->cdrom[i].pixmaps = &d->pixmaps.bdrom;
+        else if (cdrom_is_hd_dvd(t))
+            d->cdrom[i].pixmaps = &d->pixmaps.hd_dvdrom;
+        else if (cdrom_is_dvd(t))
             d->cdrom[i].pixmaps = &d->pixmaps.dvdrom;
+        else if (cdrom_is_cdrw(t))
+            d->cdrom[i].pixmaps = &d->pixmaps.cdrw;
+        else if (cdrom_is_cdr(t))
+            d->cdrom[i].pixmaps = &d->pixmaps.cdr;
         else
             d->cdrom[i].pixmaps = &d->pixmaps.cdrom;
         d->cdrom[i].label = std::make_unique<ClickableLabel>();
@@ -1103,6 +1213,29 @@ MachineStatus::refresh(QStatusBar *sbar)
         d->tape[i].label->setToolTip(MediaMenu::ptr->tapeMenus[i]->toolTip());
         d->tape[i].label->setAcceptDrops(true);
         sbar->addWidget(d->tape[i].label.get());
+    });
+
+    iterateMD([this, sbar](int i) {
+        d->md[i].label = std::make_unique<ClickableLabel>();
+        d->md[i].setEmpty(QString(md_drives[i].image_path).isEmpty());
+        if (QString(md_drives[i].image_path).isEmpty())
+            d->md[i].setWriteProtected(false);
+        else if (QString(md_drives[i].image_path).left(5) == "wp://")
+            d->md[i].setWriteProtected(true);
+        else
+            d->md[i].setWriteProtected(md_drives[i].read_only);
+        d->md[i].setActive(false);
+        d->md[i].setWriteActive(false);
+        d->md[i].refresh();
+        connect((ClickableLabel *) d->md[i].label.get(), &ClickableLabel::clicked, [i](QPoint pos) {
+            MediaMenu::ptr->mdMenus[i]->popup(pos - QPoint(0, MediaMenu::ptr->mdMenus[i]->sizeHint().height()));
+        });
+        connect((ClickableLabel *) d->md[i].label.get(), &ClickableLabel::dropped, [i](QString str) {
+            MediaMenu::ptr->mdMount(i, str, false);
+        });
+        d->md[i].label->setToolTip(MediaMenu::ptr->mdMenus[i]->toolTip());
+        d->md[i].label->setAcceptDrops(true);
+        sbar->addWidget(d->md[i].label.get());
     });
 
     iterateNIC([this, sbar](int i) {
@@ -1228,10 +1361,7 @@ MachineStatus::refresh(QStatusBar *sbar)
             sbar->addWidget(d->hdds[HDD_BUS_ATAPI].label.get());
         }
     }
-    if ((hasSCSI() ||
-        (scsi_card_current[0] != 0) || (scsi_card_current[1] != 0) ||
-        (scsi_card_current[2] != 0) || (scsi_card_current[3] != 0)) &&
-        (c_scsi > 0)) {
+    if (hasAnySCSI() && (c_scsi > 0)) {
         d->hdds[HDD_BUS_SCSI].label = std::make_unique<QLabel>();
         d->hdds[HDD_BUS_SCSI].setActive(false);
         d->hdds[HDD_BUS_SCSI].setWriteActive(false);
@@ -1256,6 +1386,19 @@ MachineStatus::refresh(QStatusBar *sbar)
         sbar->addWidget(d->board_leds[i].get());
     }
 
+    /* The PC Card icon, while a PC Card controller is fitted: a click opens
+       the sockets' menu. */
+    d->pccard.reset();
+    if (pcmcia_enabled && pcCardMenu) {
+        d->pccard = std::make_unique<ClickableLabel>();
+        connect(d->pccard.get(), &ClickableLabel::clicked, this, [this](QPoint pos) {
+            QMenu *m = this->pcCardMenu->menu();
+            m->popup(pos - QPoint(0, m->sizeHint().height()));
+        });
+        sbar->addWidget(d->pccard.get());
+        updatePcCardIcon();
+    }
+
     d->sound = std::make_unique<ClickableLabel>();
     d->sound->setPixmapIfChanged((sound_muted || (runctl_mode() == RUN_MODE_FAST)) ? d->pixmaps.sound.disabled : d->pixmaps.sound.normal);
 
@@ -1270,7 +1413,6 @@ MachineStatus::refresh(QStatusBar *sbar)
     d->dynarec->setPixmapIfChanged(!is_dynarec_active() ? d->pixmaps.dynarec.disabled : d->pixmaps.dynarec.normal);
     d->dynarec->setToolTip(is_dynarec_active() ? tr("Dynamic recompiler is active") :
                                                  tr("Dynamic recompiler is inactive"));
-    d->dynarec->setVisible(cpu_use_dynarec);
 
     connect(d->dynarec.get(), &ClickableLabel::clicked, this, [this](QPoint pos) {
         if (this->dynarecMenu)
@@ -1278,6 +1420,9 @@ MachineStatus::refresh(QStatusBar *sbar)
     });
 
     sbar->addWidget(d->dynarec.get());
+    /* Only after addWidget(): showing a widget that has no parent yet makes
+       it a top-level window, which flashes on screen until it is reparented. */
+    d->dynarec->setVisible(cpu_use_dynarec);
 
     d->text = std::make_unique<QLabel>();
     sbar->addWidget(d->text.get());
@@ -1341,6 +1486,10 @@ MachineStatus::updateTip(int tag)
         case SB_TAPE:
             if (d->tape[item].label && MediaMenu::ptr->tapeMenus[item])
                 d->tape[item].label->setToolTip(MediaMenu::ptr->tapeMenus[item]->toolTip());
+            break;
+        case SB_MD:
+            if (d->md[item].label && MediaMenu::ptr->mdMenus[item])
+                d->md[item].label->setToolTip(MediaMenu::ptr->mdMenus[item]->toolTip());
             break;
         case SB_HDD:
             break;

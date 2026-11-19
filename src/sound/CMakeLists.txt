@@ -24,6 +24,9 @@ add_library(snd OBJECT
     snd_opl_ymfm.cpp
     snd_resid.cpp
     midi.c
+    midi_lcd.c
+    midi_lcd_mt32.c
+    midi_lcd_sc55.c
     snd_speaker.c
     snd_lpt_adlipt.c
     snd_lpt_cms.c
@@ -62,6 +65,7 @@ add_library(snd OBJECT
     snd_ssi2001.c
     snd_wss.c
     snd_ym7128.c
+    snd_ymz263b.c
     snd_optimc.c
     snd_opl_esfm.c
     snd_ps1_midi.c
@@ -206,10 +210,7 @@ target_link_libraries(86Box esfmu)
 add_subdirectory(ymfm)
 target_link_libraries(86Box ymfm)
 
-if(OPL4ML)
-    target_compile_definitions(snd PRIVATE USE_OPL4ML)
-    target_sources(snd PRIVATE midi_opl4.c midi_opl4_yrw801.c)
-endif()
+target_sources(snd PRIVATE midi_opl4.c midi_opl4_yrw801.c)
 
 if(SOUNDCANVAS)
     target_compile_definitions(snd PRIVATE USE_SOUNDCANVAS)

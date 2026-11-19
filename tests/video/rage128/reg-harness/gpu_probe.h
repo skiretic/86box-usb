@@ -71,6 +71,18 @@ unsigned harness_gpu_mirror_plan(uint32_t vram_mask, const uint32_t *ilo,
 void harness_gpu_rng_fold(uint32_t vram_mask, int staged, uint32_t *lo,
                           uint32_t *hi);
 
+/* gpu_group_wait() against two real capture threads, rounds times, each
+   round's grouping sized to finish where the submit thread turns from
+   spinning to sleeping. lost = rounds that stalled with every thread's
+   grouping done, no signal since the wait began and every capture
+   thread asleep (a missed wakeup, released by the probe so the loop
+   goes on); slept = waits on cap_done_cv; rows_lo..rows_hi =
+   the range of rows per partition the sizing used. 1 = ran, 0 = no
+   capture threads (no Vulkan headers), -1 = a round stalled with a
+   thread still grouping. */
+int harness_gpu_group_wake(uint32_t rounds, uint32_t *lost, uint32_t *slept,
+                           uint32_t *rows_lo, uint32_t *rows_hi);
+
 /* gpu_state_kernel() on a state: kernel id, or -1 for the CPU fallback.
    The fabricated backend reports both arena imports live, so the answer is
    the state's own shape and not a residency artifact. */
@@ -151,6 +163,26 @@ typedef struct harness_gpu_sub_t {
 int harness_gpu_submit_probe(rage128_t *dev, const rage128_raster_state_t *rs,
                              const r3d_vtx_t *a, const r3d_vtx_t *b,
                              const r3d_vtx_t *c, harness_gpu_sub_t *res);
+
+/* What admission's self-alias test did with one triangle: the
+   production rage128_gpu_submit_tri on a fabricated backend whose serial
+   pipelines are reported built, so an aliasing draw can take the serial
+   run as on a live backend. ser / rej = the color-over-Z [0] and
+   render-to-texture [1] counts of draws kept as serial runs and refused
+   to the CPU; stg = render-to-texture draws that ran parallel because
+   every level they sample is a staged copy; serial = the flag of the
+   run the draw went to (-1 = no run). */
+typedef struct harness_gpu_alias_t {
+    int      accepted;
+    int      serial;
+    uint64_t ser[2], rej[2], stg;
+    uint64_t need_px;
+} harness_gpu_alias_t;
+
+/* Returns 0 if the probe is unavailable. */
+int harness_gpu_alias_probe(rage128_t *dev, const rage128_raster_state_t *rs,
+                            const r3d_vtx_t *a, const r3d_vtx_t *b,
+                            const r3d_vtx_t *c, harness_gpu_alias_t *res);
 
 /* Exact texture-read hazard list (the exact texture range list of
    r128_gpu_t) behind the q hull: draws captured into one pending
@@ -279,6 +311,19 @@ uint64_t harness_gpu_fab_tiled(void *g);
 uint64_t harness_gpu_carry_submits(void *g);
 int      harness_gpu_carry_open(void *g);
 int      harness_gpu_async(void *g);
+/* The 2D rectangle kernel: 1 when the backend records queued
+   rectangles with it, 0 when the host could not set it up (the ops then
+   keep their buffer commands); the row count it starts at; what the
+   head-op recorder has recorded so far (buffer commands, copy regions,
+   rectangle dispatches); whether the open segment holds work not yet
+   submitted; and how many screen copies were queued through the
+   staging ring and how many were left to the CPU walk. */
+int      harness_gpu_r2d_on(void *g);
+unsigned harness_gpu_r2d_rows(void);
+void     harness_gpu_q2d_rec(void *g, uint64_t *cmds, uint64_t *regions,
+                             uint64_t *disp);
+int      harness_gpu_pending(void *g);
+void     harness_gpu_blit_rec(void *g, uint64_t *bounce, uint64_t *cpu);
 void     harness_gpu_wait_submitted(void *g);
 uint64_t harness_gpu_fab_fill_rects(void *g);
 uint64_t harness_gpu_fab_fill_cpu(void *g);

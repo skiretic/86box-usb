@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
-"PO-Revision-Date: 2026-10-20 09:11+0000\n"
-"Last-Translator: creopard <support@creopard.de>\n"
+"PO-Revision-Date: 2026-11-16 18:42+0000\n"
+"Last-Translator: Alexander Babikov <lemondrops358@gmail.com>\n"
 "Language-Team: German <https://weblate.86box.net/projects/86box/86box/de/>\n"
 "Language: de-DE\n"
 "MIME-Version: 1.0\n"
@@ -51,7 +51,7 @@ msgstr "&Statusleiste ausblenden"
 msgid "Hide &toolbar"
 msgstr "&Werkzeugleiste ausblenden"
 
-msgid "&Resizeable window"
+msgid "&Resizable window"
 msgstr "G&rößenverstellbares Fenster"
 
 msgid "R&emember size && position"
@@ -246,6 +246,42 @@ msgstr "&Einstellungen…"
 msgid "Sound &gain…"
 msgstr "&Klangverstärkung…"
 
+msgid "M&IDI output device"
+msgstr "M&IDI-Ausgabegerät"
+
+msgid "Restart &device"
+msgstr "Gerät &neu starten"
+
+msgid "Send MIDI &command"
+msgstr "MIDI-&Befehl senden"
+
+msgid "&GM System On"
+msgstr ""
+
+msgid "G&S Reset"
+msgstr ""
+
+msgid "&XG System On"
+msgstr ""
+
+msgid "&MT-32 Reset"
+msgstr ""
+
+msgid "All &notes off"
+msgstr "&Alle Noten aus"
+
+msgid "Show MIDI &LCD"
+msgstr "MIDI-&LCD anzeigen"
+
+msgid "MIDI LCD"
+msgstr "MIDI-LCD"
+
+msgid "Always on &top"
+msgstr "Immer im &Vordergrund"
+
+msgid "&Close"
+msgstr "&Schließen"
+
 msgid "Begin trace"
 msgstr "Tracing starten"
 
@@ -300,8 +336,8 @@ msgstr "L&eer"
 msgid "Reload previous image"
 msgstr "Voriges Abbild neu laden"
 
-msgid "&Folder…"
-msgstr "&Verzeichnis…"
+msgid "Mount &folder…"
+msgstr "&Verzeichnis einbinden…"
 
 msgid "Preferences"
 msgstr "Preferenzen"
@@ -414,6 +450,15 @@ msgstr "Wartezustände:"
 msgid "MB"
 msgstr "MB"
 
+msgid "GB"
+msgstr ""
+
+msgid "%1 MB"
+msgstr ""
+
+msgid "%1 GB"
+msgstr ""
+
 msgid "Memory:"
 msgstr "Hauptspeicher:"
 
@@ -421,7 +466,7 @@ msgid "Synchronize with host clock"
 msgstr "Uhrzeit mit Host synchronisieren"
 
 msgid "Time zone:"
-msgstr "Zeitzone"
+msgstr "Zeitzone:"
 
 msgid "Local"
 msgstr "Lokal"
@@ -783,8 +828,8 @@ msgstr "Bandlaufwerke:"
 msgid "ISA RTC:"
 msgstr "ISA-Echtzeituhr:"
 
-msgid "ISA Memory Expansion"
-msgstr "ISA-Speichererweiterung"
+msgid "ISA/MCA Memory Expansion"
+msgstr "ISA/MCA-Speichererweiterung"
 
 msgid "ISA ROM Cards"
 msgstr "ISA-ROM-Karte"
@@ -854,6 +899,9 @@ msgstr "%1 konnte keine nutzbaren ROM-Dateien finden.\n\nBitte besuchen Sie <a h
 
 msgid "(empty)"
 msgstr "(leer)"
+
+msgid "(not available)"
+msgstr ""
 
 msgid "All files"
 msgstr "Alle Dateien"
@@ -2544,6 +2592,9 @@ msgstr "SLI"
 msgid "Start Address"
 msgstr "Startadresse"
 
+msgid "Allow RAM up to the system ROM"
+msgstr ""
+
 msgid "Contiguous Size"
 msgstr "Zusammenhängende Größe"
 
@@ -3410,6 +3461,18 @@ msgstr "Recompilierung &zulassen"
 msgid "&Fast forward"
 msgstr "&Schnellvorlauf"
 
+msgid "Fast forward at startup"
+msgstr ""
+
+msgid "Start new machines in fast forward"
+msgstr ""
+
+msgid "Only affects machines created from now on. Each machine can be changed in its settings, under Machine > Performance."
+msgstr ""
+
+msgid "Fast forward at &startup"
+msgstr ""
+
 msgid "Fast forward"
 msgstr "Schnellvorlauf"
 
@@ -3774,8 +3837,8 @@ msgstr "Im angeforderten Bereich ist kein Speicher zugeordnet."
 msgid "The search is limited to %1 bytes."
 msgstr "Die Suche ist auf %1 Bytes beschränkt."
 
-msgid "Searching memory..."
-msgstr "Durchsuche Speicher..."
+msgid "Searching memory…"
+msgstr "Durchsuche Speicher…"
 
 msgid "The search was cancelled. The selection did not move."
 msgstr "Die Suche wurde abgebrochen. Die Auswahl hat sich nicht verändert."
@@ -3810,8 +3873,8 @@ msgstr "Auswahl kopieren (Hexadezimal)"
 msgid "Copy selection (ASCII)"
 msgstr "Auswahl kopieren (ASCII)"
 
-msgid "Fill selection..."
-msgstr "Auswahl auffüllen"
+msgid "Fill selection…"
+msgstr "Auswahl auffüllen…"
 
 msgid "Copy address"
 msgstr "Adresse kopieren"
@@ -3819,8 +3882,8 @@ msgstr "Adresse kopieren"
 msgid "Disassemble here"
 msgstr "Hier dekompilieren"
 
-msgid "Dump memory from here..."
-msgstr "Speicherauszug von hier..."
+msgid "Dump memory from here…"
+msgstr "Speicherauszug von hier…"
 
 msgid "Memory viewer"
 msgstr "Arbeitsspeicher Betrachter"
@@ -3849,8 +3912,8 @@ msgstr "Los"
 msgid "Live update"
 msgstr "Live-Aktualisierung"
 
-msgid "Dump..."
-msgstr "Datensatzausgabe..."
+msgid "Dump…"
+msgstr "Datensatzausgabe…"
 
 msgid "Commands"
 msgstr "Befehle"
@@ -3894,8 +3957,8 @@ msgstr "Weiter suchen"
 msgid "Search downwards from the selection (F3)"
 msgstr "Von der Auswahl aus nach unten suchen (F3)"
 
-msgid "Range..."
-msgstr "Bereich..."
+msgid "Range…"
+msgstr "Bereich…"
 
 msgid "Search within an address range instead of all memory"
 msgstr "In einem Adressbereich suchen statt im gesamten Speicher"
@@ -3949,7 +4012,9 @@ msgid "Note"
 msgstr "Notiz"
 
 msgid "Double-click a line to set or clear a breakpoint there"
-msgstr "Doppelklicken Sie auf eine Zeile, um dort einen Haltepunkt zu setzen oder zu entfernen."
+msgstr ""
+"Doppelklicken Sie auf eine Zeile, um dort einen Haltepunkt zu setzen oder zu "
+"entfernen"
 
 msgid "Disassembly"
 msgstr "Dekompilierung"
@@ -4002,8 +4067,8 @@ msgstr "Nach Schritt angehalten."
 msgid "Stopped."
 msgstr "Angehalten."
 
-msgid "Stepping..."
-msgstr "Schritte..."
+msgid "Stepping…"
+msgstr "Schritte…"
 
 msgid "Running."
 msgstr "Läuft."
@@ -4074,8 +4139,10 @@ msgstr "setzen"
 msgid "cleared"
 msgstr "geleert"
 
-msgid "%1 breakpoint(s), linear addresses:"
-msgstr "%1 Haltepunkt/e, lineare Adressen:"
+msgid "%n breakpoint(s), linear addresses:"
+msgid_plural "%n breakpoints, linear addresses:"
+msgstr[0] "%1 Haltepunkt, lineare Adressen:"
+msgstr[1] "%1 Haltepunkte, lineare Adressen:"
 
 msgid "Pause the processor before accessing I/O ports."
 msgstr "Halten Sie den Prozessor an, bevor auf I/O-Anschlüsse zugreifen wird."
@@ -4085,9 +4152,6 @@ msgstr "Unbekannter Befehl oder ungültige Argumente. Geben Sie help ein, um die
 
 msgid "Dump memory"
 msgstr "Speicherauszug erstellen"
-
-msgid "Browse..."
-msgstr "Durchsuchen…"
 
 msgid "Start (hex, register or seg:off):"
 msgstr "Start (Hexadezimalwert, Register oder Seg:off):"
@@ -4107,8 +4171,8 @@ msgstr "Datei:"
 msgid "Only RAM and other directly mapped memory is read. Unmapped and inaccessible bytes are not read; the fill byte is written in their place."
 msgstr "Es wird ausschließlich RAM und anderer direkt zugeordneter Speicher gelesen. Nicht zugeordnete und nicht zugängliche Bytes werden nicht gelesen; an ihrer Stelle wird das Füllbyte geschrieben."
 
-msgid "Binary files (*.bin);;All files (*)"
-msgstr "Binärdateien (*.bin);;Alle Dateien (*)"
+msgid "Binary files"
+msgstr "Binärdateien"
 
 msgid "The length must be a hex number above 0."
 msgstr "Die Länge muss eine Hexadezimalzahl größer als 0 sein."
@@ -4119,8 +4183,8 @@ msgstr "Das Füllbyte muss eine Hexadezimalzahl zwischen 00 und FF sein."
 msgid "Could not open %1 for writing."
 msgstr "%1 konnte nicht zum Schreiben geöffnet werden."
 
-msgid "Dumping memory..."
-msgstr "Erstelle Speicherabbild..."
+msgid "Dumping memory…"
+msgstr "Erstelle Speicherabbild…"
 
 msgid "Could not write to %1."
 msgstr "Es konnte nicht nach %1 geschrieben werden."
@@ -4257,8 +4321,8 @@ msgstr "Aus (nur bei +VDR=1)"
 msgid "Caller ID between emulator instances (enable on both)"
 msgstr "Anrufer ID zwischen Emulatorinstanzen (auf beiden aktivieren)"
 
-msgid "Caller ID sent when dialling (number,name)"
-msgstr "Beim Wählen übermittelte Anrufer-ID (Nummer, Name)"
+msgid "Caller ID sent when dialing (number,name)"
+msgstr "Beim Wählen übermittelte Anrufer-ID (Nummer,Name)"
 
 msgid "Network to guest queue limit (back-pressure)"
 msgstr "Begrenzung der Netzwerk-zu-Gast-Warteschlange (back-pressure)"
@@ -4282,28 +4346,124 @@ msgid "TCP send timeout"
 msgstr "TCP Sende-Timeout"
 
 msgid "Card:"
-msgstr ""
+msgstr "Karte:"
 
 msgid "Hub:"
 msgstr ""
 
 msgid "Mass storage:"
-msgstr ""
+msgstr "Massenspeicher:"
 
 msgid "Its drives are hard disks, CD-ROM drives and other removable devices set up on their own pages, on bus SCSI, in the channels named \"USB Mass Storage\". Each drive is one logical unit, in channel order."
-msgstr ""
+msgstr "Als Laufwerke dienen Festplatten, CD-ROM-Laufwerke und andere Wechseldatenträger, die auf eigenen Seiten über den SCSI-Bus in den Kanälen mit der Bezeichnung \"USB Massenspeicher\" eingerichtet sind. Jedes Laufwerk stellt eine logische Einheit dar, die in der Reihenfolge der Kanäle angeordnet ist."
 
 msgid "Hard disks…"
-msgstr ""
+msgstr "Festplatten…"
 
 msgid "CD-ROM drives…"
-msgstr ""
+msgstr "CD-ROM Laufwerke…"
 
 msgid "Other removable devices…"
-msgstr ""
+msgstr "Andere Wechseldatenträger…"
 
 msgid "4-port USB 1.1 hub"
 msgstr ""
 
 msgid "USB Mass Storage"
+msgstr "USB Massenspeicher"
+
+msgid "Mount folder as a temporary floppy"
+msgstr ""
+
+msgid "The selected drive does not support folder mounting."
+msgstr ""
+
+msgid "The contents exceed the capacity of the configured floppy drive."
+msgstr ""
+
+msgid "Mount folder as a temporary removable disk"
+msgstr ""
+
+msgid "Unable to mount folder or archive"
+msgstr ""
+
+msgid "The contents don't fit on any medium the drive takes, or a file is 4 GB or larger."
+msgstr ""
+
+msgid "There are too many files in the top folder for the root directory of the medium."
+msgstr ""
+
+msgid "The temporary image could not be written."
+msgstr ""
+
+msgid "There is not enough memory to build the image."
+msgstr ""
+
+msgid "The folder or archive could not be read."
+msgstr ""
+
+msgid "Archives"
+msgstr ""
+
+msgid "New USB flash drive"
+msgstr ""
+
+msgid "&New USB flash drive…"
+msgstr ""
+
+msgid "unplugged"
+msgstr ""
+
+msgid "&Unplug"
+msgstr ""
+
+msgid "&Unplug %1"
+msgstr ""
+
+msgid "Plug in %1 (%2)"
+msgstr ""
+
+msgid "&Move %1 to"
+msgstr ""
+
+msgid "Size:"
+msgstr ""
+
+msgid "Custom size:"
+msgstr ""
+
+msgid "None (blank)"
+msgstr ""
+
+msgid "FAT16"
+msgstr ""
+
+msgid "FAT32"
+msgstr ""
+
+msgid "Format:"
+msgstr ""
+
+msgid "Could not create %1."
+msgstr ""
+
+msgid "%1 already exists. Replace it?"
+msgstr ""
+
+msgid "USB port %1 (%2)"
+msgstr ""
+
+msgid "USB port"
+msgstr ""
+
+msgid "PCI card"
+msgstr ""
+
+msgid "hub"
+msgstr ""
+
+msgid "board"
+msgstr ""
+
+msgid "now in port %1"
 msgstr ""

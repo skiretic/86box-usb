@@ -166,6 +166,18 @@ rage128_now_ns(void)
    across draws, and per-batch levels. */
 #define R128_TEX_CACHE_ENTS 1024u
 #define R128_TEX_BATCH_ENTS 256u
+/* Store marks for the levels the CPU lanes keep for a batch
+   (rage128_t tex_stage keep_pg): one per 64 KB of the low 32 MB of card
+   memory, which is all of local memory. */
+#define R128_TEX_KEEP_SHIFT 16
+#define R128_TEX_KEEP_MARKS (0x02000000u >> R128_TEX_KEEP_SHIFT)
+/* Store marks for the levels cached with a GPU backend (rage128_t
+   tex_stage cst_pg): one per 4 KB page of the same 32 MB. They are finer
+   than the marks above because a cached level lasts across batches: with
+   64 KB marks a guest that streams stores into one texture would end
+   every cached level in the same 64 KB at each of their lookups. */
+#define R128_TEX_CST_SHIFT 12
+#define R128_TEX_CST_MARKS (0x02000000u >> R128_TEX_CST_SHIFT)
 
 typedef struct rage128_t {
     svga_t svga;
@@ -334,6 +346,23 @@ typedef struct rage128_t {
     uint32_t gui_debug0;
     uint32_t pc_gui_mode;
     uint32_t bm_chunk_val[2];
+    /* Descriptor-list bus master (vid_ati_rage128_bm.c). bm_buf holds
+       BM_VIP0_BUF to BM_VIP3_BUF, bm_vidcap BM_VIDCAP_BUF0 to
+       BM_VIDCAP_BUF2 and BM_VIDCAP_ACTIVE, bm_gui BM_GUI. A ring packet
+       can write these registers on the CCE thread, so every stored value
+       is an atomic. A start written by a packet is not run there: its
+       register value goes to bm_pend_val and its channel bit to
+       bm_pend_mask, and the CPU thread runs it (rage128_bm_sync).
+       bm_kicks, bm_logged and bm_running (set while a list runs) belong
+       to the CPU thread. */
+    atomic_uint bm_buf[4];
+    atomic_uint bm_vidcap[4];
+    atomic_uint bm_gui;
+    atomic_uint bm_pend_val[4];
+    atomic_uint bm_pend_mask;
+    uint32_t    bm_kicks;
+    uint32_t    bm_logged;
+    int         bm_running;
 
     /* Display block: PLL register file (vid_ati_rage128_display.c). */
     uint32_t pll_regs[0x20];      /* PLL_ADDR is 5 bits; defined 0x01-0x13 */
@@ -532,7 +561,9 @@ typedef struct rage128_t {
     uint32_t brush_data[32];       /* BRUSH_DATA0..31: dwords 0-1 = 8x8 mono
                                       pattern (byte n = row n); the full file
                                       is the 32x32 mono brush (dword n =
-                                      row n, MSB = leftmost pixel) */
+                                      row n, its low byte the leftmost 8
+                                      pixels; the bit order inside each
+                                      byte follows DP_BYTE_PIX_ORDER) */
     uint8_t brush_tile[8 * 8 * 4]; /* packet 8x1/1x8 brush expanded to the
                                       8x8 mono rows or color tile it repeats as */
     uint32_t dp_src_frgd_clr;
@@ -595,8 +626,30 @@ typedef struct rage128_t {
     int32_t  grad_slope_y[3]; /* signed per-pixel y slope: 0x1a44 / 0x1a50 / 0x1a5c */
     int      grad_valid;      /* a burst was written since DP_GUI_MASTER_CNTL
                                  was last loaded with bit 27 clear */
+    /* The scaler's interpolator alpha, the source alpha of a scaler
+       alpha blend whose ALPHA_LIGHT_FN is copy input. The three
+       registers at 0x1a88-0x1a90 are not named in the guides. The
+       Windows 2000 display driver's AlphaBlend writes them before each
+       blended stretch as (0, 0, constant alpha << 16) (RE: ati2dvaa.dll
+       @00010839). They are modeled with the layout of the color gradient
+       above: a slope along x, a slope along y and a start value, 8.16
+       fixed point. */
+    int32_t  alpha_slope_x; /* 0x1a88 */
+    int32_t  alpha_slope_y; /* 0x1a8c */
+    uint32_t alpha_start;   /* 0x1a90 */
     uint32_t gui_scratch[6];
     uint32_t scale_scr_height_width;
+    /* The front-end scaler's register-started stretch (0x1998 and
+       0x19a0-0x19b4, as written; the write to SCALE_DST_HEIGHT_WIDTH
+       starts it). SCALE_PITCH (0x199c) is the motion-compensation
+       block's mc.scale_pitch. */
+    uint32_t scale_offset_0;
+    uint32_t scale_x_inc;
+    uint32_t scale_y_inc;
+    uint32_t scale_hacc;
+    uint32_t scale_vacc;
+    uint32_t scale_dst_x_y;
+    uint32_t scale_dst_height_width;
     uint32_t scl_palette[256]; /* 2D scaler palette, loaded by the
                                   LOAD_PALETTE packet (0x2c; SDK:
                                   LOAD_PALETTE, p. F-46 / PDF 336) as
@@ -607,16 +660,33 @@ typedef struct rage128_t {
                                   ati2drau.drv @0004:5373). An 8 bpp
                                   stretch source reads its colors here. */
 
+    /* Engine time for ops started by CPU register writes (see the
+       engine time comment in vid_ati_rage128_2d.c). All of it is in
+       emulated time, CPU cycles times 256, and belongs to the CPU
+       thread. eng_done is when the engine finishes the work accepted so
+       far. eng_fifo_pop holds, oldest first from eng_fifo_head, when
+       each of the eng_fifo_n register writes still waiting in the
+       64-entry command FIFO leaves it. eng_idle_due is set while a
+       busy-to-idle event is owed at eng_done. eng_seen is the last
+       time read, to notice a clock that was set back. */
+    uint64_t eng_done;
+    uint64_t eng_seen;
+    uint64_t eng_fifo_pop[64];
+    uint32_t eng_fifo_head;
+    uint32_t eng_fifo_n;
+    int      eng_idle_due;
     /* Host-data stream started by a register write, the path the XFree86
        XAA driver uses for color expansion. A register-triggered op whose
        DP_GUI_MASTER_CNTL source field DP_SRC_SOURCE is 3 or 4 (data
        through HOST_DATA; RRG: DP_GUI_MASTER_CNTL, p. 3-174 / PDF 192)
-       records the destination rectangle and source datatype here. The
-       raster dwords then arrive through HOST_DATA0-7 (0x17c0-0x17dc) and
-       HOST_DATA_LAST (0x17e0), and the HOST_DATA_LAST write paints them
-       (RRG: HOST_DATA_LAST, p. 3-153 / PDF 171). */
+       records the destination rectangle, the source and the source
+       datatype here. The raster dwords then arrive through HOST_DATA0-7
+       (0x17c0-0x17dc) and HOST_DATA_LAST (0x17e0), and the
+       HOST_DATA_LAST write paints them (RRG: HOST_DATA_LAST, p. 3-153 /
+       PDF 171). */
     int      hostdata_active;
     int      hostdata_x, hostdata_y, hostdata_w, hostdata_h;
+    int      hostdata_src;
     int      hostdata_srcdt;
     uint32_t hostdata_ndw;
     uint32_t hostdata_buf[1024];
@@ -650,6 +720,14 @@ typedef struct rage128_t {
                                 writes PM4_IW_INDOFF and PM4_IW_INDSIZE,
                                 2 = saw its address dword */
     uint32_t pump_ib_addr;
+    /* The first two body dwords of a 3D_RNDR_GEN_PRIM: pump_t3_pos is 1
+       once its header is seen and 2 once VC_FORMAT is, and 0 otherwise,
+       including for the vertices after VC_CNTL; pump_t3_fmt keeps
+       VC_FORMAT. The packet's length is known only at VC_CNTL, and the
+       framer must end it where the executor does (see
+       rage128_3d_gen_prim_dwords). */
+    uint32_t pump_t3_pos;
+    uint32_t pump_t3_fmt;
     uint32_t pump_stall_live; /* submits whose body found no FIFO room
                                  behind a flip stall and is read live */
 
@@ -726,7 +804,14 @@ typedef struct rage128_t {
                                      read-pointer copy; CPU (submit) thread    */
     uint32_t  *cce_pl;            /* type-3 payload, ring executor  */
     uint32_t  *ind_pl;            /* type-3 payload, indirect parse */
-    atomic_int cce_executing;     /* CCE thread is inside a packet */
+    atomic_int cce_executing;     /* CCE thread is inside a pass of its loop,
+                                     whether or not the pass finds a packet */
+    atomic_int cce_work;          /* CCE thread has taken work off the FIFO and
+                                     has not yet reported the engine idle for it.
+                                     Set before the first pop, cleared where the
+                                     thread runs out of work. The status
+                                     registers read this, not cce_executing, so
+                                     a wake that brings no work reads idle */
     atomic_int cce_starved;       /* CCE thread is blocked waiting for more FIFO
                                      dwords: lets the drain wait tell a packet
                                      that can never complete from one still running
@@ -740,6 +825,15 @@ typedef struct rage128_t {
                                  is 0) and before the flush, so a status poll
                                  does not read idle while workers still owe
                                  pixels (render_threads > 1).               */
+    atomic_int cce_batch_flushing; /* a flush has taken the pending batch and
+                                 has not finished: set before the workers
+                                 run, cleared once the staged surfaces are
+                                 written back to the guest and the scratch
+                                 fences are visible. Keeps the status
+                                 registers busy after cce_batch_pending
+                                 drops. Written only by the flush, under
+                                 raster_flush_mtx; queuing a primitive does
+                                 not touch it                               */
     atomic_int cce_drain_req;     /* CPU thread is waiting for idle */
     atomic_int cce_flip_stalled;  /* executor is inside a WAIT_UNTIL flip stall */
     atomic_int cce_abort;         /* dead bus or engine reset: drop the current
@@ -749,6 +843,14 @@ typedef struct rage128_t {
                                      pointers, so the CPU thread's reset stores
                                      cannot race it. cce_executing does not tell
                                      that, since it also drops between packets. */
+    atomic_int cce_walk_hold;     /* CPU thread is walking an indirect buffer it
+                                     was handed by a direct PM4_IW_INDSIZE
+                                     write, and queues primitives itself. The
+                                     executor loads this at the top of every
+                                     pass and starts none while it is set (see
+                                     rage128_pm4_walk_hold in
+                                     vid_ati_rage128_pm4.c). Written by the CPU
+                                     thread only */
     atomic_int gui_idle_event;    /* engine went from busy to idle since the last
                                      check; turned into GEN_INT_STATUS bit 19 on
                                      the CPU thread only */
@@ -781,6 +883,8 @@ typedef struct rage128_t {
     event_t   *cce_wake_event; /* work queued                   */
     event_t   *cce_idle_event; /* FIFO drained + engine idle    */
     event_t   *cce_flip_event; /* vsync consumed a pending flip */
+    event_t   *cce_hold_event; /* cce_walk_hold dropped, a reset
+                                  pulse, or the thread closing  */
     pc_timer_t cce_pump_timer; /* resumes ring->FIFO copy       */
 
     /* Emulation speed window, kept by the display block: at each vsync,
@@ -1004,6 +1108,21 @@ typedef struct rage128_t {
     void (*amcgpio_notify)(struct rage128_t *dev, void *priv);
     void *amcgpio_priv;
 
+    /* Hardware-assisted I2C master (vid_ati_rage128_i2c.c). Every field
+       is read and written under i2c_mtx: a ring packet can write these
+       registers from the CCE thread while the CPU polls them. mm_i2c is
+       the master's own bus, separate from the DDC bus in i2c above;
+       i2c_slave is the 7-bit address of the slave a transfer left
+       addressed (no stop sent yet), -1 when none. */
+    uint32_t i2c_cntl_0;
+    uint32_t i2c_cntl_1;
+    uint8_t  i2c_buf[16];
+    uint8_t  i2c_wptr;
+    uint8_t  i2c_rptr;
+    int      i2c_slave;
+    void    *mm_i2c;
+    mutex_t *i2c_mtx;
+
     uint16_t pci_device_id;
     uint16_t pci_subsys_vendor; /* ADAPTER_ID (PCI config 0x2c): set from the ROM
                                    straps at reset, then by any write to the
@@ -1071,9 +1190,11 @@ typedef struct rage128_t {
        into this arena on the submit thread when the draw state is
        captured, and workers read the copy. A tiled level is copied here
        too, untiled, so every lane samples it as a linear image. The arena
-       is reset only in rage128_raster_flush, after all workers are joined
-       (in serial mode, per draw at capture), so its base pointer never
-       moves while a batch is in flight. */
+       is reset only in rage128_raster_flush, after all workers are joined,
+       so its base pointer never moves while a batch is in flight. The
+       serial lanes, whose draws are finished when they return, also reset
+       it at capture: the CPU lanes whenever no level is kept for the
+       batch (see keep_lo below). */
     struct rage128_tex_stage {
         uint8_t *arena; /* byte arena, allocated on first use         */
         uint32_t cap;   /* allocated bytes                            */
@@ -1134,14 +1255,78 @@ typedef struct rage128_t {
         uint64_t n_wrap_kept; /* wraps that kept the live cached levels */
         uint32_t lap;         /* passes through the arena: one per wrap */
         uint32_t peak_used;
+        /* Levels kept for a batch by the serial CPU lanes (one render
+           thread, no GPU backend). A tiled level that lies wholly in
+           installed local memory is detiled once and its per-batch entry
+           (pde, marked keep) serves every later draw until the batch
+           ends, so a frame that binds one texture on many draws copies it
+           once. [keep_lo, keep_hi) is the card range covering the source
+           bytes of every kept level (equal = none); keep_redo makes the
+           next capture drop them all, because the draw captured last
+           renders into that range after its own levels were staged. Both
+           belong to the submit thread. The kept levels end at every
+           raster flush that recycles the arena, which precedes each 2D
+           operation and motion-compensation launch, and at the first
+           capture after a store into local memory from outside the 3D
+           engine. Such a store is reported by r128_tex_keep_note: after
+           storing its bytes the writer sets the mark of each 64 KB piece
+           it touched (keep_pg), or keep_all when its address is not known
+           here, and then keep_any. The capture looks at the marks under
+           the kept range only when keep_any is set, and clears a level's
+           marks before it copies the level; a mark it finds set there
+           ends every kept level with source bytes in that piece, since
+           one mark stands for all of them. The release stores order the
+           bytes before their mark and the mark before keep_any, so a
+           capture that finds keep_any clear has either copied the bytes
+           already or will find the flag set next time; no writer waits
+           and none reads the kept range.
+           The parallel CPU lane uses the same marks for its per-batch
+           entries of levels in local memory, which serve a whole batch
+           there. Its capture is likewise the only reader. Draws queued
+           in the batch still read the arena, so a store ends the entry
+           table (pde_count to zero, gen moved on) and the arena keeps
+           allocating upward until the next recycling flush. keep_redo
+           belongs to the serial lanes: in the parallel lane the
+           enqueue-path flush that orders a draw behind a render into
+           its texture ends the table. Its levels the marks cannot
+           watch (any byte in AGP memory) are read again and compared
+           when a later draw binds them. */
+        uint32_t     keep_lo, keep_hi;
+        int          keep_redo;
+        atomic_uchar keep_any;
+        atomic_uchar keep_all;
+        atomic_uchar keep_pg[R128_TEX_KEEP_MARKS];
+        /* Store marks for the cached levels (ent, GPU backend attached).
+           The check a store makes before its bytes (r128_texcache_dirty)
+           has to come first, because the same call waits for the queued
+           GPU work that still reads the old bytes; but the submit thread
+           can copy and cache a level between that check and the bytes,
+           and the copy then holds the old bytes with nothing left to end
+           it. So every writer also reports after its bytes
+           (r128_tex_cache_note): it sets the mark of each 4 KB page it
+           stored into, indexed through vram_mask as the host-newer map
+           is, or cst_all when its address is not known here. The submit
+           thread returns a cached level only while the marks under its
+           source and cst_all are clear. Before it copies a level it
+           takes the level's marks with an exchange; a mark it finds set
+           ends every cached level with source bytes in that page, since
+           one mark stands for all of them, and cst_all found set ends
+           every cached level. A writer stores its bytes and then its
+           mark, so a copy made after the exchange that took a mark holds
+           that store's bytes, and a store whose mark is set later is
+           seen by the next lookup. No writer waits or takes the lock. */
+        atomic_uchar cst_all;
+        atomic_uchar cst_pg[R128_TEX_CST_MARKS];
         /* Staged levels. A cached entry (ent, the GPU backend's levels in
            local memory) serves later draws until a store lands in its
            source bytes or the arena is reset; a per-batch entry (pde: AGP
            levels, and every level without the GPU backend) serves only the
-           batch whose gen it carries. A dead cached entry keeps its slot
-           until the table fills, when the table is compacted; idx is an
-           open-addressed index of the cached entries by key, slot + 1 per
-           bucket, 0 = empty, so a lookup does not scan the table. */
+           batch whose gen it carries, or, when it is marked keep, every
+           draw until the kept levels are dropped. A dead cached entry
+           keeps its slot until the table fills, when the table is
+           compacted; idx is an open-addressed index of the cached entries
+           by key, slot + 1 per bucket, 0 = empty, so a lookup does not
+           scan the table. */
         uint32_t ent_count;
         uint32_t ent_dead;
         uint32_t pde_count;
@@ -1157,12 +1342,16 @@ typedef struct rage128_t {
             uint32_t gen;       /* gen (per-batch entry) or tgen (cached
                                    entry) when it was staged              */
             uint32_t src_lo;    /* card bytes [src_lo, src_hi) the level
-                                   was copied from (a cached entry)       */
+                                   was copied from (a cached entry, and a
+                                   kept per-batch entry)                  */
             uint32_t src_hi;
             uint32_t dead;      /* 1 = a store landed in the source bytes
                                    of this cached entry                   */
             uint32_t used_lap;  /* lap (below) in which a draw last used
                                    this cached entry                      */
+            uint32_t keep;      /* 1 = a per-batch entry the CPU lanes
+                                   keep across draws, watched by the
+                                   store marks (keep_lo)                  */
         } ent[R128_TEX_CACHE_ENTS];
         struct rage128_tex_ent pde[R128_TEX_BATCH_ENTS];
         uint16_t               idx[2 * R128_TEX_CACHE_ENTS];
@@ -1934,6 +2123,10 @@ typedef struct r3d_texctx_t {
 extern void rage128_raster_state_capture(rage128_t *dev, rage128_raster_state_t *rs);
 /* Staging helpers (vid_ati_rage128_pm4.c / vid_ati_rage128_raster.c). */
 extern int rage128_pm4_bus_read_block(rage128_t *dev, uint32_t vm, uint8_t *dst, uint32_t len);
+/* Record a block of bytes the device read from the bus as a B record of
+   the command-stream capture, so a replay serves the same read. */
+extern void rage128_cap_bus_block(rage128_t *dev, uint32_t bus_addr, const uint8_t *src,
+                                  uint32_t len);
 extern int rage128_raster_nthreads(rage128_t *dev);
 /* Command-stream scratch writes held behind a deferred batch
    (vid_ati_rage128_pm4.c): hold one, apply them once the batch has been
@@ -2147,6 +2340,7 @@ extern int      rage128_display_reg_write(rage128_t *dev, uint32_t off, uint32_t
 extern void     rage128_display_reset(rage128_t *dev);
 extern void     rage128_recalctimings(svga_t *svga);
 extern void     rage128_dac_mask_apply(rage128_t *dev);
+extern void     rage128_dac_power_state_written(rage128_t *dev, uint8_t old_pmcsr);
 extern void     rage128_vblank_start(svga_t *svga);
 extern void     rage128_hwcursor_draw(svga_t *svga, int displine);
 extern uint32_t rage128_conv_16to32(svga_t *svga, uint16_t color, uint8_t bpp);
@@ -2172,6 +2366,19 @@ extern int  rage128_mpeg_reg_write(rage128_t *dev, uint32_t off, uint32_t val,
 extern int  rage128_mpeg_packet3(rage128_t *dev, uint32_t hdr, const uint32_t *pl,
                                  uint32_t count);
 extern void rage128_mpeg_reset(rage128_t *dev);
+
+/* vid_ati_rage128_bm.c: descriptor-list bus master. */
+extern void rage128_bm_reset(rage128_t *dev);
+extern void rage128_bm_sync(rage128_t *dev);
+extern int  rage128_bm_reg_read(rage128_t *dev, uint32_t off, uint32_t *val);
+extern int  rage128_bm_reg_write(rage128_t *dev, uint32_t off, uint32_t val, uint32_t mask);
+
+/* vid_ati_rage128_i2c.c: hardware-assisted I2C master. */
+extern void rage128_i2c_init(rage128_t *dev);
+extern void rage128_i2c_close(rage128_t *dev);
+extern void rage128_i2c_reset(rage128_t *dev);
+extern int  rage128_i2c_reg_read(rage128_t *dev, uint32_t off, uint32_t *val);
+extern int  rage128_i2c_reg_write(rage128_t *dev, uint32_t off, uint32_t val, uint32_t mask);
 
 extern int  rage128_ov0_reg_read(rage128_t *dev, uint32_t off, uint32_t *val);
 extern int  rage128_ov0_reg_write(rage128_t *dev, uint32_t off, uint32_t val, uint32_t mask);
@@ -2222,6 +2429,17 @@ rage128_sx14(uint32_t v)
 extern void rage128_2d_packet3(rage128_t *dev, uint32_t hdr, const uint32_t *pl, uint32_t count);
 extern void rage128_2d_set_pitch_offset(rage128_t *dev, int is_dst, uint32_t val);
 extern void rage128_2d_reset(rage128_t *dev);
+/* Engine time of register-started ops (vid_ati_rage128_2d.c): the GUI_STAT
+   value it gives, 1 while it is busy, the hook for a CPU write to a
+   FIFO'd register, the check that raises a due busy-to-idle event, and
+   the reset. CPU thread only. */
+extern uint32_t rage128_2d_eng_stat(rage128_t *dev);
+extern int      rage128_2d_eng_busy(rage128_t *dev);
+extern void     rage128_2d_eng_fifo_write(rage128_t *dev);
+extern void     rage128_2d_eng_poll(rage128_t *dev);
+extern void     rage128_2d_eng_reset(rage128_t *dev);
+/* MCLK, the engine clock, in Hz (vid_ati_rage128_display.c). */
+extern double rage128_mclk_hz(const rage128_t *dev);
 
 /* PM4/CCE command processor (vid_ati_rage128_pm4.c). */
 extern int  rage128_pm4_reg_read(rage128_t *dev, uint32_t off, uint32_t *val);
@@ -2417,19 +2635,50 @@ rage128_pm4_fifo_dwords(rage128_t *dev)
     }
 }
 
-/* Engine has queued or in-flight work (any thread may ask). The unfetched-
-   ring term is gated on the engine running: a stopped CCE will never fetch
-   [rptr,wptr), so during a ring reset (rptr transiently != wptr while
-   stopped) the engine is idle, not active. */
+/* Engine has queued or in-flight work (any thread may ask). This is what
+   the status registers report as PM4_BUSY, "State of PROMO_4 engine" (RRG:
+   GUI_STAT, p. 3-244 / PDF 262). It has no term for the CCE thread being
+   awake: that thread also runs a pass of its loop when a wake brings no
+   work, and the chip's engine is idle then. The FIFO pointers are loaded
+   before cce_work, because the thread sets cce_work before the pop that
+   can empty the FIFO: a reader that finds the FIFO empty then sees the
+   flag. In the same way cce_batch_pending is loaded before
+   cce_batch_flushing: the flush sets the second before it clears the
+   first, so a reader that finds no batch pending because a flush has
+   just taken it then sees the flush still under way, until the batch is
+   in guest memory. The unfetched-ring term is gated on the engine
+   running: a stopped CCE will never fetch [rptr,wptr), so during a ring
+   reset (rptr transiently != wptr while stopped) the engine is idle, not
+   busy. */
+static inline int
+rage128_pm4_busy(rage128_t *dev)
+{
+    return (atomic_load(&dev->cce_fifo_rd) != atomic_load(&dev->cce_fifo_wr))
+        || atomic_load(&dev->cce_work)
+        || atomic_load(&dev->cce_hung)
+        || atomic_load(&dev->cce_batch_pending)
+        || atomic_load(&dev->cce_batch_flushing)
+        || (rage128_pm4_ring_bm(dev)
+            && dev->pm4_rptr != (dev->pm4_wptr & rage128_pm4_ring_mask(dev)));
+}
+
+/* The engine is busy or the CCE thread is inside a pass (any thread may
+   ask). The drain wait and the GPU backend ask this before they touch
+   engine state from another thread. A pass that pops nothing can still
+   have things to do: it draws a batch the CPU thread left queued,
+   writes staged surfaces back, releases the retire pointer and answers
+   a scanout request of the GPU backend. While it draws a queued batch
+   the status registers read busy as well, through cce_batch_pending
+   and then cce_batch_flushing, until the batch's write-back has ended;
+   in the other cases they read idle. The test is a snapshot, not a
+   lock: a wake already set can bring the CCE thread into a pass right
+   after it reads 0, so the callers that then flush rely on
+   raster_flush_mtx, and on the backend's flush mutex, to keep two
+   flushes apart. */
 static inline int
 rage128_pm4_active(rage128_t *dev)
 {
-    return (atomic_load(&dev->cce_fifo_rd) != atomic_load(&dev->cce_fifo_wr))
-        || atomic_load(&dev->cce_executing)
-        || atomic_load(&dev->cce_hung)
-        || atomic_load(&dev->cce_batch_pending)
-        || (rage128_pm4_ring_bm(dev)
-            && dev->pm4_rptr != (dev->pm4_wptr & rage128_pm4_ring_mask(dev)));
+    return rage128_pm4_busy(dev) || atomic_load(&dev->cce_executing);
 }
 
 /* 3D engine (vid_ati_rage128_3d.c). rage128_3d_packet3 returns 1 when the
@@ -2445,6 +2694,10 @@ extern _Atomic(void (*)(rage128_t *dev)) rage128_harness_idle_hook;
 extern int  rage128_3d_reg_read(rage128_t *dev, uint32_t off, uint32_t *val);
 extern int  rage128_3d_reg_write(rage128_t *dev, uint32_t off, uint32_t val, uint32_t mask);
 extern int  rage128_3d_packet3(rage128_t *dev, uint32_t hdr, const uint32_t *pl, uint32_t count);
+/* Body dwords a 3D_RNDR_GEN_PRIM takes, from its VC_FORMAT and VC_CNTL
+   and the header's body length: the one rule the executor, the
+   indirect-buffer walk and the ring pump's framer all use. */
+extern uint32_t rage128_3d_gen_prim_dwords(uint32_t fmt, uint32_t cntl, uint32_t count);
 extern void rage128_3d_reset(rage128_t *dev);
 /* Write a staged Z or color buffer (AGP, or tiled) back to card or guest
    memory. Safe to call again. SUBMIT-THREAD ONLY, at the batch barrier. */
@@ -2642,6 +2895,11 @@ extern void rage128_gpu_abandon(rage128_t *dev);
    texture reads of those bytes must finish too. */
 extern void rage128_gpu_2d_barrier(rage128_t *dev, uint32_t lo, uint32_t len,
                                    int writes);
+/* Wait for GPU stores into local bytes [lo, lo+len) before a state
+   capture copies a texture level from them into the staging arena.
+   Submit thread, between draws. */
+extern void rage128_gpu_stage_read_barrier(rage128_t *dev, uint32_t lo,
+                                           uint32_t len);
 /* Queue a solid rectangle fill at any dst bpp (pixel = the low bpp bytes
    of color) on the GPU, after the pending segment. 1 = queued (the
    caller skips its store loop); 0 = not eligible (the caller fills on
@@ -2937,6 +3195,8 @@ r128_texcache_reset_locked(struct rage128_tex_stage *ts)
     ts->ent_count = 0;
     ts->ent_dead  = 0;
     ts->pde_count = 0;
+    ts->keep_lo   = 0; /* the kept levels were per-batch entries */
+    ts->keep_hi   = 0;
 }
 
 /* Returns 0 for a store outside the combined source range, 1 for one
@@ -3047,6 +3307,24 @@ r128_gpu_store_note(rage128_t *dev, uint32_t addr, uint32_t len)
         dev->ov0.gpu_frame = 0;
 }
 
+#ifdef REG_HARNESS
+/* Register harness only: called after a guest store's check and barrier
+   and before its bytes are stored, so a test can capture a draw between
+   the two. Null outside those tests; the call does not exist in the
+   emulator's build. */
+extern _Atomic(void (*)(rage128_t *dev, uint32_t addr, uint32_t len)) rage128_harness_store_hook;
+static inline void
+r128_harness_store_site(rage128_t *dev, uint32_t addr, uint32_t len)
+{
+    void (*hook)(rage128_t *, uint32_t, uint32_t) = atomic_load(&rage128_harness_store_hook);
+
+    if (hook)
+        hook(dev, addr, len);
+}
+#else
+#    define r128_harness_store_site(dev, addr, len) ((void) 0)
+#endif
+
 /* A guest CPU access through an aperture, with the GPU backend on: the
    store bookkeeping, then the hazard summary decides the common case,
    an access no GPU work touches, without calling into the backend. A
@@ -3057,6 +3335,8 @@ rage128_gpu_cpu_access(rage128_t *dev, uint32_t addr, uint32_t len, int writes)
 {
     if (dev->lfbt.sample) {
         rage128_gpu_cpu_barrier(dev, addr, len, writes);
+        if (writes)
+            r128_harness_store_site(dev, addr, len);
         return;
     }
     if (writes)
@@ -3064,10 +3344,80 @@ rage128_gpu_cpu_access(rage128_t *dev, uint32_t addr, uint32_t len, int writes)
     if (r128_gpu_hull_maybe((struct rage128_gpu_hull *) dev->gpu, addr,
                             addr + len, writes))
         rage128_gpu_cpu_barrier_hit(dev, addr, len, writes);
+    if (writes)
+        r128_harness_store_site(dev, addr, len);
 }
+/* Local bytes [lo, lo+len) of svga.vram have been stored to by something
+   other than the 3D engine: tell the CPU lanes, which may hold a
+   texture level copied from those bytes (rage128_t tex_stage keep_lo).
+   Called after the store, from any thread. The marks are 64 KB pieces
+   walked by length through vram_mask, as r128_vram_hnew walks its pages.
+   Setting them costs a few byte stores and is done in every lane; only
+   the CPU lanes read them. */
+static inline void
+r128_tex_keep_note(rage128_t *dev, uint32_t lo, uint32_t len)
+{
+    struct rage128_tex_stage *ts = &dev->tex_stage;
+    uint32_t                  m  = dev->vram_mask;
+
+    if (!len)
+        return;
+    if (len > m)
+        atomic_store_explicit(&ts->keep_all, 1, memory_order_release);
+    else {
+        for (uint32_t o = 0; o < len; o += 1u << R128_TEX_KEEP_SHIFT)
+            atomic_store_explicit(&ts->keep_pg[((lo + o) & m) >> R128_TEX_KEEP_SHIFT], 1,
+                                  memory_order_release);
+        atomic_store_explicit(&ts->keep_pg[((lo + len - 1u) & m) >> R128_TEX_KEEP_SHIFT], 1,
+                              memory_order_release);
+    }
+    atomic_store_explicit(&ts->keep_any, 1, memory_order_release);
+}
+
+/* The same for a store whose resolved address is not known to the device
+   (the svga core's planar and banked paths), and for a reset. */
+static inline void
+r128_tex_keep_note_all(rage128_t *dev)
+{
+    atomic_store_explicit(&dev->tex_stage.keep_all, 1, memory_order_release);
+    atomic_store_explicit(&dev->tex_stage.keep_any, 1, memory_order_release);
+}
+
+/* The same report for the levels cached with a GPU backend (rage128_t
+   tex_stage cst_pg): one mark per 4 KB page stored into. Called after
+   the store, from any thread; the release store orders the bytes before
+   the mark. The mark is stored without looking at it first: a writer
+   that read it set and skipped the store could have its bytes still
+   unseen by a copy whose exchange then clears that mark. Nearly every
+   store lies in one page and costs one mark. */
+static inline void
+r128_tex_cache_note(rage128_t *dev, uint32_t lo, uint32_t len)
+{
+    struct rage128_tex_stage *ts = &dev->tex_stage;
+    uint32_t                  m  = dev->vram_mask;
+    uint32_t                  p0 = (lo & m) >> R128_TEX_CST_SHIFT;
+    uint32_t                  p1 = ((lo + len - 1u) & m) >> R128_TEX_CST_SHIFT;
+
+    if (!len)
+        return;
+    if (len > m) {
+        atomic_store_explicit(&ts->cst_all, 1, memory_order_release);
+        return;
+    }
+    atomic_store_explicit(&ts->cst_pg[p0], 1, memory_order_release);
+    if (p1 == p0 && len <= 1u << R128_TEX_CST_SHIFT)
+        return;
+    for (uint32_t o = 1u << R128_TEX_CST_SHIFT; o < len; o += 1u << R128_TEX_CST_SHIFT)
+        atomic_store_explicit(&ts->cst_pg[((lo + o) & m) >> R128_TEX_CST_SHIFT], 1,
+                              memory_order_release);
+    atomic_store_explicit(&ts->cst_pg[p1], 1, memory_order_release);
+}
+
 /* Local bytes [lo, lo+len) of svga.vram have been stored to, so the GPU
    backend's mirror may lack them: mark their pages host-newer. Called
-   after the store. The release store orders the bytes before the mark,
+   after the store. Every such writer reports here, so this also passes
+   the store to r128_tex_keep_note and, with a backend attached, to
+   r128_tex_cache_note. The release store orders the bytes before the mark,
    and the submit thread clears the mark with an acquire exchange before
    it records the page's copy, so the copy sees every store whose mark it
    cleared; a store that lands after the clear sets the mark again and is
@@ -3081,6 +3431,9 @@ r128_vram_hnew(rage128_t *dev, uint32_t lo, uint32_t len)
     atomic_uchar *h = dev->vram_hnew;
     uint32_t      m = dev->vram_mask;
 
+    r128_tex_keep_note(dev, lo, len);
+    if (dev->gpu)
+        r128_tex_cache_note(dev, lo, len);
     if (!h || !len)
         return;
     if (len > m) {
@@ -3097,6 +3450,9 @@ r128_vram_hnew(rage128_t *dev, uint32_t lo, uint32_t len)
 static inline void
 r128_vram_hnew_all(rage128_t *dev)
 {
+    r128_tex_keep_note_all(dev);
+    if (dev->gpu)
+        atomic_store_explicit(&dev->tex_stage.cst_all, 1, memory_order_release);
     if (dev->vram_hnew)
         atomic_store_explicit(&dev->vram_hnew_all, 1, memory_order_release);
 }

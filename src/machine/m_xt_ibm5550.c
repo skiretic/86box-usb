@@ -3170,7 +3170,7 @@ epoch_ibm3477_init(epoch_t *epoch)
     /* Optional dump of the display's auxiliary fonts. */
     FILE *fp = fopen(EPOCH_FONTCARD_AUX_PATH_3477, "rb");
     if (fp != NULL) {
-        fread(epoch->gen, 1, EPOCH_GEN_BANKS * EPOCH_GEN_SIZE, fp);
+        (void) !fread(epoch->gen, 1, EPOCH_GEN_BANKS * EPOCH_GEN_SIZE, fp);
         fclose(fp);
     }
     mem_mapping_add(&epoch->hiram_map, EPOCH_HIRAM_BASE, EPOCH_HIRAM_SIZE,
@@ -3503,8 +3503,7 @@ machine_xt_ibm5550_init(const machine_t *model)
 
     epochkbd_t *kbc = device_add(&kbc_epoch_device);
     
-    pic_init();
-    dma_init();
+    machine_common_init_ex(model, MACHINE_NONSTANDARD_PIT);
     nmi_mask = 0;
     pit_ibm5550_init();
 
@@ -3593,8 +3592,7 @@ machine_xt_ibm5535_init(const machine_t *model)
 
     epochkbd_t *kbc = device_add(&kbc_epoch_device);
 
-    pic_init();
-    dma_init();
+    machine_common_init_ex(model, MACHINE_NONSTANDARD_PIT);
     nmi_mask = 0;
     pit_ibm5550_init();
 
@@ -3709,8 +3707,7 @@ machine_xt_ibm3477_init(const machine_t *model)
 
     device_add_params(machine_get_kbc_device(machine), (void *) model->kbc_params);
 
-    pic_init();
-    dma_init();
+    machine_common_init_ex(model, MACHINE_NONSTANDARD_PIT);
     nmi_mask = 0;
     pit_ibm3477_init();
 
